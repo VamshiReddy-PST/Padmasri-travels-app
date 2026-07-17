@@ -1,6 +1,8 @@
 # Getting your team a real link - step by step
 
-No coding or command-line tools needed. This takes about 15-20 minutes the first time. You're doing two things: putting the `backend-app` folder onto GitHub (just a file storage website), then pointing Render (a free hosting service) at it.
+No coding or command-line tools needed beyond the git commands below (which you've already got working). This takes about 20-25 minutes the first time.
+
+**Already deployed once already?** Skip straight to **Part 2 (MongoDB Atlas)** below, then come back to Part 3 to add the connection string to your *existing* Render service and push the updated code - you don't need to create a new GitHub repo or a new Render service.
 
 ## Part 1 - Put the code on GitHub
 
@@ -8,46 +10,74 @@ No coding or command-line tools needed. This takes about 15-20 minutes the first
 2. Once logged in, click the **+** icon top-right → **New repository**.
 3. Name it `padmasri-travels-app`. Leave it **Public** (or Private if you prefer - either works with Render's free tier). Click **Create repository**.
 4. On the new repo's page, click **uploading an existing file** (or **Add file → Upload files**).
-5. Open the `backend-app` folder I've given you, select **all the files and folders inside it** (`server.js`, `package.json`, the `data` folder, the `public` folder - everything inside `backend-app`, not the `backend-app` folder itself) and drag them into the GitHub upload box.
-   - Make sure the folder structure is preserved (GitHub's drag-and-drop keeps subfolders intact when you drag a folder in most browsers - if it flattens them, let me know and I'll repackage as a zip with instructions).
+5. Open the `backend-app` folder I've given you, select **all the files and folders inside it** (`server.js`, `package.json`, the `data` folder, the `public` folder) and drag them into the GitHub upload box.
 6. Scroll down, click **Commit changes**.
 
-You now have your code on GitHub. You will come back here later whenever I give you updated files - just re-upload the changed file(s) the same way and click Commit changes; Render redeploys automatically.
+From now on, whenever I hand you updated files, push them from your terminal instead of dragging and dropping:
+```bash
+cd ~/Downloads/PadmasriTravels_Supervisor_app
+git add .
+git commit -m "Update"
+git push
+```
+Render redeploys automatically every time you push.
 
-## Part 2 - Deploy it on Render (this gives you the real https:// link)
+## Part 2 - Create a free MongoDB database (this is what makes data actually stick)
 
-1. Go to **render.com** and click **Get Started** - sign up with the same email, or "Sign up with GitHub" (recommended - it auto-connects).
-2. Click **New +** → **Web Service**.
-3. Connect your GitHub account if asked, then select the `padmasri-travels-app` repository.
-4. Fill in:
-   - **Name**: `padmasri-travels` (this becomes part of your link)
-   - **Region**: closest to India (Singapore is usually best)
+Without this, Render wipes your data every time it redeploys or restarts - which is the problem you just ran into. This fixes it permanently, for free.
+
+1. Go to **mongodb.com/cloud/atlas/register** and sign up (free, use your email).
+2. When asked to create a deployment, choose the **free "M0" tier** (sometimes labeled "Free" or "Shared"). Pick any cloud provider/region - AWS Mumbai (ap-south-1) is closest to India if offered. Click **Create**.
+3. It'll ask you to create a database user - set a **username and password** (write these down, you'll need them in a moment). Click **Create User**.
+4. Under **Network Access** (left sidebar), click **Add IP Address** → **Allow Access from Anywhere** (`0.0.0.0/0`). This is required because Render's servers don't have a fixed address. Click **Confirm**.
+   - This is safe here because the database still requires the username/password from step 3 to do anything - "network access" just controls who's *allowed to try* to connect, not who gets in.
+5. Go to **Database** (left sidebar) → click **Connect** on your cluster → **Drivers** → copy the connection string. It looks like:
+   ```
+   mongodb+srv://yourusername:<password>@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=majority
+   ```
+6. Replace `<password>` in that string with the actual password from step 3. Save this full string somewhere - you'll paste it into Render next.
+
+## Part 3 - Deploy on Render
+
+**If this is your first deploy:**
+1. Go to **render.com** → **Get Started** → sign up (or "Sign up with GitHub").
+2. **New +** → **Web Service** → select the `padmasri-travels-app` repo.
+3. Fill in:
+   - **Name**: `padmasri-travels`
+   - **Region**: Singapore
    - **Branch**: `main`
-   - **Root Directory**: leave blank
    - **Build Command**: `npm install`
    - **Start Command**: `node server.js`
    - **Instance Type**: **Free**
-5. Click **Create Web Service**.
-6. Wait 2-3 minutes while it builds. When it says "Live", your link is shown at the top of the page - something like `https://padmasri-travels.onrender.com`.
+4. Before clicking Create, scroll to **Environment Variables** → **Add Environment Variable**:
+   - Key: `MONGODB_URI`
+   - Value: the full connection string from Part 2, step 6
+5. Click **Create Web Service** and wait 2-3 minutes for it to say **Live**.
 
-That's it - that link is what you send to your team. Anyone who opens it on their phone gets the same shared app; whatever one person enters, everyone with the right access can see.
+**If you already have a Render service running (your situation right now):**
+1. Push the updated code first (see the git commands at the end of Part 1 - I've updated `server.js` and `package.json`).
+2. On your service's page in Render, go to **Environment** (left sidebar) → **Add Environment Variable**:
+   - Key: `MONGODB_URI`
+   - Value: the full connection string from Part 2, step 6
+3. Click **Save Changes** - Render will automatically redeploy with the new code and the database connection.
+4. Check the **Logs** tab and look for `Storage: connected to MongoDB` - that confirms it worked. If instead you see `MONGODB_URI not set`, double check the environment variable was saved.
+
+Your link (`https://padmasri-travels.onrender.com` or similar) is what you send your team. From now on, your data survives redeploys, restarts, and sleep/wake cycles.
 
 ## Important things to know about the free tier
 
-- **It sleeps.** Render's free plan puts the app to sleep after 15 minutes of no visitors, and takes about 30-60 seconds to wake up on the next visit. That's fine for supervisors checking in a few times a day, but the first person each morning will see a short loading delay.
-- **Data can reset on redeploy.** This app stores data in a file on Render's disk. On the free plan, that file is wiped whenever you push new code/redeploy (not on every sleep/wake - just on actual redeploys). For real day-to-day use with your full 250+ vehicle fleet, the next step is to attach a persistent disk (a few dollars a month on Render) or move to a proper database - flag this to me when you're ready and I'll help you upgrade it.
-- **This is genuinely shared data.** Unlike the earlier click-through demo, everyone who logs in through this link sees and edits the same records - this is the real thing, not a preview.
+- **Render sleeps.** After 15 minutes of no visitors it puts the app to sleep; the next visit takes 30-60 seconds to wake up. Normal, not a bug.
+- **MongoDB Atlas free tier (M0) gives you 512MB of storage**, which is plenty for records, users, vehicles, and text data, and holds a meaningful number of photos too (they're compressed on the phone before upload). If you eventually outgrow it, upgrading is a paint-free plan change in Atlas, not a rebuild.
+- **This is genuinely shared, persistent data** now - not a preview, not something that resets. Treat PINs and access accordingly.
 
 ## Adding your real team
 
 Once the link is live:
-1. Log in as the Owner (Vamshi Reddy, PIN `9999` - **change this PIN first**, see below).
-2. Go to **People** → add each of your real supervisors, area supervisors, HR person, ops manager and data team members with their own PIN.
+1. Log in as the Owner (Vamshi Reddy, PIN `9999` - **change this PIN first**, via **People → Edit**).
+2. Go to **People** → add each of your real supervisors, area supervisors, HR person, ops manager and data team members with their own PIN, or **Edit** the seeded demo accounts (Ravi, Suresh, Priya, Anil/Hemanth, Sneha, Divya) to become real people.
 3. Go to **Assignments** → add your real sites, drivers, and vehicles, and assign each vehicle to a site, supervisor, driver and client.
-4. Give each person their own name + PIN privately (don't share the same login between people - that's what makes the audit log meaningful).
-
-**Change every demo PIN before real use.** The seeded accounts (Ravi, Suresh, Priya, Anil, Sneha, Vamshi, Divya) use simple 4-digit PINs for testing. Ask me to help you either edit them directly in `data/seed.json` before your first deploy, or add real replacement accounts through the People screen and deactivate the demo ones.
+4. Give each person their own PIN privately - shared logins defeat the audit log.
 
 ## If anything goes wrong
 
-Send me a screenshot of the error (Render shows build/deploy logs on the service page), and I'll help you fix it from here.
+Send me a screenshot of the error (Render's **Logs** tab, or the MongoDB Atlas dashboard), and I'll help you fix it from here.
