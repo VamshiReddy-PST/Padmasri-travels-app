@@ -1,0 +1,166 @@
+{
+  "users": [
+    { "id": "u_ravi", "name": "Ravi Kumar", "role": "site_supervisor", "pin": "1111", "active": true, "siteId": "s_gachibowli", "supervises": [] },
+    { "id": "u_suresh", "name": "Suresh Naik", "role": "site_supervisor", "pin": "2222", "active": true, "siteId": "s_kondapur", "supervises": [] },
+    { "id": "u_priya", "name": "Priya Sharma", "role": "area_supervisor", "pin": "3333", "active": true, "siteId": null, "supervises": ["u_ravi", "u_suresh"] },
+    { "id": "u_anil", "name": "Anil Menon", "role": "ops_manager", "pin": "4444", "active": true, "siteId": null, "supervises": [] },
+    { "id": "u_sneha", "name": "Sneha Rao", "role": "data_team", "pin": "5555", "active": true, "siteId": null, "supervises": [] },
+    { "id": "u_owner", "name": "Vamshi Reddy", "role": "owner", "pin": "9999", "active": true, "siteId": null, "supervises": [] },
+    { "id": "u_hr", "name": "Divya Prasad", "role": "hr", "pin": "6666", "active": true, "siteId": null, "supervises": [] }
+  ],
+  "clients": [
+    { "id": "c_01", "name": "TIBCON" },
+    { "id": "c_02", "name": "COSPOWER" },
+    { "id": "c_03", "name": "Astra Microwave Products Limited" },
+    { "id": "c_04", "name": "AIESL" },
+    { "id": "c_05", "name": "GMR MRO" },
+    { "id": "c_06", "name": "GMR School of Aviation" },
+    { "id": "c_07", "name": "AI SATS" },
+    { "id": "c_08", "name": "GHIAL" },
+    { "id": "c_09", "name": "GHIAL Immigration" },
+    { "id": "c_10", "name": "GHIAL Customs" },
+    { "id": "c_11", "name": "GHIAL EV" },
+    { "id": "c_12", "name": "GMR Aviation Academy" },
+    { "id": "c_13", "name": "WAISL" },
+    { "id": "c_14", "name": "SGD Pharma" },
+    { "id": "c_15", "name": "TK Elevators" },
+    { "id": "c_16", "name": "Swamy & Sons" },
+    { "id": "c_17", "name": "GMR Cargo Bus" },
+    { "id": "c_18", "name": "GMR Cargo Customs" },
+    { "id": "c_19", "name": "GMR Cargo Loaders" },
+    { "id": "c_20", "name": "Pepsico" },
+    { "id": "c_21", "name": "Cityflo" },
+    { "id": "c_22", "name": "VGB Technologies" },
+    { "id": "c_23", "name": "Cityflo Morning Cabs" },
+    { "id": "c_24", "name": "L'Oreal" },
+    { "id": "c_25", "name": "TATA Elxsi" },
+    { "id": "c_26", "name": "SSSS" },
+    { "id": "c_27", "name": "Routematic" },
+    { "id": "c_28", "name": "BHEL CISF" },
+    { "id": "c_29", "name": "BHEL" },
+    { "id": "c_30", "name": "BSNL" },
+    { "id": "c_31", "name": "IITH" },
+    { "id": "c_32", "name": "BHEL R&D" },
+    { "id": "c_33", "name": "BHEL R&D Driver" },
+    { "id": "c_34", "name": "NRSC" },
+    { "id": "c_35", "name": "BHEL GE" },
+    { "id": "c_36", "name": "AI ASL" },
+    { "id": "c_37", "name": "Scoops" },
+    { "id": "c_38", "name": "KTPS Stage 5 & 6" },
+    { "id": "c_39", "name": "KTPS Stage 7" },
+    { "id": "c_40", "name": "YTPS" },
+    { "id": "c_41", "name": "GMR Vizag" },
+    { "id": "c_42", "name": "GMR Cargo Vizag" },
+    { "id": "c_43", "name": "WAISL Vizag" },
+    { "id": "c_44", "name": "Cityflo Chennai" },
+    { "id": "c_45", "name": "GMR Goa RAXA" },
+    { "id": "c_46", "name": "GMR Towing Hyd" },
+    { "id": "c_47", "name": "GGIAL" },
+    { "id": "c_48", "name": "JODAS Expoim" },
+    { "id": "c_49", "name": "Vickro Biopharma" },
+    { "id": "c_50", "name": "Chromo Labs" },
+    { "id": "c_51", "name": "IIL Ambulance" }
+  ],
+  "sites": [
+    { "id": "s_gachibowli", "name": "Site A - Gachibowli", "lat": 17.4401, "lng": 78.3489, "areaSupervisorId": "u_priya" },
+    { "id": "s_kondapur", "name": "Site B - Kondapur", "lat": 17.4615, "lng": 78.3629, "areaSupervisorId": "u_priya" }
+  ],
+  "drivers": [
+    { "id": "d_mahesh", "name": "Mahesh", "phone": "9000000001", "licenseNumber": "TS-DL-0001" },
+    { "id": "d_kiran", "name": "Kiran", "phone": "9000000002", "licenseNumber": "TS-DL-0002" },
+    { "id": "d_raju", "name": "Raju", "phone": "9000000003", "licenseNumber": "TS-DL-0003" },
+    { "id": "d_prasad", "name": "Prasad", "phone": "9000000004", "licenseNumber": "TS-DL-0004" },
+    { "id": "d_vijay", "name": "Vijay", "phone": "9000000005", "licenseNumber": "TS-DL-0005" },
+    { "id": "d_naveen", "name": "Naveen", "phone": "9000000006", "licenseNumber": "TS-DL-0006" }
+  ],
+  "vehicles": [
+    {
+      "id": "v1", "reg": "TS 09 AT 1001", "route": "Route 12 - IT Corridor", "usage": "fixed_route",
+      "clientId": null, "siteId": "s_gachibowli", "supervisorId": "u_ravi", "driverId": "d_mahesh",
+      "standardMileage": 4.2, "lastOdometer": 45260,
+      "docs": {
+        "RC": { "number": "RC1001", "expiry": "2027-09-01" },
+        "Permit": { "number": "PM2001", "expiry": "2026-08-05" },
+        "Insurance": { "number": "INS3001", "expiry": "2026-07-25" },
+        "Fitness": { "number": "FIT4001", "expiry": "2027-01-15" },
+        "Tax": { "number": "TAX5001", "expiry": "2027-05-01" },
+        "PUC": { "number": "PUC6001", "expiry": "2026-08-01" }
+      }
+    },
+    {
+      "id": "v2", "reg": "TS 09 BT 1002", "route": "Route 07 - Old City", "usage": "fixed_route",
+      "clientId": null, "siteId": "s_kondapur", "supervisorId": "u_suresh", "driverId": "d_kiran",
+      "standardMileage": 4.2, "lastOdometer": 45480,
+      "docs": {
+        "RC": { "number": "RC1002", "expiry": "2027-09-08" },
+        "Permit": { "number": "PM2002", "expiry": "2026-08-08" },
+        "Insurance": { "number": "INS3002", "expiry": "2026-07-27" },
+        "Fitness": { "number": "FIT4002", "expiry": "2027-01-20" },
+        "Tax": { "number": "TAX5002", "expiry": "2027-05-04" },
+        "PUC": { "number": "PUC6002", "expiry": "2026-07-30" }
+      }
+    },
+    {
+      "id": "v3", "reg": "TS 09 CT 1003", "route": "Route 21 - Airport Shuttle", "usage": "fixed_route",
+      "clientId": null, "siteId": "s_gachibowli", "supervisorId": "u_ravi", "driverId": "d_raju",
+      "standardMileage": 4.5, "lastOdometer": 45700,
+      "docs": {
+        "RC": { "number": "RC1003", "expiry": "2027-09-15" },
+        "Permit": { "number": "PM2003", "expiry": "2026-08-11" },
+        "Insurance": { "number": "INS3003", "expiry": "2026-07-29" },
+        "Fitness": { "number": "FIT4003", "expiry": "2027-01-25" },
+        "Tax": { "number": "TAX5003", "expiry": "2027-05-08" },
+        "PUC": { "number": "PUC6003", "expiry": "2026-08-05" }
+      }
+    },
+    {
+      "id": "v4", "reg": "TS 09 DT 1004", "route": "Client On-Demand", "usage": "client_on_demand",
+      "clientId": "c_01", "siteId": "s_kondapur", "supervisorId": "u_suresh", "driverId": "d_prasad",
+      "standardMileage": 4.0, "lastOdometer": 45920,
+      "docs": {
+        "RC": { "number": "RC1004", "expiry": "2027-09-20" },
+        "Permit": { "number": "PM2004", "expiry": "2026-08-14" },
+        "Insurance": { "number": "INS3004", "expiry": "2026-07-31" },
+        "Fitness": { "number": "FIT4004", "expiry": "2027-01-28" },
+        "Tax": { "number": "TAX5004", "expiry": "2027-05-11" },
+        "PUC": { "number": "PUC6004", "expiry": "2026-08-08" }
+      }
+    },
+    {
+      "id": "v5", "reg": "TS 09 ET 1005", "route": "Client On-Demand", "usage": "client_on_demand",
+      "clientId": "c_02", "siteId": "s_gachibowli", "supervisorId": "u_ravi", "driverId": "d_vijay",
+      "standardMileage": 4.0, "lastOdometer": 46140,
+      "docs": {
+        "RC": { "number": "RC1005", "expiry": "2027-09-25" },
+        "Permit": { "number": "PM2005", "expiry": "2026-08-18" },
+        "Insurance": { "number": "INS3005", "expiry": "2026-08-02" },
+        "Fitness": { "number": "FIT4005", "expiry": "2027-02-01" },
+        "Tax": { "number": "TAX5005", "expiry": "2027-05-14" },
+        "PUC": { "number": "PUC6005", "expiry": "2026-08-11" }
+      }
+    },
+    {
+      "id": "v6", "reg": "TS 09 FT 1006", "route": "Route 07 - Old City", "usage": "fixed_route",
+      "clientId": null, "siteId": "s_kondapur", "supervisorId": "u_suresh", "driverId": "d_naveen",
+      "standardMileage": 4.2, "lastOdometer": 46360,
+      "docs": {
+        "RC": { "number": "RC1006", "expiry": "2027-09-28" },
+        "Permit": { "number": "PM2006", "expiry": "2026-08-21" },
+        "Insurance": { "number": "INS3006", "expiry": "2026-08-04" },
+        "Fitness": { "number": "FIT4006", "expiry": "2027-02-04" },
+        "Tax": { "number": "TAX5006", "expiry": "2027-05-17" },
+        "PUC": { "number": "PUC6006", "expiry": "2026-08-14" }
+      }
+    }
+  ],
+  "records": {},
+  "leaves": [
+    { "id": "l1", "driverId": "d_mahesh", "driver": "Mahesh", "type": "Planned", "start": "2026-07-19", "end": "2026-07-21", "status": "approved", "requestedBy": "u_ravi" },
+    { "id": "l2", "driverId": "d_kiran", "driver": "Kiran", "type": "Emergency", "start": "2026-07-15", "end": "2026-07-16", "status": "pending", "requestedBy": "u_suresh" }
+  ],
+  "supervisorAttendance": [],
+  "expenses": [],
+  "auditLog": [
+    { "id": "a_seed", "ts": "2026-07-15T00:00:00.000Z", "userId": "system", "userName": "System", "action": "seed", "detail": "Fleet Supervisor App initialized with demo data (2 clients, 2 sites, 6 vehicles, 6 drivers, 7 users)." }
+  ]
+}

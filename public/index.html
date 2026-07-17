@@ -1,0 +1,1142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Padmasri Travels - Fleet Supervisor App</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#1f3864" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root{
+    --navy:#1f3864; --accent:#2e74b5; --accent-light:#eaf2fb; --green:#1e8e3e;
+    --amber:#b8860b; --red:#c0392b; --grey:#666; --bg:#f4f6f9; --card:#ffffff;
+    --border:#e1e6ec;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;}
+  #app{max-width:1180px;margin:0 auto;min-height:100vh;background:var(--bg);}
+  header.topbar{background:var(--navy);color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;}
+  header.topbar .brand{font-weight:700;font-size:17px;display:flex;align-items:center;gap:8px;}
+  header.topbar .brand .dot{width:9px;height:9px;border-radius:50%;background:#4caf50;display:inline-block;}
+  header.topbar .who{font-size:13px;opacity:.9;text-align:right;}
+  header.topbar button.logout{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35);color:#fff;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-left:10px;}
+  header.topbar button.logout:hover{background:rgba(255,255,255,.28);}
+  nav.tabbar{background:#0d2545;display:flex;gap:2px;padding:0 16px;overflow-x:auto;}
+  nav.tabbar button{background:transparent;border:none;color:#bcd3ee;padding:11px 16px;font-size:13px;cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;}
+  nav.tabbar button.active{color:#fff;border-bottom-color:#4caf50;font-weight:600;}
+  main{padding:18px 20px 60px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.03);}
+  h1.page-title{font-size:20px;margin:4px 0 16px;color:var(--navy);}
+  h2.section-title{font-size:15px;margin:0 0 10px;color:var(--navy);border-bottom:2px solid var(--accent-light);padding-bottom:6px;}
+  .grid{display:grid;gap:14px;}
+  .grid.cols-4{grid-template-columns:repeat(4,1fr);}
+  .grid.cols-3{grid-template-columns:repeat(3,1fr);}
+  .grid.cols-2{grid-template-columns:repeat(2,1fr);}
+  @media(max-width:900px){.grid.cols-4{grid-template-columns:repeat(2,1fr);}.grid.cols-3{grid-template-columns:repeat(2,1fr);}}
+  @media(max-width:600px){.grid.cols-4,.grid.cols-3,.grid.cols-2{grid-template-columns:1fr;}}
+  .kpi{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;}
+  .kpi .num{font-size:26px;font-weight:700;color:var(--navy);}
+  .kpi .label{font-size:12px;color:var(--grey);margin-top:2px;}
+  .kpi.warn .num{color:var(--amber);}
+  .kpi.bad .num{color:var(--red);}
+  .kpi.good .num{color:var(--green);}
+  .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;}
+  .badge.pending{background:#fff4d6;color:var(--amber);}
+  .badge.approved{background:#e2f4e6;color:var(--green);}
+  .badge.rejected{background:#fbe4e1;color:var(--red);}
+  .badge.pass{background:#e2f4e6;color:var(--green);}
+  .badge.fail{background:#fbe4e1;color:var(--red);}
+  .badge.ok{background:#e2f4e6;color:var(--green);}
+  .badge.low{background:#fbe4e1;color:var(--red);}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  table th{text-align:left;background:var(--accent-light);color:var(--navy);padding:8px 10px;font-size:12px;}
+  table td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  table tr:hover td{background:#fafbfd;}
+  .btn{background:var(--accent);color:#fff;border:none;padding:8px 14px;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;}
+  .btn:hover{background:var(--navy);}
+  .btn.secondary{background:#fff;color:var(--accent);border:1px solid var(--accent);}
+  .btn.danger{background:var(--red);}
+  .btn.small{padding:4px 10px;font-size:12px;}
+  .btn:disabled{opacity:.5;cursor:not-allowed;}
+  .vehicle-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;}
+  .vehicle-card{border:1px solid var(--border);border-radius:8px;padding:12px;cursor:pointer;background:#fff;}
+  .vehicle-card:hover{border-color:var(--accent);box-shadow:0 2px 8px rgba(46,116,181,.12);}
+  .vehicle-card .reg{font-weight:700;color:var(--navy);font-size:15px;}
+  .vehicle-card .route{font-size:12px;color:var(--grey);margin:3px 0 8px;}
+  .checklist-group{margin-bottom:18px;}
+  .check-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f0f2f5;gap:10px;flex-wrap:wrap;}
+  .check-row .label{font-size:13.5px;flex:1;min-width:180px;}
+  .check-row .controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  select,input[type=text],input[type=date],input[type=number],input[type=tel]{padding:6px 8px;border:1px solid #ccd3db;border-radius:5px;font-size:13px;}
+  .toggle{display:flex;border:1px solid #ccd3db;border-radius:5px;overflow:hidden;}
+  .toggle button{border:none;background:#fff;padding:5px 10px;font-size:12px;cursor:pointer;}
+  .toggle button.active-ok{background:var(--green);color:#fff;}
+  .toggle button.active-bad{background:var(--red);color:#fff;}
+  .photo-btn{border:1px dashed #aab6c5;background:#fbfcfe;border-radius:5px;padding:5px 10px;font-size:12px;cursor:pointer;color:var(--accent);}
+  .thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;}
+  .thumbs img{width:44px;height:44px;object-fit:cover;border-radius:5px;border:1px solid var(--border);}
+  .role-pick{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:14px 0;}
+  .role-pick label{border:1px solid var(--border);border-radius:8px;padding:12px;cursor:pointer;font-size:13px;display:flex;flex-direction:column;gap:3px;}
+  .role-pick label.sel{border-color:var(--accent);background:var(--accent-light);}
+  .role-pick label span.small{color:var(--grey);font-size:11px;}
+  .login-wrap{max-width:420px;margin:60px auto;}
+  .login-wrap .logo{text-align:center;font-size:22px;font-weight:800;color:var(--navy);margin-bottom:4px;}
+  .login-wrap .sub{text-align:center;color:var(--grey);font-size:13px;margin-bottom:22px;}
+  .field{margin-bottom:12px;}
+  .field label{display:block;font-size:12px;color:var(--grey);margin-bottom:4px;}
+  .field input,.field select{width:100%;}
+  .banner{background:#fff8e6;border:1px solid #f0dca0;color:#7a5a00;padding:10px 14px;border-radius:8px;font-size:12.5px;margin-bottom:16px;}
+  .banner.error{background:#fbe4e1;border-color:#eab3ab;color:#7a2115;}
+  .muted{color:var(--grey);font-size:12px;}
+  .flex-between{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;}
+  .empty{text-align:center;color:var(--grey);padding:30px 10px;font-size:13px;}
+  .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media(max-width:900px){.charts-grid{grid-template-columns:1fr;}}
+  .footer-note{font-size:11px;color:#9aa4b2;text-align:center;padding:20px;}
+  .selfie-thumb{width:40px;height:40px;border-radius:50%;object-fit:cover;border:2px solid var(--border);}
+  .clock-btns{display:flex;gap:10px;flex-wrap:wrap;}
+  .clock-status{padding:14px;border-radius:8px;background:var(--accent-light);font-size:13px;margin-bottom:14px;}
+  form.inline-form{display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);}
+  form.inline-form .f{display:flex;flex-direction:column;gap:3px;}
+  form.inline-form label{font-size:11px;color:var(--grey);}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" multiple />
+<input type="file" id="selfieInput" accept="image/*" capture="user" style="display:none" />
+<input type="file" id="billInput" accept="image/*" capture="environment" style="display:none" />
+<script>
+/* =========================================================================
+   FLEET SUPERVISOR APP - talks to the shared backend in server.js.
+   Every screen reads/writes through fetch() calls to /api/* so that all
+   users see the same data - this is the real, shareable version.
+   ========================================================================= */
+
+const API = "/api";
+let authToken = localStorage.getItem("fleetAuthToken") || null;
+let currentUser = null;
+let meta = { clients: [], sites: [], drivers: [], users: [] };
+let vehicles = [];
+let records = {};
+let leaves = [];
+let expenses = [];
+let view = { tab: null, name: "home" };
+let loading = false;
+let lastError = "";
+
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function daysUntil(dateStr){
+  if(!dateStr) return 9999;
+  const d = new Date(dateStr), n = new Date(todayStr());
+  return Math.round((d-n)/86400000);
+}
+
+async function api(path, opts={}){
+  const headers = Object.assign({"Content-Type":"application/json"}, opts.headers||{});
+  if(authToken) headers["Authorization"] = "Bearer " + authToken;
+  const res = await fetch(API+path, Object.assign({}, opts, {headers}));
+  if(res.status === 401){
+    doLogout(true);
+    throw new Error("Session expired - please log in again.");
+  }
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || ("Request failed ("+res.status+")"));
+  return data;
+}
+
+function roleLabel(r){
+  return {site_supervisor:"Site Supervisor", area_supervisor:"Area Supervisor", ops_manager:"Operations Manager", data_team:"Data Team", owner:"Owner", hr:"HR"}[r] || r;
+}
+function userName(id){ const u = meta.users.find(x=>x.id===id); return u? u.name : "-"; }
+function siteName(id){ const s = meta.sites.find(x=>x.id===id); return s? s.name : "Unassigned"; }
+function driverName(id){ const d = meta.drivers.find(x=>x.id===id); return d? d.name : "Unassigned"; }
+function clientName(id){ const c = meta.clients.find(x=>x.id===id); return c? c.name : "-"; }
+
+// ---------- bootstrap ----------
+async function boot(){
+  if(!authToken){ renderLogin(); return; }
+  try{
+    const m = await api("/meta");
+    meta = m; currentUser = m.me;
+    view.tab = defaultTab(currentUser.role);
+    await loadCoreData();
+    render();
+  }catch(e){
+    doLogout(true);
+  }
+}
+function defaultTab(role){
+  return {site_supervisor:"my_vehicles", area_supervisor:"queue", ops_manager:"operations", data_team:"corrections", hr:"attendance", owner:"dashboard"}[role];
+}
+async function loadCoreData(){
+  const [v, r, l, ex] = await Promise.all([
+    api("/vehicles"),
+    api("/records?date="+todayStr()),
+    api("/leaves"),
+    api("/expenses"),
+  ]);
+  vehicles = v; records = r; leaves = l; expenses = ex;
+}
+
+function doLogout(silent){
+  authToken = null; currentUser = null;
+  localStorage.removeItem("fleetAuthToken");
+  if(!silent) api("/logout", {method:"POST"}).catch(()=>{});
+  view = {tab:null, name:"home"};
+  renderLogin();
+}
+
+// ---------- LOGIN ----------
+let loginUsers = [];
+let selectedLoginUser = null;
+async function renderLogin(){
+  const app = document.getElementById("app");
+  app.innerHTML = `<div class="login-wrap"><div class="logo">🧭 Padmasri Travels</div><div class="sub">Loading team list...</div></div>`;
+  try{
+    loginUsers = await api("/users/login-list");
+  }catch(e){ loginUsers = []; }
+  const cards = loginUsers.map(u => `
+    <label class="${selectedLoginUser===u.id?'sel':''}" onclick="selectLoginUser('${u.id}', event)">
+      <b>${u.name}</b>
+      <span class="small">${roleLabel(u.role)}</span>
+    </label>
+  `).join("");
+  app.innerHTML = `
+  <div class="login-wrap">
+    <div class="logo">🧭 Padmasri Travels</div>
+    <div class="sub">Sign in with your own login</div>
+    <div class="card">
+      ${lastError ? `<div class="banner error">${lastError}</div>` : ""}
+      <div class="role-pick">${cards || "<div class='empty'>Could not reach the server.</div>"}</div>
+      <div class="field">
+        <label>PIN</label>
+        <input type="password" inputmode="numeric" id="pinInput" placeholder="Your PIN" />
+      </div>
+      <button class="btn" style="width:100%" onclick="doLogin()" id="loginBtn">Sign in</button>
+      <div class="muted" style="margin-top:10px;">Everyone gets their own login - this is what makes the audit trail (who changed what, when) meaningful.</div>
+    </div>
+  </div>`;
+}
+function selectLoginUser(id, evt){
+  selectedLoginUser = id;
+  document.querySelectorAll(".role-pick label").forEach(l=>l.classList.remove("sel"));
+  if(evt && evt.currentTarget) evt.currentTarget.classList.add("sel");
+}
+async function doLogin(){
+  lastError = "";
+  if(!selectedLoginUser){ lastError = "Pick your name first."; renderLogin(); return; }
+  const pin = document.getElementById("pinInput").value;
+  const btn = document.getElementById("loginBtn");
+  btn.disabled = true; btn.textContent = "Signing in...";
+  try{
+    const res = await fetch(API+"/login", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id:selectedLoginUser, pin})});
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || "Login failed");
+    authToken = data.token;
+    localStorage.setItem("fleetAuthToken", authToken);
+    await boot();
+  }catch(e){
+    lastError = e.message;
+    renderLogin();
+  }
+}
+
+// ---------- shell ----------
+function tabsFor(role){
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["my_attendance","My Attendance"],["my_expenses","My Expenses"]];
+  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Assignments"],["people","People"]];
+  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Assignments"],["people","People"],["audit","Audit Log"]];
+  if(role==="hr") return [["attendance","Attendance"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Assignments"],["people","People"],["attendance","Attendance"],["audit","Audit Log"]];
+  return [];
+}
+
+async function render(){
+  const app = document.getElementById("app");
+  const u = currentUser;
+  const tabs = tabsFor(u.role);
+  app.innerHTML = `
+    <header class="topbar">
+      <div class="brand"><span class="dot"></span> Padmasri Travels</div>
+      <div style="display:flex;align-items:center;">
+        <div class="who">${u.name}<br><span style="opacity:.75">${roleLabel(u.role)}</span></div>
+        <button class="logout" onclick="doLogout()">Log out</button>
+      </div>
+    </header>
+    <nav class="tabbar">
+      ${tabs.map(([k,l])=>`<button class="${view.tab===k?'active':''}" onclick="switchTab('${k}')">${l}</button>`).join("")}
+    </nav>
+    <main id="main"><div class="empty">Loading...</div></main>
+    <div class="footer-note">Shared data - everyone signed into this app sees the same fleet records.</div>
+  `;
+  await renderMain();
+}
+async function switchTab(tab){ view = {tab, name:"home"}; await render(); window.scrollTo(0,0); }
+async function goto(name, params){ view = Object.assign({tab: view.tab}, {name}, params||{}); await renderMain(); window.scrollTo(0,0); }
+
+async function renderMain(){
+  const main = document.getElementById("main");
+  try{
+    main.innerHTML = await routeView();
+  }catch(e){
+    main.innerHTML = `<div class="banner error">${e.message}</div>`;
+  }
+}
+
+async function routeView(){
+  const role = currentUser.role;
+  const tab = view.tab;
+  if(role==="site_supervisor"){
+    if(tab==="my_vehicles") return view.name==="vehicle_detail" ? vehicleChecklistScreen(view.vehicleId) : supervisorHome();
+    if(tab==="my_attendance") return myAttendanceScreen();
+    if(tab==="my_expenses") return myExpensesScreen();
+  }
+  if(role==="area_supervisor"){
+    if(tab==="queue") return areaQueueScreen();
+    if(tab==="expenses_view") return expensesScreen(false);
+  }
+  if(role==="ops_manager"){
+    if(tab==="operations") return operationsScreen();
+    if(tab==="expenses") return expensesScreen(true);
+    if(tab==="assignments") return assignmentsScreen();
+    if(tab==="people") return peopleScreen();
+  }
+  if(role==="data_team"){
+    if(tab==="corrections") return correctionsScreen();
+    if(tab==="expenses_view") return expensesScreen(false);
+    if(tab==="assignments") return assignmentsScreen();
+    if(tab==="people") return peopleScreen();
+    if(tab==="audit") return auditScreen();
+  }
+  if(role==="hr" && tab==="attendance") return hrAttendanceScreen();
+  if(role==="owner"){
+    if(tab==="dashboard") return ownerDashboardScreen();
+    if(tab==="expenses") return expensesScreen(true);
+    if(tab==="assignments") return assignmentsScreen();
+    if(tab==="people") return peopleScreen();
+    if(tab==="attendance") return hrAttendanceScreen();
+    if(tab==="audit") return auditScreen();
+  }
+  return "<div class='empty'>Nothing here.</div>";
+}
+
+// ================= SITE SUPERVISOR =================
+function supervisorHome(){
+  const mine = vehicles;
+  const cards = mine.map(v=>{
+    const rec = records[v.id];
+    const status = rec ? rec.verification.status : "not_submitted";
+    const badgeClass = status==="not_submitted" ? "pending" : status;
+    const label = status==="not_submitted" ? "NOT SUBMITTED TODAY" : status.toUpperCase();
+    return `<div class="vehicle-card" onclick="goto('vehicle_detail',{vehicleId:'${v.id}'})">
+      <div class="reg">${v.reg}</div>
+      <div class="route">${v.route || siteName(v.siteId)} · Driver: ${driverName(v.driverId)}</div>
+      <span class="badge ${badgeClass}">${label}</span>
+    </div>`;
+  }).join("");
+  return `
+  <h1 class="page-title">My Vehicles - ${mine.length} allotted</h1>
+  <div class="banner">Complete the daily checklist, document check, breathalyzer test, attendance, and fuel/mileage entry for each vehicle before it goes on route.</div>
+  <div class="vehicle-list">${cards || "<div class='empty'>No vehicles allotted to you yet - ask Operations to assign one.</div>"}</div>
+  `;
+}
+
+// in-memory draft for the vehicle currently being edited (not saved until Submit)
+let draft = null;
+function ensureDraft(vehicleId){
+  if(draft && draft.vehicleId === vehicleId) return draft;
+  const existing = records[vehicleId];
+  draft = {
+    vehicleId,
+    safety: (existing && existing.safety) ? JSON.parse(JSON.stringify(existing.safety)) : {
+      fireExtinguisher:{present:true, expiry:""}, firstAid:{present:true}, stepney:{present:true},
+      jack:{present:true}, jackRod:{present:true}, wheelSpanner:{present:true}, chargingSockets:{present:true},
+    },
+    condition: (existing && existing.condition) ? JSON.parse(JSON.stringify(existing.condition)) : {
+      suspension:"ok", seatCovers:"ok", curtains:"ok", seatPushBack:"ok", batteryWater:"ok", engineOil:"ok", coolant:"ok", airPressure:"ok", tyreWear:"ok",
+    },
+    photoTags: {},
+    breathalyzer: (existing && existing.breathalyzer) ? {...existing.breathalyzer} : {driver:"", reading:"0.00", result:"pass"},
+    attendance: (existing && existing.attendance) ? {...existing.attendance} : {driver:"", status:"present", uniform:"compliant"},
+    fuel: {odometer:"", fuelPrice:"", litres:"", fillLevel:"full"},
+  };
+  return draft;
+}
+
+function vehicleChecklistScreen(vehicleId){
+  const v = vehicles.find(x=>x.id===vehicleId);
+  if(!v) return "<div class='empty'>Vehicle not found.</div>";
+  const d = ensureDraft(vehicleId);
+  const existingRec = records[vehicleId];
+  if(!d.breathalyzer.driver) d.breathalyzer.driver = driverName(v.driverId);
+  if(!d.attendance.driver) d.attendance.driver = driverName(v.driverId);
+
+  const docsRows = Object.entries(v.docs||{}).map(([k,doc])=>{
+    const dleft = daysUntil(doc.expiry);
+    const cls = (dleft < 15) ? 'low' : 'ok';
+    return `<div class="check-row">
+      <div class="label"><b>${k}</b> - ${doc.number||'(no number on file)'}</div>
+      <div class="controls">
+        <input type="date" value="${doc.expiry||''}" onchange="updateDoc('${vehicleId}','${k}',this.value)" />
+        <span class="badge ${cls}">${doc.expiry? (dleft<0? 'EXPIRED' : dleft+' days left') : 'not set'}</span>
+      </div>
+    </div>`;
+  }).join("");
+
+  const safetyRows = [
+    ["fireExtinguisher","Fire Extinguisher (present + validity)"],["firstAid","First Aid Kit"],["stepney","Stepney (spare tyre)"],
+    ["jack","Jack"],["jackRod","Jack Rod"],["wheelSpanner","Wheel Spanner"],["chargingSockets","Charging Sockets"],
+  ].map(([key,label])=>{
+    const present = d.safety[key].present;
+    return `<div class="check-row">
+      <div class="label">${label}</div>
+      <div class="controls">
+        <div class="toggle">
+          <button class="${present? 'active-ok':''}" onclick="draftSet('safety.${key}.present', true)">Present</button>
+          <button class="${!present? 'active-bad':''}" onclick="draftSet('safety.${key}.present', false)">Missing</button>
+        </div>
+        ${key==='fireExtinguisher' ? `<input type="date" value="${d.safety.fireExtinguisher.expiry||''}" onchange="draftSet('safety.fireExtinguisher.expiry', this.value)" />` : ""}
+        ${photoButton(key)}
+      </div>
+    </div>`;
+  }).join("");
+
+  const condRows = [
+    ["suspension","Suspension","ok","attention"],["seatCovers","Seat Covers","ok","worn"],["curtains","Curtains","ok","damaged"],
+    ["seatPushBack","Seat Push-Back (all seats)","ok","attention"],["batteryWater","Battery Water","ok","low"],
+    ["engineOil","Engine Oil","ok","low"],["coolant","Coolant","ok","low"],["airPressure","Air Pressure (all tyres)","ok","low"],["tyreWear","Tyre Wear & Tear","ok","attention"],
+  ].map(([key,label,goodV,badV])=>{
+    const val = d.condition[key];
+    return `<div class="check-row">
+      <div class="label">${label}</div>
+      <div class="controls">
+        <div class="toggle">
+          <button class="${val===goodV?'active-ok':''}" onclick="draftSet('condition.${key}','${goodV}')">${goodV}</button>
+          <button class="${val===badV?'active-bad':''}" onclick="draftSet('condition.${key}','${badV}')">${badV}</button>
+        </div>
+        ${photoButton(key)}
+      </div>
+    </div>`;
+  }).join("");
+
+  const statusBadge = existingRec ? `<span class="badge ${existingRec.verification.status}">${existingRec.verification.status.toUpperCase()} (today, already submitted - resubmitting will update it)</span>` : `<span class="badge pending">NOT SUBMITTED YET TODAY</span>`;
+
+  return `
+  <button class="btn secondary small" onclick="goto('list')">&larr; Back to vehicles</button>
+  <h1 class="page-title">${v.reg} <span class="muted" style="font-size:13px;">· ${v.route || siteName(v.siteId)} · Driver: ${driverName(v.driverId)}</span></h1>
+  ${statusBadge}
+  ${existingRec && existingRec.verification.comment ? `<div class="banner" style="margin-top:10px;">Area Supervisor note: "${existingRec.verification.comment}"</div>` : ""}
+
+  <div class="card checklist-group"><h2 class="section-title">1. Vehicle Documents</h2>${docsRows}</div>
+  <div class="card checklist-group"><h2 class="section-title">2. Safety Equipment</h2>${safetyRows}</div>
+  <div class="card checklist-group">
+    <h2 class="section-title">3. Vehicle Condition</h2>${condRows}
+    <div class="check-row">
+      <div class="label">Full vehicle photos (exterior 4 angles + interior)</div>
+      <div class="controls">${photoButton("full")} <span class="thumbs">${(d.photoTags.full||[]).map(s=>`<img src="${s}"/>`).join("")}</span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">4. Breathalyzer Test</h2>
+    <div class="check-row">
+      <div class="label">Driver / Reading (mg/L)</div>
+      <div class="controls">
+        <input type="text" value="${d.breathalyzer.driver}" style="width:110px" onchange="draftSet('breathalyzer.driver', this.value)" />
+        <input type="number" step="0.01" value="${d.breathalyzer.reading}" style="width:80px" onchange="updateBreathalyzer(this.value)" />
+        <span class="badge ${d.breathalyzer.result}">${d.breathalyzer.result.toUpperCase()}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">5. Attendance & Uniform</h2>
+    <div class="check-row">
+      <div class="label">Attendance</div>
+      <div class="controls"><div class="toggle">
+        <button class="${d.attendance.status==='present'?'active-ok':''}" onclick="draftSet('attendance.status','present')">Present</button>
+        <button class="${d.attendance.status==='absent'?'active-bad':''}" onclick="draftSet('attendance.status','absent')">Absent</button>
+      </div></div>
+    </div>
+    <div class="check-row">
+      <div class="label">Uniform</div>
+      <div class="controls"><div class="toggle">
+        <button class="${d.attendance.uniform==='compliant'?'active-ok':''}" onclick="draftSet('attendance.uniform','compliant')">Compliant</button>
+        <button class="${d.attendance.uniform==='non_compliant'?'active-bad':''}" onclick="draftSet('attendance.uniform','non_compliant')">Non-compliant</button>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">6. Fuel & Mileage</h2>
+    <div class="muted" style="margin-bottom:6px;">Last recorded odometer: <b>${v.lastOdometer != null ? v.lastOdometer+' km' : 'not set yet'}</b>. Mileage is calculated automatically from the distance since then.</div>
+    <div class="check-row"><div class="label">Current odometer (km)</div><div class="controls"><input type="number" value="${d.fuel.odometer}" style="width:100px" onchange="draftSet('fuel.odometer', this.value)" /></div></div>
+    <div class="check-row"><div class="label">Fuel price (₹/litre)</div><div class="controls"><input type="number" step="0.1" value="${d.fuel.fuelPrice}" style="width:90px" onchange="draftSet('fuel.fuelPrice', this.value)" /></div></div>
+    <div class="check-row"><div class="label">Litres filled</div><div class="controls"><input type="number" step="0.1" value="${d.fuel.litres}" style="width:80px" onchange="draftSet('fuel.litres', this.value)" /></div></div>
+    <div class="check-row"><div class="label">Tank filled to</div><div class="controls">
+      <select onchange="draftSet('fuel.fillLevel', this.value)">
+        <option value="full" ${d.fuel.fillLevel==='full'?'selected':''}>Full tank</option>
+        <option value="half" ${d.fuel.fillLevel==='half'?'selected':''}>Half tank</option>
+        <option value="quarter" ${d.fuel.fillLevel==='quarter'?'selected':''}>Quarter tank</option>
+        <option value="other" ${d.fuel.fillLevel==='other'?'selected':''}>Other / partial</option>
+      </select>
+    </div></div>
+    <div class="muted">Distance and average mileage will be calculated by the server when you submit, and you'll be warned here if it's below standard.</div>
+  </div>
+
+  <div class="flex-between" style="margin-top:10px;">
+    <span class="muted">Submitting sends this vehicle's record for verification.</span>
+    <button class="btn" id="submitBtn" onclick="submitVehicle('${vehicleId}')">Submit for verification</button>
+  </div>
+  `;
+}
+function draftSet(path, value){
+  const parts = path.split(".");
+  let obj = draft;
+  for(let i=0;i<parts.length-1;i++) obj = obj[parts[i]];
+  obj[parts[parts.length-1]] = value;
+  renderMain();
+}
+function updateBreathalyzer(reading){
+  draft.breathalyzer.reading = Number(reading).toFixed(2);
+  draft.breathalyzer.result = Number(reading) > 0.02 ? "fail" : "pass";
+  renderMain();
+}
+function photoButton(tag){
+  return `<button class="photo-btn" type="button" onclick="startPhotoCapture('${tag}')">📷 Add photo</button>`;
+}
+let photoTargetTag = null;
+function startPhotoCapture(tag){ photoTargetTag = tag; document.getElementById("photoInput").click(); }
+document.addEventListener("DOMContentLoaded", ()=>{
+  document.getElementById("photoInput").addEventListener("change", handlePhotoFiles);
+  document.getElementById("selfieInput").addEventListener("change", handleSelfieFile);
+  document.getElementById("billInput").addEventListener("change", handleBillFile);
+});
+function handlePhotoFiles(e){
+  const files = Array.from(e.target.files||[]);
+  if(!files.length || !draft) return;
+  draft.photoTags[photoTargetTag] = draft.photoTags[photoTargetTag] || [];
+  let remaining = files.length;
+  files.forEach(f=>{
+    downscaleImage(f, 480, 0.7, (dataUrl)=>{
+      draft.photoTags[photoTargetTag].push(dataUrl);
+      remaining--;
+      if(remaining===0) renderMain();
+    });
+  });
+  e.target.value = "";
+}
+function downscaleImage(file, maxW, quality, cb){
+  const reader = new FileReader();
+  reader.onload = (ev)=>{
+    const img = new Image();
+    img.onload = ()=>{
+      const scale = Math.min(1, maxW/img.width);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width*scale; canvas.height = img.height*scale;
+      canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);
+      cb(canvas.toDataURL("image/jpeg",quality));
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+async function updateDoc(vehicleId, docType, expiry){
+  try{
+    await api(`/vehicles/${vehicleId}/docs`, {method:"PATCH", body: JSON.stringify({docType, expiry})});
+    const v = vehicles.find(x=>x.id===vehicleId);
+    v.docs[docType].expiry = expiry;
+    renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function submitVehicle(vehicleId){
+  const btn = document.getElementById("submitBtn");
+  btn.disabled = true; btn.innerHTML = `<span class="spinner"></span> Submitting...`;
+  try{
+    const rec = await api("/records", {method:"POST", body: JSON.stringify(draft)});
+    records[vehicleId] = rec;
+    draft = null;
+    if(rec.fuel.belowStandard){
+      alert(`Heads up: this vehicle's mileage today is ${rec.fuel.mileage} km/l, below the standard of ${vehicles.find(v=>v.id===vehicleId).standardMileage} km/l. Warn the driver.`);
+    }
+    await goto("list");
+  }catch(e){
+    alert(e.message);
+    btn.disabled = false; btn.textContent = "Submit for verification";
+  }
+}
+
+// ================= MY ATTENDANCE (any logged-in user, mainly supervisors) =================
+let attendanceHistory = [];
+async function myAttendanceScreen(){
+  try{ attendanceHistory = await api("/attendance/me"); }catch(e){ attendanceHistory = []; }
+  const todayEntries = attendanceHistory.filter(a=>a.date===todayStr());
+  const clockedIn = todayEntries.some(a=>a.type==="clockin");
+  const clockedOut = todayEntries.some(a=>a.type==="clockout");
+  const rows = attendanceHistory.slice(0,20).map(a=>`
+    <tr>
+      <td>${a.date}</td>
+      <td>${a.type==='clockin'?'Clock in':'Clock out'}</td>
+      <td>${new Date(a.ts).toLocaleTimeString()}</td>
+      <td>${a.selfieUrl? `<img class="selfie-thumb" src="${a.selfieUrl}" />` : "-"}</td>
+      <td>${a.distanceMeters!=null ? a.distanceMeters+" m from "+ (a.siteName||"site") : "no site on file"}</td>
+      <td><span class="badge ${a.withinGeofence? 'ok':'low'}">${a.withinGeofence==null?'n/a':(a.withinGeofence?'AT SITE':'AWAY FROM SITE')}</span></td>
+    </tr>`).join("");
+  return `
+  <h1 class="page-title">My Attendance</h1>
+  <div class="clock-status">Today: ${clockedIn? '✅ Clocked in' : '⚪ Not clocked in yet'} &nbsp;·&nbsp; ${clockedOut? '✅ Clocked out' : '⚪ Not clocked out yet'}</div>
+  <div class="card">
+    <h2 class="section-title">Clock in / out</h2>
+    <p class="muted">Takes a selfie and your current location so we know you're at your assigned site. This happens twice a day - once when you start, once when you finish.</p>
+    <div class="clock-btns">
+      <button class="btn" onclick="doClock('clockin')" ${clockedIn?'disabled':''}>📸 Clock In</button>
+      <button class="btn secondary" onclick="doClock('clockout')" ${clockedOut?'disabled':''}>📸 Clock Out</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2 class="section-title">My recent history</h2>
+    <table><tr><th>Date</th><th>Type</th><th>Time</th><th>Selfie</th><th>Location</th><th>Status</th></tr>${rows || "<tr><td colspan='6' class='empty'>No entries yet</td></tr>"}</table>
+  </div>`;
+}
+let clockTargetType = null;
+function doClock(type){
+  clockTargetType = type;
+  document.getElementById("selfieInput").click();
+}
+function handleSelfieFile(e){
+  const file = e.target.files[0];
+  e.target.value = "";
+  if(!file) return;
+  downscaleImage(file, 360, 0.7, (selfieDataUrl)=>{
+    if(!navigator.geolocation){
+      completeClock(clockTargetType, selfieDataUrl, null, null);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos)=> completeClock(clockTargetType, selfieDataUrl, pos.coords.latitude, pos.coords.longitude),
+      ()=>{ if(confirm("Could not get your location (permission denied or unavailable). Continue without location?")) completeClock(clockTargetType, selfieDataUrl, null, null); },
+      {enableHighAccuracy:true, timeout:10000}
+    );
+  });
+}
+async function completeClock(type, selfie, lat, lng){
+  try{
+    const entry = await api(`/attendance/${type}`, {method:"POST", body: JSON.stringify({selfie, lat, lng})});
+    let msg = type==='clockin' ? "Clocked in." : "Clocked out.";
+    if(entry.withinGeofence===false) msg += " Note: you appear to be away from your assigned site.";
+    alert(msg);
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+
+// ================= EXPENSES =================
+// Every expense request needs a photo of the bill - no exceptions - and is
+// approved by the Operations Manager (or Owner) before it's payable.
+let pendingBillPhoto = null;
+function captureBillPhoto(){ document.getElementById("billInput").click(); }
+function handleBillFile(e){
+  const file = e.target.files[0];
+  e.target.value = "";
+  if(!file) return;
+  downscaleImage(file, 700, 0.75, (dataUrl)=>{
+    pendingBillPhoto = dataUrl;
+    const prev = document.getElementById("billPreview");
+    if(prev) prev.innerHTML = `<img src="${dataUrl}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--border);" /> <span class="muted">Bill attached</span>`;
+  });
+}
+function myExpensesScreen(){
+  pendingBillPhoto = null;
+  const mine = expenses;
+  const rows = mine.map(ex=>`
+    <tr>
+      <td>${new Date(ex.submittedAt).toLocaleDateString()}</td>
+      <td>${ex.category}</td>
+      <td>₹${ex.amount}</td>
+      <td>${ex.description||"-"}</td>
+      <td><img src="${ex.billUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:5px;border:1px solid var(--border);cursor:pointer;" onclick="window.open('${ex.billUrl}','_blank')" /></td>
+      <td><span class="badge ${ex.status}">${ex.status.toUpperCase()}</span></td>
+      <td>${ex.comment||""}</td>
+    </tr>`).join("");
+  return `
+  <h1 class="page-title">My Expenses</h1>
+  <div class="banner">Every request needs a photo of the bill/receipt - requests without one can't be submitted. The Operations Manager approves before it's marked payable.</div>
+  <div class="card">
+    <h2 class="section-title">Request reimbursement</h2>
+    <form class="inline-form" onsubmit="return submitExpense(event)">
+      <div class="f"><label>Category</label><select id="expCategory">
+        <option>Toll</option><option>Parking</option><option>Vehicle repair (minor)</option>
+        <option>Driver food / allowance</option><option>Cleaning</option><option>Other</option>
+      </select></div>
+      <div class="f"><label>Amount (₹)</label><input type="number" id="expAmount" style="width:100px" required /></div>
+      <div class="f"><label>Vehicle (optional)</label><select id="expVehicle"><option value="">-</option>${vehicles.map(v=>`<option value="${v.id}">${v.reg}</option>`).join("")}</select></div>
+      <div class="f" style="min-width:200px;"><label>Description</label><input type="text" id="expDesc" placeholder="What was this for?" /></div>
+      <div class="f"><label>Bill photo (required)</label><button type="button" class="photo-btn" onclick="captureBillPhoto()">📷 Attach bill</button></div>
+      <div id="billPreview" style="display:flex;align-items:center;gap:6px;"></div>
+      <button class="btn small" type="submit">Submit request</button>
+    </form>
+  </div>
+  <div class="card">
+    <h2 class="section-title">My requests</h2>
+    <table><tr><th>Date</th><th>Category</th><th>Amount</th><th>Description</th><th>Bill</th><th>Status</th><th>Note</th></tr>
+    ${rows || "<tr><td colspan='7' class='empty'>No requests yet.</td></tr>"}</table>
+  </div>`;
+}
+async function submitExpense(evt){
+  evt.preventDefault();
+  if(!pendingBillPhoto){ alert("Please attach a photo of the bill before submitting - it's required for every expense request."); return false; }
+  const body = {
+    category: document.getElementById("expCategory").value,
+    amount: Number(document.getElementById("expAmount").value),
+    vehicleId: document.getElementById("expVehicle").value || null,
+    description: document.getElementById("expDesc").value,
+    bill: pendingBillPhoto,
+  };
+  try{
+    const ex = await api("/expenses", {method:"POST", body: JSON.stringify(body)});
+    expenses.unshift(ex);
+    pendingBillPhoto = null;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+function expensesScreen(canDecide){
+  const pending = expenses.filter(e=>e.status==='pending');
+  const rows = expenses.map(ex=>`
+    <tr>
+      <td>${new Date(ex.submittedAt).toLocaleDateString()}</td>
+      <td>${ex.userName}</td>
+      <td>${ex.category}</td>
+      <td>₹${ex.amount}</td>
+      <td>${ex.description||"-"}</td>
+      <td><img src="${ex.billUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:5px;border:1px solid var(--border);cursor:pointer;" onclick="window.open('${ex.billUrl}','_blank')" /></td>
+      <td><span class="badge ${ex.status}">${ex.status.toUpperCase()}</span></td>
+      <td>${canDecide && ex.status==='pending' ? `<button class="btn small" onclick="decideExpense('${ex.id}','approved')">Approve</button> <button class="btn small danger" onclick="decideExpense('${ex.id}','rejected')">Reject</button>` : (ex.comment||"")}</td>
+    </tr>`).join("");
+  return `
+  <h1 class="page-title">${canDecide? 'Expense Requests' : 'Team Expenses'}</h1>
+  ${canDecide ? `<div class="grid cols-3" style="margin-bottom:18px;"><div class="kpi warn"><div class="num">${pending.length}</div><div class="label">Pending approval</div></div><div class="kpi"><div class="num">₹${pending.reduce((s,e)=>s+e.amount,0)}</div><div class="label">Pending amount</div></div><div class="kpi good"><div class="num">₹${expenses.filter(e=>e.status==='approved').reduce((s,e)=>s+e.amount,0)}</div><div class="label">Approved total</div></div></div>` : ""}
+  <div class="card">
+    <table><tr><th>Date</th><th>Supervisor</th><th>Category</th><th>Amount</th><th>Description</th><th>Bill</th><th>Status</th><th></th></tr>
+    ${rows || "<tr><td colspan='8' class='empty'>No expense requests yet.</td></tr>"}</table>
+  </div>`;
+}
+async function decideExpense(id, status){
+  let comment = "";
+  if(status==="rejected"){ comment = prompt("Reason for rejecting this expense:","Bill not clear / policy limit exceeded."); if(comment===null) return; }
+  try{
+    const ex = await api(`/expenses/${id}/decide`, {method:"PATCH", body: JSON.stringify({status, comment})});
+    const idx = expenses.findIndex(x=>x.id===id); expenses[idx] = ex;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+
+// ================= AREA SUPERVISOR =================
+async function areaQueueScreen(){
+  const pending = vehicles.map(v=>records[v.id]).filter(r=>r && r.verification.status==='pending');
+  const approvedToday = vehicles.map(v=>records[v.id]).filter(r=>r && r.verification.status==='approved').length;
+  const rejectedToday = vehicles.map(v=>records[v.id]).filter(r=>r && r.verification.status==='rejected').length;
+  const rows = pending.map(r=>{
+    const v = vehicles.find(x=>x.id===r.vehicleId);
+    return `<tr>
+      <td><b>${v.reg}</b></td><td>${v.route||siteName(v.siteId)}</td><td>${userName(r.submittedBy)}</td>
+      <td>${flagsSummary(r,v)}</td>
+      <td><button class="btn small" onclick="verify('${v.id}','${r.date}','approved')">Approve</button>
+      <button class="btn small danger" onclick="verify('${v.id}','${r.date}','rejected')">Reject</button></td>
+    </tr>`;
+  }).join("");
+  return `
+  <h1 class="page-title">Verification Queue</h1>
+  <div class="grid cols-3" style="margin-bottom:18px;">
+    <div class="kpi warn"><div class="num">${pending.length}</div><div class="label">Pending review</div></div>
+    <div class="kpi good"><div class="num">${approvedToday}</div><div class="label">Approved today</div></div>
+    <div class="kpi bad"><div class="num">${rejectedToday}</div><div class="label">Needs correction</div></div>
+  </div>
+  <div class="card"><h2 class="section-title">Awaiting cross-verification</h2>
+    <table><tr><th>Vehicle</th><th>Route/Site</th><th>Submitted by</th><th>Flags</th><th>Action</th></tr>${rows || "<tr><td colspan='5' class='empty'>Nothing pending.</td></tr>"}</table>
+  </div>`;
+}
+function flagsSummary(r,v){
+  const flags = [];
+  if(r.breathalyzer && r.breathalyzer.result==='fail') flags.push("🚨 Breathalyzer FAIL");
+  if(r.safety && r.safety.fireExtinguisher && !r.safety.fireExtinguisher.present) flags.push("Fire ext. missing");
+  if(r.fuel && r.fuel.belowStandard) flags.push("Mileage low");
+  return flags.length? flags.join(", ") : "<span class='muted'>none</span>";
+}
+async function verify(vehicleId, date, status){
+  let comment = "";
+  if(status==="rejected"){ comment = prompt("Reason for rejection (sent back to the supervisor):","Please recheck and resubmit."); if(comment===null) return; }
+  try{
+    const rec = await api(`/records/${vehicleId}/${date}/verify`, {method:"PATCH", body: JSON.stringify({status, comment})});
+    records[vehicleId] = rec;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+
+// ================= OPS MANAGER: Operations tab =================
+async function operationsScreen(){
+  const fails = vehicles.map(v=>records[v.id]).filter(r=>r && r.breathalyzer && r.breathalyzer.result==='fail');
+  const rows = leaves.map(l=>`
+    <tr><td>${l.driver}</td><td>${l.type}</td><td>${l.start} → ${l.end}</td>
+    <td><span class="badge ${l.status}">${l.status.toUpperCase()}</span></td>
+    <td>${l.status==='pending' ? `<button class="btn small" onclick="setLeave('${l.id}','approved')">Approve</button> <button class="btn small danger" onclick="setLeave('${l.id}','rejected')">Reject</button>` : "<span class='muted'>-</span>"}</td></tr>`).join("");
+  return `
+  <h1 class="page-title">Operations Overview</h1>
+  <div class="grid cols-3" style="margin-bottom:18px;">
+    <div class="kpi"><div class="num">${vehicles.length}</div><div class="label">Vehicles visible to you</div></div>
+    <div class="kpi warn"><div class="num">${leaves.filter(l=>l.status==='pending').length}</div><div class="label">Leave requests pending</div></div>
+    <div class="kpi bad"><div class="num">${fails.length}</div><div class="label">Breathalyzer failures today</div></div>
+  </div>
+  <div class="card"><h2 class="section-title">Driver Leave Planning</h2>
+    <table><tr><th>Driver</th><th>Type</th><th>Dates</th><th>Status</th><th>Action</th></tr>${rows || "<tr><td colspan='5' class='empty'>No leave requests.</td></tr>"}</table>
+    <form class="inline-form" onsubmit="return submitLeave(event)">
+      <div class="f"><label>Driver</label><select id="leaveDriver">${meta.drivers.map(d=>`<option value="${d.id}">${d.name}</option>`).join("")}</select></div>
+      <div class="f"><label>Type</label><select id="leaveType"><option>Planned</option><option>Emergency</option></select></div>
+      <div class="f"><label>Start</label><input type="date" id="leaveStart" required /></div>
+      <div class="f"><label>End</label><input type="date" id="leaveEnd" required /></div>
+      <button class="btn small" type="submit">Request leave</button>
+    </form>
+  </div>
+  <div class="card"><h2 class="section-title">Escalations</h2>
+    ${fails.length? fails.map(f=>{const v=vehicles.find(x=>x.id===f.vehicleId); return `<div class="check-row"><div class="label">🚨 ${f.breathalyzer.driver} - ${v.reg} - reading ${f.breathalyzer.reading}</div></div>`;}).join("") : "<div class='empty'>No escalations right now.</div>"}
+  </div>`;
+}
+async function submitLeave(evt){
+  evt.preventDefault();
+  const driverId = document.getElementById("leaveDriver").value;
+  const driver = meta.drivers.find(d=>d.id===driverId);
+  const body = {driverId, driverName: driver.name, type: document.getElementById("leaveType").value, start: document.getElementById("leaveStart").value, end: document.getElementById("leaveEnd").value};
+  try{
+    const l = await api("/leaves", {method:"POST", body: JSON.stringify(body)});
+    leaves.push(l);
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function setLeave(id, status){
+  try{
+    const l = await api(`/leaves/${id}`, {method:"PATCH", body: JSON.stringify({status})});
+    const idx = leaves.findIndex(x=>x.id===id); leaves[idx] = l;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+
+// ================= ASSIGNMENTS (ops_manager, data_team, owner) =================
+async function assignmentsScreen(){
+  const rows = vehicles.map(v=>`
+    <tr>
+      <td><b>${v.reg}</b></td>
+      <td><select onchange="assignField('${v.id}','clientId', this.value||null)">
+        <option value="">- none (internal route) -</option>
+        ${meta.clients.map(c=>`<option value="${c.id}" ${v.clientId===c.id?'selected':''}>${c.name}</option>`).join("")}
+      </select></td>
+      <td><select onchange="assignField('${v.id}','siteId', this.value||null)">
+        <option value="">- unassigned -</option>
+        ${meta.sites.map(s=>`<option value="${s.id}" ${v.siteId===s.id?'selected':''}>${s.name}</option>`).join("")}
+      </select></td>
+      <td><select onchange="assignField('${v.id}','supervisorId', this.value||null)">
+        <option value="">- unassigned -</option>
+        ${meta.users.filter(u=>u.role==='site_supervisor').map(u=>`<option value="${u.id}" ${v.supervisorId===u.id?'selected':''}>${u.name}</option>`).join("")}
+      </select></td>
+      <td><select onchange="assignField('${v.id}','driverId', this.value||null)">
+        <option value="">- unassigned -</option>
+        ${meta.drivers.map(d=>`<option value="${d.id}" ${v.driverId===d.id?'selected':''}>${d.name}</option>`).join("")}
+      </select></td>
+      <td><select onchange="assignField('${v.id}','usage', this.value)">
+        <option value="fixed_route" ${v.usage==='fixed_route'?'selected':''}>Fixed route</option>
+        <option value="client_on_demand" ${v.usage==='client_on_demand'?'selected':''}>Client on-demand</option>
+      </select></td>
+    </tr>`).join("");
+  return `
+  <h1 class="page-title">Assignments</h1>
+  <div class="banner">Assign each vehicle to a site, a site supervisor, and a driver here. Only Operations Manager, Data Team and Owner can make these changes - every change is logged.</div>
+  <div class="card">
+    <h2 class="section-title">Vehicles (${vehicles.length})</h2>
+    <table><tr><th>Vehicle</th><th>Client</th><th>Site</th><th>Site Supervisor</th><th>Driver</th><th>Usage</th></tr>${rows}</table>
+    <form class="inline-form" onsubmit="return addVehicle(event)">
+      <div class="f"><label>New registration number</label><input type="text" id="newVehicleReg" placeholder="TS 09 XX 1234" required /></div>
+      <div class="f"><label>Route (optional)</label><input type="text" id="newVehicleRoute" placeholder="Route name" /></div>
+      <button class="btn small" type="submit">+ Add vehicle</button>
+    </form>
+  </div>
+
+  <div class="grid cols-3">
+    <div class="card">
+      <h2 class="section-title">Clients</h2>
+      <table>${meta.clients.map(c=>`<tr><td>${c.name}</td></tr>`).join("")}</table>
+      <form class="inline-form" onsubmit="return addClient(event)">
+        <div class="f"><label>New client</label><input type="text" id="newClientName" required /></div>
+        <button class="btn small" type="submit">+ Add</button>
+      </form>
+    </div>
+    <div class="card">
+      <h2 class="section-title">Sites</h2>
+      <table>${meta.sites.map(s=>`<tr><td>${s.name}</td></tr>`).join("")}</table>
+      <form class="inline-form" onsubmit="return addSite(event)">
+        <div class="f"><label>New site name</label><input type="text" id="newSiteName" required /></div>
+        <div class="f"><label>Lat</label><input type="number" step="0.0001" id="newSiteLat" style="width:80px" /></div>
+        <div class="f"><label>Lng</label><input type="number" step="0.0001" id="newSiteLng" style="width:80px" /></div>
+        <button class="btn small" type="submit">+ Add</button>
+      </form>
+      <div class="muted" style="margin-top:6px;">Lat/Lng are used for the supervisor's clock-in/out geofence check.</div>
+    </div>
+    <div class="card">
+      <h2 class="section-title">Drivers</h2>
+      <table>${meta.drivers.map(d=>`<tr><td>${d.name}</td></tr>`).join("")}</table>
+      <form class="inline-form" onsubmit="return addDriver(event)">
+        <div class="f"><label>New driver name</label><input type="text" id="newDriverName" required /></div>
+        <div class="f"><label>Phone</label><input type="tel" id="newDriverPhone" /></div>
+        <button class="btn small" type="submit">+ Add</button>
+      </form>
+    </div>
+  </div>`;
+}
+async function assignField(vehicleId, field, value){
+  try{
+    const v = await api(`/vehicles/${vehicleId}/assign`, {method:"PATCH", body: JSON.stringify({[field]: value})});
+    const idx = vehicles.findIndex(x=>x.id===vehicleId); vehicles[idx] = v;
+  }catch(e){ alert(e.message); await renderMain(); }
+}
+async function addVehicle(evt){
+  evt.preventDefault();
+  const reg = document.getElementById("newVehicleReg").value;
+  const route = document.getElementById("newVehicleRoute").value;
+  try{
+    const v = await api("/vehicles", {method:"POST", body: JSON.stringify({reg, route})});
+    vehicles.push(v);
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function addClient(evt){
+  evt.preventDefault();
+  const name = document.getElementById("newClientName").value;
+  try{ meta.clients.push(await api("/clients", {method:"POST", body: JSON.stringify({name})})); await renderMain(); }
+  catch(e){ alert(e.message); }
+  return false;
+}
+async function addSite(evt){
+  evt.preventDefault();
+  const name = document.getElementById("newSiteName").value;
+  const lat = document.getElementById("newSiteLat").value;
+  const lng = document.getElementById("newSiteLng").value;
+  try{ meta.sites.push(await api("/sites", {method:"POST", body: JSON.stringify({name, lat, lng})})); await renderMain(); }
+  catch(e){ alert(e.message); }
+  return false;
+}
+async function addDriver(evt){
+  evt.preventDefault();
+  const name = document.getElementById("newDriverName").value;
+  const phone = document.getElementById("newDriverPhone").value;
+  try{ meta.drivers.push(await api("/drivers", {method:"POST", body: JSON.stringify({name, phone})})); await renderMain(); }
+  catch(e){ alert(e.message); }
+  return false;
+}
+
+// ================= PEOPLE (ops_manager, data_team, owner) =================
+async function peopleScreen(){
+  const rows = meta.users.map(u=>`
+    <tr><td>${u.name}</td><td>${roleLabel(u.role)}</td><td>${u.siteId? siteName(u.siteId): (u.supervises&&u.supervises.length? u.supervises.map(userName).join(", ") : "-")}</td></tr>
+  `).join("");
+  return `
+  <h1 class="page-title">People</h1>
+  <div class="card">
+    <h2 class="section-title">Everyone with a login (${meta.users.length})</h2>
+    <table><tr><th>Name</th><th>Role</th><th>Site / Supervises</th></tr>${rows}</table>
+    <form class="inline-form" onsubmit="return addPerson(event)">
+      <div class="f"><label>Name</label><input type="text" id="newPersonName" required /></div>
+      <div class="f"><label>Role</label><select id="newPersonRole" onchange="renderMain()">
+        <option value="site_supervisor">Site Supervisor</option>
+        <option value="area_supervisor">Area Supervisor</option>
+        <option value="ops_manager">Operations Manager</option>
+        <option value="data_team">Data Team</option>
+        <option value="hr">HR</option>
+        <option value="owner">Owner</option>
+      </select></div>
+      <div class="f"><label>Site (if Site Supervisor)</label><select id="newPersonSite">
+        <option value="">-</option>
+        ${meta.sites.map(s=>`<option value="${s.id}">${s.name}</option>`).join("")}
+      </select></div>
+      <div class="f"><label>PIN (4+ digits)</label><input type="text" inputmode="numeric" id="newPersonPin" required /></div>
+      <button class="btn small" type="submit">+ Add person</button>
+    </form>
+    <div class="muted" style="margin-top:6px;">Give each person their PIN privately - this is what they'll use to sign in.</div>
+  </div>`;
+}
+async function addPerson(evt){
+  evt.preventDefault();
+  const body = {
+    name: document.getElementById("newPersonName").value,
+    role: document.getElementById("newPersonRole").value,
+    siteId: document.getElementById("newPersonSite").value || null,
+    pin: document.getElementById("newPersonPin").value,
+  };
+  try{
+    const u = await api("/users", {method:"POST", body: JSON.stringify(body)});
+    meta.users.push(u);
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+
+// ================= CORRECTIONS (data_team) =================
+async function correctionsScreen(){
+  const rows = vehicles.map(v=>{
+    const r = records[v.id];
+    return `<tr>
+      <td><b>${v.reg}</b></td>
+      <td>${r? r.fuel.odometer : "-"}</td>
+      <td>${r? r.fuel.mileage+' km/l' : "-"}</td>
+      <td>${r? `<span class="badge ${r.verification.status}">${r.verification.status}</span>` : "<span class='muted'>no record today</span>"}</td>
+      <td>${r? `<button class="btn small secondary" onclick="correctOdometer('${v.id}','${r.date}')">Correct odometer</button>` : ""}</td>
+    </tr>`;
+  }).join("");
+  return `
+  <h1 class="page-title">Data Team - Corrections</h1>
+  <div class="banner">Corrections are logged with a before/after value in the audit trail - nothing is silently overwritten.</div>
+  <div class="card"><table><tr><th>Vehicle</th><th>Odometer</th><th>Mileage</th><th>Status</th><th></th></tr>${rows}</table></div>
+  <div class="card"><h2 class="section-title">Recent Audit Log</h2>${await auditTableHtml(15)}</div>
+  `;
+}
+async function correctOdometer(vehicleId, date){
+  const r = records[vehicleId];
+  const val = prompt("Corrected odometer reading:", r.fuel.odometer);
+  if(val===null || isNaN(Number(val))) return;
+  try{
+    const rec = await api(`/records/${vehicleId}/${date}/correct`, {method:"PATCH", body: JSON.stringify({path:"fuel.odometer", value: Number(val)})});
+    records[vehicleId] = rec;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+
+// ================= HR / OWNER ATTENDANCE =================
+async function hrAttendanceScreen(){
+  const dateInput = view.attDate || todayStr();
+  let entries = [];
+  try{ entries = await api(`/attendance?date=${dateInput}`); }catch(e){}
+  const supRows = entries.map(a=>`
+    <tr>
+      <td>${a.selfieUrl? `<img class="selfie-thumb" src="${a.selfieUrl}"/>` : "-"}</td>
+      <td>${a.userName}</td><td>${roleLabel(a.role)}</td>
+      <td>${a.type==='clockin'?'Clock in':'Clock out'}</td>
+      <td>${new Date(a.ts).toLocaleTimeString()}</td>
+      <td>${a.siteName||"-"}</td>
+      <td>${a.distanceMeters!=null? a.distanceMeters+" m" : "n/a"}</td>
+      <td><span class="badge ${a.withinGeofence? 'ok':'low'}">${a.withinGeofence==null?'n/a':(a.withinGeofence?'AT SITE':'AWAY')}</span></td>
+    </tr>`).join("");
+
+  const driverRows = vehicles.map(v=>{
+    const r = records[v.id];
+    if(!r || !r.attendance || !r.attendance.driver) return "";
+    return `<tr><td>${r.attendance.driver}</td><td>${v.reg}</td><td><span class="badge ${r.attendance.status==='present'?'ok':'low'}">${r.attendance.status}</span></td><td><span class="badge ${r.attendance.uniform==='compliant'?'ok':'low'}">${r.attendance.uniform}</span></td></tr>`;
+  }).join("");
+
+  return `
+  <h1 class="page-title">Attendance</h1>
+  <div class="card">
+    <h2 class="section-title">Supervisor clock-in / clock-out - ${dateInput}</h2>
+    <div class="field" style="max-width:200px;"><input type="date" value="${dateInput}" onchange="setAttDate(this.value)" /></div>
+    <table><tr><th>Selfie</th><th>Name</th><th>Role</th><th>Type</th><th>Time</th><th>Site</th><th>Distance</th><th>Status</th></tr>
+    ${supRows || "<tr><td colspan='8' class='empty'>No clock-ins for this date.</td></tr>"}</table>
+  </div>
+  <div class="card">
+    <h2 class="section-title">Driver attendance today (from vehicle checklists)</h2>
+    <table><tr><th>Driver</th><th>Vehicle</th><th>Attendance</th><th>Uniform</th></tr>${driverRows || "<tr><td colspan='4' class='empty'>No entries submitted yet today.</td></tr>"}</table>
+  </div>`;
+}
+async function setAttDate(v){ view.attDate = v; await renderMain(); }
+
+// ================= AUDIT =================
+async function auditTableHtml(limit){
+  let rows = [];
+  try{ rows = await api(`/audit?limit=${limit}`); }catch(e){ return "<div class='empty'>Audit log not available for your role.</div>"; }
+  return `<table><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr>${rows.map(a=>`<tr><td>${new Date(a.ts).toLocaleString()}</td><td>${a.userName}</td><td>${a.action}</td><td>${a.detail}</td></tr>`).join("")}</table>`;
+}
+async function auditScreen(){
+  return `<h1 class="page-title">Audit Log</h1><div class="card">${await auditTableHtml(200)}</div>`;
+}
+
+// ================= OWNER DASHBOARD =================
+async function ownerDashboardScreen(){
+  const recs = vehicles.map(v=>records[v.id]).filter(Boolean);
+  const total = vehicles.length;
+  const submitted = recs.length;
+  const approved = recs.filter(r=>r.verification.status==='approved').length;
+  const pending = recs.filter(r=>r.verification.status==='pending').length;
+  const rejected = recs.filter(r=>r.verification.status==='rejected').length;
+  const compliantPct = submitted? Math.round((approved/submitted)*100) : 0;
+  const breathFails = recs.filter(r=>r.breathalyzer && r.breathalyzer.result==='fail').length;
+  const belowMileage = recs.filter(r=>r.fuel && r.fuel.belowStandard).length;
+  const absentToday = recs.filter(r=>r.attendance && r.attendance.status==='absent').length;
+  const nonCompliantUniform = recs.filter(r=>r.attendance && r.attendance.uniform==='non_compliant').length;
+  const expiringDocs = [];
+  vehicles.forEach(v=>{
+    Object.entries(v.docs||{}).forEach(([k,doc])=>{
+      if(!doc.expiry) return;
+      const dleft = daysUntil(doc.expiry);
+      if(dleft < 15) expiringDocs.push({vehicle:v.reg, doc:k, dleft});
+    });
+  });
+  const byClient = {};
+  vehicles.forEach(v=>{ const c = v.clientId? clientName(v.clientId) : "Internal / Fixed Route"; byClient[c] = (byClient[c]||0)+1; });
+
+  setTimeout(()=>drawCharts(approved,pending,rejected, breathFails, submitted-breathFails), 0);
+
+  return `
+  <h1 class="page-title">Owner Dashboard - Fleet Overview</h1>
+  <div class="grid cols-4">
+    <div class="kpi good"><div class="num">${compliantPct}%</div><div class="label">Submitted vehicles fully compliant today</div></div>
+    <div class="kpi warn"><div class="num">${pending}</div><div class="label">Pending verification</div></div>
+    <div class="kpi ${total-submitted>0?'bad':'good'}"><div class="num">${total-submitted}</div><div class="label">Not submitted yet today</div></div>
+    <div class="kpi bad"><div class="num">${expiringDocs.length}</div><div class="label">Documents expiring &lt;15 days</div></div>
+    <div class="kpi bad"><div class="num">${breathFails}</div><div class="label">Breathalyzer failures today</div></div>
+    <div class="kpi ${absentToday?'bad':'good'}"><div class="num">${absentToday}</div><div class="label">Drivers absent today</div></div>
+    <div class="kpi ${nonCompliantUniform?'warn':'good'}"><div class="num">${nonCompliantUniform}</div><div class="label">Uniform non-compliance</div></div>
+    <div class="kpi"><div class="num">${leaves.filter(l=>l.status==='pending').length}</div><div class="label">Leave requests pending</div></div>
+  </div>
+
+  <div class="charts-grid" style="margin-top:18px;">
+    <div class="card"><h2 class="section-title">Verification funnel</h2><canvas id="chartFunnel" height="180"></canvas></div>
+    <div class="card"><h2 class="section-title">Breathalyzer pass/fail</h2><canvas id="chartBreath" height="180"></canvas></div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Vehicles by client</h2>
+    <table><tr><th>Client</th><th>Vehicles</th></tr>${Object.entries(byClient).map(([c,n])=>`<tr><td>${c}</td><td>${n}</td></tr>`).join("")}</table>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Document expiry alerts (&lt;15 days)</h2>
+    <table><tr><th>Vehicle</th><th>Document</th><th>Status</th></tr>
+    ${expiringDocs.map(d=>`<tr><td>${d.vehicle}</td><td>${d.doc}</td><td><span class="badge low">${d.dleft<0? 'EXPIRED': d.dleft+' days left'}</span></td></tr>`).join("") || "<tr><td colspan='3' class='empty'>None</td></tr>"}
+    </table>
+  </div>
+
+  <div class="card"><h2 class="section-title">Full audit trail</h2>${await auditTableHtml(25)}</div>
+  `;
+}
+function drawCharts(approved,pending,rejected,fails,passes){
+  const f = document.getElementById("chartFunnel");
+  const b = document.getElementById("chartBreath");
+  if(!f || !b || typeof Chart==="undefined") return;
+  if(f._chart) f._chart.destroy();
+  if(b._chart) b._chart.destroy();
+  f._chart = new Chart(f, {type:"bar", data:{labels:["Approved","Pending","Rejected"], datasets:[{data:[approved,pending,rejected], backgroundColor:["#1e8e3e","#b8860b","#c0392b"]}]}, options:{plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true,ticks:{stepSize:1}}}}});
+  b._chart = new Chart(b, {type:"doughnut", data:{labels:["Pass","Fail"], datasets:[{data:[passes,fails], backgroundColor:["#1e8e3e","#c0392b"]}]}});
+}
+
+// ---------- expose for inline handlers ----------
+Object.assign(window, {
+  selectLoginUser, doLogin, doLogout, switchTab, goto, draftSet, updateBreathalyzer, startPhotoCapture,
+  updateDoc, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
+  addSite, addDriver, addPerson, correctOdometer, setAttDate, captureBillPhoto, submitExpense, decideExpense,
+});
+
+boot();
+</script>
+</body>
+</html>
