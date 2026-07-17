@@ -938,33 +938,50 @@ async function addDriver(evt){
 }
 
 // ================= PEOPLE (ops_manager, data_team, owner) =================
+let editingUserId = null;
+const ROLE_OPTIONS = [
+  ["site_supervisor","Site Supervisor"],["area_supervisor","Area Supervisor"],["ops_manager","Operations Manager"],
+  ["data_team","Data Team"],["hr","HR"],["owner","Owner"],
+];
+function roleOptionsHtml(selected){
+  return ROLE_OPTIONS.map(([v,l])=>`<option value="${v}" ${selected===v?'selected':''}>${l}</option>`).join("");
+}
+function siteOptionsHtml(selected){
+  return `<option value="">-</option>` + meta.sites.map(s=>`<option value="${s.id}" ${selected===s.id?'selected':''}>${s.name}</option>`).join("");
+}
 async function peopleScreen(){
-  const rows = meta.users.map(u=>`
-    <tr><td>${u.name}</td><td>${roleLabel(u.role)}</td><td>${u.siteId? siteName(u.siteId): (u.supervises&&u.supervises.length? u.supervises.map(userName).join(", ") : "-")}</td></tr>
-  `).join("");
+  const rows = meta.users.map(u=>{
+    const inactive = u.active===false;
+    return `<tr style="${inactive?'opacity:.5':''}">
+      <td>${u.name}${inactive? ' <span class="badge low">INACTIVE</span>' : ''}</td>
+      <td>${roleLabel(u.role)}</td>
+      <td>${u.siteId? siteName(u.siteId): (u.supervises&&u.supervises.length? u.supervises.map(userName).join(", ") : "-")}</td>
+      <td>
+        <button class="btn small secondary" onclick="startEditPerson('${u.id}')">Edit</button>
+        ${inactive
+          ? `<button class="btn small" onclick="setPersonActive('${u.id}', true)">Reactivate</button>`
+          : `<button class="btn small danger" onclick="setPersonActive('${u.id}', false)">Deactivate</button>`}
+      </td>
+    </tr>`;
+  }).join("");
+
+  const editing = editingUserId ? meta.users.find(u=>u.id===editingUserId) : null;
+
   return `
   <h1 class="page-title">People</h1>
   <div class="card">
     <h2 class="section-title">Everyone with a login (${meta.users.length})</h2>
-    <table><tr><th>Name</th><th>Role</th><th>Site / Supervises</th></tr>${rows}</table>
-    <form class="inline-form" onsubmit="return addPerson(event)">
-      <div class="f"><label>Name</label><input type="text" id="newPersonName" required /></div>
-      <div class="f"><label>Role</label><select id="newPersonRole" onchange="renderMain()">
-        <option value="site_supervisor">Site Supervisor</option>
-        <option value="area_supervisor">Area Supervisor</option>
-        <option value="ops_manager">Operations Manager</option>
-        <option value="data_team">Data Team</option>
-        <option value="hr">HR</option>
-        <option value="owner">Owner</option>
-      </select></div>
-      <div class="f"><label>Site (if Site Supervisor)</label><select id="newPersonSite">
-        <option value="">-</option>
-        ${meta.sites.map(s=>`<option value="${s.id}">${s.name}</option>`).join("")}
-      </select></div>
-      <div class="f"><label>PIN (4+ digits)</label><input type="text" inputmode="numeric" id="newPersonPin" required /></div>
-      <button class="btn small" type="submit">+ Add person</button>
+    <table><tr><th>Name</th><th>Role</th><th>Site / Supervises</th><th></th></tr>${rows}</table>
+
+    <form class="inline-form" onsubmit="return ${editing ? 'saveEditPerson(event)' : 'addPerson(event)'}">
+      <div class="f"><label>Name</label><input type="text" id="newPersonName" value="${editing? editing.name : ''}" required /></div>
+      <div class="f"><label>Role</label><select id="newPersonRole">${roleOptionsHtml(editing? editing.role : 'site_supervisor')}</select></div>
+      <div class="f"><label>Site (if Site Supervisor)</label><select id="newPersonSite">${siteOptionsHtml(editing? editing.siteId : null)}</select></div>
+      <div class="f"><label>${editing? 'New PIN (leave blank to keep current)' : 'PIN (4+ digits)'}</label><input type="text" inputmode="numeric" id="newPersonPin" ${editing? '' : 'required'} placeholder="${editing? 'unchanged':''}" /></div>
+      <button class="btn small" type="submit">${editing? 'Save changes' : '+ Add person'}</button>
+      ${editing? `<button type="button" class="btn small secondary" onclick="cancelEditPerson()">Cancel</button>` : ''}
     </form>
-    <div class="muted" style="margin-top:6px;">Give each person their PIN privately - this is what they'll use to sign in.</div>
+    <div class="muted" style="margin-top:6px;">${editing? `Editing ${editing.name} - changing PIN here immediately changes their login.` : "Give each person their PIN privately - this is what they'll use to sign in."}</div>
   </div>`;
 }
 async function addPerson(evt){
@@ -981,6 +998,36 @@ async function addPerson(evt){
     await renderMain();
   }catch(e){ alert(e.message); }
   return false;
+}
+function startEditPerson(id){ editingUserId = id; renderMain(); window.scrollTo(0, document.body.scrollHeight); }
+function cancelEditPerson(){ editingUserId = null; renderMain(); }
+async function saveEditPerson(evt){
+  evt.preventDefault();
+  const body = {
+    name: document.getElementById("newPersonName").value,
+    role: document.getElementById("newPersonRole").value,
+    siteId: document.getElementById("newPersonSite").value || null,
+  };
+  const pin = document.getElementById("newPersonPin").value;
+  if(pin) body.pin = pin;
+  try{
+    const u = await api(`/users/${editingUserId}`, {method:"PATCH", body: JSON.stringify(body)});
+    const idx = meta.users.findIndex(x=>x.id===editingUserId);
+    meta.users[idx] = u;
+    editingUserId = null;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function setPersonActive(id, active){
+  const u = meta.users.find(x=>x.id===id);
+  if(!active && !confirm(`Deactivate ${u.name}? They won't be able to log in anymore, but their history stays intact. You can reactivate them later.`)) return;
+  try{
+    const updated = await api(`/users/${id}`, {method:"PATCH", body: JSON.stringify({active})});
+    const idx = meta.users.findIndex(x=>x.id===id);
+    meta.users[idx] = updated;
+    await renderMain();
+  }catch(e){ alert(e.message); }
 }
 
 // ================= CORRECTIONS (data_team) =================
@@ -1134,6 +1181,7 @@ Object.assign(window, {
   selectLoginUser, doLogin, doLogout, switchTab, goto, draftSet, updateBreathalyzer, startPhotoCapture,
   updateDoc, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, addDriver, addPerson, correctOdometer, setAttDate, captureBillPhoto, submitExpense, decideExpense,
+  startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive,
 });
 
 boot();

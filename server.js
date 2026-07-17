@@ -164,11 +164,11 @@ app.get("/api/meta", requireAuth, (req, res) => {
 
 // ---------- USERS (People admin) ----------
 const ADMIN_ROLES = ["ops_manager", "owner", "data_team"];
+const VALID_ROLES = ["site_supervisor", "area_supervisor", "ops_manager", "data_team", "owner", "hr"];
 
 app.post("/api/users", requireAuth, requireRole(...ADMIN_ROLES), (req, res) => {
   const { name, role, pin, siteId, supervises } = req.body || {};
-  const validRoles = ["site_supervisor", "area_supervisor", "ops_manager", "data_team", "owner", "hr"];
-  if (!name || !validRoles.includes(role) || !pin) {
+  if (!name || !VALID_ROLES.includes(role) || !pin) {
     return res.status(400).json({ error: "name, role and pin are required." });
   }
   const user = {
@@ -189,9 +189,24 @@ app.post("/api/users", requireAuth, requireRole(...ADMIN_ROLES), (req, res) => {
 app.patch("/api/users/:id", requireAuth, requireRole(...ADMIN_ROLES), (req, res) => {
   const user = db.users.find((u) => u.id === req.params.id);
   if (!user) return res.status(404).json({ error: "User not found." });
-  const before = { ...user };
-  Object.assign(user, req.body, { id: user.id });
-  audit(req.user, "update_user", `${req.user.name} updated ${user.name}: ${JSON.stringify(before)} -> ${JSON.stringify(user)}`);
+  const before = { name: user.name, role: user.role, siteId: user.siteId, supervises: user.supervises, active: user.active };
+
+  // Whitelisted fields only - and PIN is left alone unless a new non-empty
+  // one is actually provided, so an edit form with a blank PIN field can't
+  // accidentally lock someone out.
+  const { name, role, pin, siteId, supervises, active } = req.body || {};
+  if (name !== undefined && String(name).trim()) user.name = String(name).trim();
+  if (role !== undefined) {
+    if (!VALID_ROLES.includes(role)) return res.status(400).json({ error: "Unknown role." });
+    user.role = role;
+  }
+  if (pin !== undefined && String(pin).trim()) user.pin = String(pin).trim();
+  if (siteId !== undefined) user.siteId = siteId || null;
+  if (supervises !== undefined) user.supervises = Array.isArray(supervises) ? supervises : user.supervises;
+  if (active !== undefined) user.active = !!active;
+
+  const after = { name: user.name, role: user.role, siteId: user.siteId, supervises: user.supervises, active: user.active };
+  audit(req.user, "update_user", `${req.user.name} updated ${user.name} (${user.id}): ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
   save();
   res.json(publicUser(user));
 });
