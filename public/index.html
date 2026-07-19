@@ -249,12 +249,12 @@ async function doLogin(){
 
 // ---------- shell ----------
 function tabsFor(role){
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Assignments"],["routes","Routes"]];
-  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Assignments"],["reports","Reports"],["routes","Routes"]];
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Assignments"],["people","People"],["reports","Reports"],["backup","Backup"]];
-  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Assignments"],["people","People"],["audit","Audit Log"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"]];
+  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["people","People"],["reports","Reports"],["backup","Backup"]];
+  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["people","People"],["audit","Audit Log"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Assignments"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Overview"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"]];
   if(role==="bookings") return [["usage","Vehicle Usage"]];
   return [];
 }
@@ -1062,12 +1062,35 @@ async function assignmentsDateViewCardHtml(){
       <div class="controls">
         <input type="date" value="${date}" max="${todayStr()}" onchange="setAssignmentsViewDate(this.value)" />
         <button class="btn small secondary" onclick="setAssignmentsViewDate('${todayStr()}')">Today</button>
+        <button class="btn small secondary" onclick="downloadVehiclesRunning('csv')">Download CSV</button>
+        <button class="btn small secondary" onclick="downloadVehiclesRunning('xlsx')">Download Excel</button>
       </div>
     </div>
     <table><tr><th>Vehicle</th><th>Company</th><th>Area Supervisor</th><th>Site Supervisor</th><th>Driver</th><th>Driver Mobile</th><th>Route</th></tr>
     ${rows || "<tr><td colspan='7' class='empty'>No vehicles yet.</td></tr>"}
     </table>
   </div>`;
+}
+async function downloadVehiclesRunning(format){
+  const date = assignmentsViewDate;
+  try{
+    const headers = {};
+    if(authToken) headers["Authorization"] = "Bearer " + authToken;
+    const res = await fetch(`${API}/reports/vehicles-running?date=${date}&format=${format}`, {headers});
+    if(!res.ok){
+      const data = await res.json().catch(()=>({}));
+      throw new Error(data.error || `Download failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `vehicles_running_${date}.${format==='xlsx'?'xlsx':'csv'}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){ alert(e.message); }
 }
 // ---- Fuel filling overview - every vehicle fuelled on the selected date,
 // plus that day's spend broken out by fuel station brand and by payment
@@ -1099,6 +1122,13 @@ async function fuelOverviewCardHtml(){
   <div class="card">
     <h2 class="section-title">Fuel filling overview - ${date}${date===todayStr()?' (today)':''}</h2>
     <p class="muted">${data.fillCount} vehicle${data.fillCount===1?'':'s'} fuelled, ${data.totalLitres} L total, ₹${data.totalCost} total spend.</p>
+    <div class="check-row">
+      <div class="label"></div>
+      <div class="controls">
+        <button class="btn small secondary" onclick="downloadFuelOverview('csv')">Download CSV</button>
+        <button class="btn small secondary" onclick="downloadFuelOverview('xlsx')">Download Excel</button>
+      </div>
+    </div>
     <div class="muted" style="margin-top:8px;margin-bottom:2px;font-weight:600;">By fuel station</div>
     <div class="grid cols-4" style="margin-bottom:10px;">
       ${breakdownCards(data.byStation) || "<div class='empty'>No fuel filled on this date.</div>"}
@@ -1112,9 +1142,30 @@ async function fuelOverviewCardHtml(){
     </table>
   </div>`;
 }
+async function downloadFuelOverview(format){
+  const date = assignmentsViewDate;
+  try{
+    const headers = {};
+    if(authToken) headers["Authorization"] = "Bearer " + authToken;
+    const res = await fetch(`${API}/reports/fuel-overview?date=${date}&format=${format}`, {headers});
+    if(!res.ok){
+      const data = await res.json().catch(()=>({}));
+      throw new Error(data.error || `Download failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `fuel_overview_${date}.${format==='xlsx'?'xlsx':'csv'}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){ alert(e.message); }
+}
 async function ownerAssignmentsReadOnlyHtml(){
   return `
-  <h1 class="page-title">Assignments - Vehicles running today</h1>
+  <h1 class="page-title">Overview - Vehicles running today</h1>
   <div class="banner">View only. Pick a date below to look back at a past day. Vehicle, route and supervisor details are managed by Operations Manager - re-enter your PIN below if you need to make a change yourself (this guards against accidental taps).</div>
   ${await assignmentsDateViewCardHtml()}
   ${await fuelOverviewCardHtml()}
@@ -1128,7 +1179,7 @@ async function ownerAssignmentsReadOnlyHtml(){
 // server-side, with no edit controls at all.
 async function supervisorAssignmentsScreen(){
   return `
-  <h1 class="page-title">Assignments</h1>
+  <h1 class="page-title">Overview</h1>
   <div class="banner">View only. Pick a date below to look back at a past day.</div>
   ${await assignmentsDateViewCardHtml()}
   ${await fuelOverviewCardHtml()}`;
@@ -1173,7 +1224,7 @@ async function assignmentsEditorHtml(){
       <td><button class="btn small secondary" onclick="toggleVehicleDetails('${v.id}')">${editingVehicleId===v.id?'Close':'Vehicle Details'}</button></td>
     </tr>`).join("");
   return `
-  <h1 class="page-title">Assignments</h1>
+  <h1 class="page-title">Overview</h1>
   <div class="banner">Assign each vehicle to a site, a site supervisor, and a driver here. Only Operations Manager, Data Team and Owner can make these changes - every change is logged.</div>
   <div class="card">
     <h2 class="section-title">Vehicles (${vehicles.length})</h2>
@@ -2280,6 +2331,7 @@ Object.assign(window, {
   toggleVehicleDetails, saveVehicleDetails, saveVehicleDoc, onNewVehicleTypeChange, onVdVehicleTypeChange, onPermitStateToggle,
   toggleClientRoutes, saveRouteCap, addRoute, saveRouteEdit, deleteRoute,
   setVehicleUsage, unlockOwnerAssignmentEditing, setAuditRange, downloadFullBackup, setAssignmentsViewDate,
+  downloadVehiclesRunning, downloadFuelOverview,
 });
 
 boot();

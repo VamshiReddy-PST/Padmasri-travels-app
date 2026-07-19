@@ -893,22 +893,16 @@ app.get("/api/records", requireAuth, (req, res) => {
 // (Cash/UPI/Card/Other) - Site Supervisor, Area Supervisor, Operations
 // Manager and Owner all use this to get a one-glance picture of the day's
 // fuel filling, scoped to whichever vehicles they can already see elsewhere.
+// Shared by the on-screen overview and the CSV/XLSX download below, so both
+// always show exactly the same numbers.
 const FUEL_OVERVIEW_ROLES = ["site_supervisor", "area_supervisor", "ops_manager", "owner"];
-app.get("/api/fuel-overview", requireAuth, requireRole(...FUEL_OVERVIEW_ROLES), (req, res) => {
-  const date = req.query.date || todayStr();
-  const visibleIds = new Set(visibleVehiclesFor(req.user).map((v) => v.id));
+function computeFuelOverviewRows(user, date) {
+  const visibleIds = new Set(visibleVehiclesFor(user).map((v) => v.id));
   const rows = [];
-  const byStation = {};
-  const byPaymentMode = {};
-  let totalLitres = 0;
-  let totalCost = 0;
-
   Object.values(db.records).forEach((r) => {
     if (r.date !== date || !visibleIds.has(r.vehicleId)) return;
     if (!r.fuel || !(r.fuel.litres > 0)) return;
     const vehicle = db.vehicles.find((v) => v.id === r.vehicleId);
-    const station = r.fuel.station || "Unspecified";
-    const paymentMode = r.fuel.paymentMode || "Unspecified";
     rows.push({
       vehicleId: r.vehicleId,
       reg: vehicle ? vehicle.reg : r.vehicleId,
@@ -918,17 +912,88 @@ app.get("/api/fuel-overview", requireAuth, requireRole(...FUEL_OVERVIEW_ROLES), 
       litres: r.fuel.litres,
       distance: r.fuel.distance,
       totalCost: r.fuel.totalCost,
-      station,
-      paymentMode,
+      station: r.fuel.station || "Unspecified",
+      paymentMode: r.fuel.paymentMode || "Unspecified",
     });
-    byStation[station] = (byStation[station] || 0) + r.fuel.totalCost;
-    byPaymentMode[paymentMode] = (byPaymentMode[paymentMode] || 0) + r.fuel.totalCost;
-    totalLitres += r.fuel.litres;
-    totalCost += r.fuel.totalCost;
   });
-
   rows.sort((a, b) => a.mileage - b.mileage);
+  return rows;
+}
+app.get("/api/fuel-overview", requireAuth, requireRole(...FUEL_OVERVIEW_ROLES), (req, res) => {
+  const date = req.query.date || todayStr();
+  const rows = computeFuelOverviewRows(req.user, date);
+  const byStation = {};
+  const byPaymentMode = {};
+  let totalLitres = 0;
+  let totalCost = 0;
+  rows.forEach((r) => {
+    byStation[r.station] = (byStation[r.station] || 0) + r.totalCost;
+    byPaymentMode[r.paymentMode] = (byPaymentMode[r.paymentMode] || 0) + r.totalCost;
+    totalLitres += r.litres;
+    totalCost += r.totalCost;
+  });
   res.json({ date, rows, byStation, byPaymentMode, totalLitres: Math.round(totalLitres * 10) / 10, totalCost, fillCount: rows.length });
+});
+
+// Same vehicle+driver-for-the-day picture as the Assignments date view,
+// server-side, so the download always matches what's on screen (including
+// showing a temporary driver in place of the regular one, when arranged).
+function computeVehiclesRunningRows(user, date) {
+  const visibleVehicles = visibleVehiclesFor(user);
+  const visibleIds = new Set(visibleVehicles.map((v) => v.id));
+  const recordsForDate = {};
+  Object.values(db.records).forEach((r) => {
+    if (r.date === date && visibleIds.has(r.vehicleId)) recordsForDate[r.vehicleId] = r;
+  });
+  return visibleVehicles.map((v) => {
+    const r = recordsForDate[v.id];
+    const temp = r && r.attendance && r.attendance.tempDriver && r.attendance.tempDriver.arranged ? r.attendance.tempDriver : null;
+    const site = v.siteId ? db.sites.find((s) => s.id === v.siteId) : null;
+    const regularDriver = v.driverId ? db.drivers.find((d) => d.id === v.driverId) : null;
+    return {
+      reg: v.reg,
+      company: v.clientId ? clientNameServer(v.clientId) : "Internal / Fixed Route",
+      areaSupervisor: site && site.areaSupervisorId ? userNameServer(site.areaSupervisorId) : "",
+      siteSupervisor: v.supervisorId ? userNameServer(v.supervisorId) : "",
+      driver: temp ? temp.name : (r && r.attendance && r.attendance.driver) || (regularDriver ? regularDriver.name : ""),
+      driverMobile: temp ? temp.phone : regularDriver ? regularDriver.phone || "" : "",
+      route: v.route || (site ? site.name : ""),
+      isTemporary: !!temp ? "YES" : "",
+      tempAmount: temp ? temp.amount : "",
+    };
+  });
+}
+app.get("/api/reports/vehicles-running", requireAuth, requireRole(...FUEL_OVERVIEW_ROLES), (req, res) => {
+  const date = req.query.date || todayStr();
+  const rows = computeVehiclesRunningRows(req.user, date);
+  const columns = [
+    { label: "Vehicle", key: "reg" },
+    { label: "Company", key: "company" },
+    { label: "Area Supervisor", key: "areaSupervisor" },
+    { label: "Site Supervisor", key: "siteSupervisor" },
+    { label: "Driver", key: "driver" },
+    { label: "Driver Mobile", key: "driverMobile" },
+    { label: "Route", key: "route" },
+    { label: "Temporary Driver", key: "isTemporary" },
+    { label: "Temp Driver Amount", key: "tempAmount" },
+  ];
+  sendDownload(res, rows, columns, `vehicles_running_${date}`, req.query.format);
+});
+app.get("/api/reports/fuel-overview", requireAuth, requireRole(...FUEL_OVERVIEW_ROLES), (req, res) => {
+  const date = req.query.date || todayStr();
+  const rows = computeFuelOverviewRows(req.user, date);
+  const columns = [
+    { label: "Vehicle", key: "reg" },
+    { label: "Mileage (km/l)", key: "mileage" },
+    { label: "Standard Mileage", key: "standardMileage" },
+    { label: "Below Standard", key: (r) => (r.belowStandard ? "YES" : "") },
+    { label: "Litres", key: "litres" },
+    { label: "Distance (km)", key: "distance" },
+    { label: "Cost", key: "totalCost" },
+    { label: "Station", key: "station" },
+    { label: "Payment Mode", key: "paymentMode" },
+  ];
+  sendDownload(res, rows, columns, `fuel_overview_${date}`, req.query.format);
 });
 
 app.post(
@@ -1415,6 +1480,22 @@ function toXlsxBuffer(rows, columns, sheetName) {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, (sheetName || "Sheet1").slice(0, 31));
   return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+}
+// Shared CSV/XLSX response writer for the one-off date-scoped downloads
+// (Vehicles Running, Fuel Overview) that sit outside the main Reports
+// dataset system - same format handling and headers as /api/reports/:dataset.
+function sendDownload(res, rows, columns, filenameBase, format) {
+  const fmt = (format || "csv").toLowerCase() === "xlsx" ? "xlsx" : "csv";
+  const filename = `${filenameBase}.${fmt}`;
+  if (fmt === "xlsx") {
+    const buf = toXlsxBuffer(rows, columns, filenameBase.slice(0, 31));
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.send(buf);
+  }
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.send(toCsv(rows, columns));
 }
 function vehicleReg(id) {
   const v = db.vehicles.find((x) => x.id === id);
