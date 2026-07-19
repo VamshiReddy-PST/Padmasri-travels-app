@@ -1640,15 +1640,20 @@ const ROLE_OPTIONS = [
   ["data_team","Data Team"],["hr","HR"],["owner","Owner"],["bookings","Bookings Department"],
 ];
 // Mirrors the server's rule in server.js (canManageUserRole): Owner can
-// manage anyone; Ops Manager and HR can manage everyone except Owner/Ops
-// Manager/HR; nobody else can manage people at all. This is purely a UI
+// manage anyone. HR - the primary staff onboarder - can manage Site
+// Supervisor, Area Supervisor, Operations Manager, Data Team and Bookings
+// Department accounts (everyone except Owner and other HR). Ops Manager can
+// manage everyone except Owner, Ops Manager and HR. This is purely a UI
 // convenience (hide buttons/options that would just get a 403 back) - the
 // server enforces the real rule regardless of what the UI shows.
-const LOCKED_ROLES_FOR_NON_OWNER = ["owner","ops_manager","hr"];
+const ROLE_MANAGEMENT_ALLOWED = {
+  hr: ["site_supervisor","area_supervisor","ops_manager","data_team","bookings"],
+  ops_manager: ["site_supervisor","area_supervisor","data_team","bookings"],
+};
 function canManageRole(actorRole, targetRole){
   if(actorRole==="owner") return true;
-  if(actorRole==="ops_manager" || actorRole==="hr") return !LOCKED_ROLES_FOR_NON_OWNER.includes(targetRole);
-  return false;
+  const allowed = ROLE_MANAGEMENT_ALLOWED[actorRole];
+  return !!allowed && allowed.includes(targetRole);
 }
 function roleOptionsHtml(selected, actorRole){
   const opts = ROLE_OPTIONS.filter(([v])=> canManageRole(actorRole, v) || v===selected);
@@ -1667,6 +1672,8 @@ async function peopleScreen(){
       <td>${u.name}${inactive? ' <span class="badge low">INACTIVE</span>' : ''}</td>
       <td>${roleLabel(u.role)}</td>
       <td>${u.siteId? siteName(u.siteId): (u.supervises&&u.supervises.length? u.supervises.map(userName).join(", ") : "-")}</td>
+      <td>${u.phone || "-"}</td>
+      <td>${u.dateOfJoining || "-"}</td>
       <td>
         ${canEditThisOne ? `
           <button class="btn small secondary" onclick="startEditPerson('${u.id}')">Edit</button>
@@ -1683,22 +1690,26 @@ async function peopleScreen(){
   return `
   <h1 class="page-title">People</h1>
   <div class="card">
-    <h2 class="section-title">Everyone with a login (${meta.users.length})</h2>
-    <table><tr><th>Name</th><th>Role</th><th>Site / Supervises</th><th></th></tr>${rows}</table>
+    <h2 class="section-title">Staff (${meta.users.length})</h2>
+    <table><tr><th>Name</th><th>Role</th><th>Site / Supervises</th><th>Mobile Number</th><th>Date of Joining</th><th></th></tr>${rows}</table>
 
     ${canEditAtAll ? `
     <form class="inline-form" onsubmit="return ${editing ? 'saveEditPerson(event)' : 'addPerson(event)'}">
       <div class="f"><label>Name</label><input type="text" id="newPersonName" value="${editing? editing.name : ''}" required /></div>
       <div class="f"><label>Role</label><select id="newPersonRole">${roleOptionsHtml(editing? editing.role : 'site_supervisor', myRole)}</select></div>
       <div class="f"><label>Site (if Site Supervisor)</label><select id="newPersonSite">${siteOptionsHtml(editing? editing.siteId : null)}</select></div>
+      <div class="f"><label>Mobile Number</label><input type="tel" id="newPersonPhone" value="${editing? (editing.phone||'') : ''}" style="width:130px" /></div>
+      <div class="f"><label>Date of Joining</label><input type="date" id="newPersonDoj" value="${editing? (editing.dateOfJoining||'') : ''}" style="width:140px" /></div>
       <div class="f"><label>${editing? 'New PIN (leave blank to keep current)' : 'PIN (4+ digits)'}</label><input type="text" inputmode="numeric" id="newPersonPin" ${editing? '' : 'required'} placeholder="${editing? 'unchanged':''}" /></div>
       <button class="btn small" type="submit">${editing? 'Save changes' : '+ Add person'}</button>
       ${editing? `<button type="button" class="btn small secondary" onclick="cancelEditPerson()">Cancel</button>` : ''}
     </form>
     <div class="muted" style="margin-top:6px;">${editing? `Editing ${editing.name} - changing PIN here immediately changes their login.` : "Give each person their PIN privately - this is what they'll use to sign in."}</div>
-    ${myRole!=="owner" ? `<div class="muted">Only the Owner can create or edit Owner, Operations Manager, or HR accounts.</div>` : ""}
+    ${myRole==="hr" ? `<div class="muted">Only the Owner can create or edit Owner or HR accounts.</div>` : ""}
+    ${myRole==="ops_manager" ? `<div class="muted">Only the Owner can create or edit Owner, Operations Manager, or HR accounts.</div>` : ""}
     ` : `<div class="muted" style="margin-top:6px;">You have view-only access to People - only the Owner, Operations Manager, and HR can make changes here.</div>`}
-  </div>`;
+  </div>
+  ${await driversCardHtml()}`;
 }
 async function addPerson(evt){
   evt.preventDefault();
@@ -1706,6 +1717,8 @@ async function addPerson(evt){
     name: document.getElementById("newPersonName").value,
     role: document.getElementById("newPersonRole").value,
     siteId: document.getElementById("newPersonSite").value || null,
+    phone: document.getElementById("newPersonPhone").value,
+    dateOfJoining: document.getElementById("newPersonDoj").value,
     pin: document.getElementById("newPersonPin").value,
   };
   try{
@@ -1723,6 +1736,8 @@ async function saveEditPerson(evt){
     name: document.getElementById("newPersonName").value,
     role: document.getElementById("newPersonRole").value,
     siteId: document.getElementById("newPersonSite").value || null,
+    phone: document.getElementById("newPersonPhone").value,
+    dateOfJoining: document.getElementById("newPersonDoj").value,
   };
   const pin = document.getElementById("newPersonPin").value;
   if(pin) body.pin = pin;
@@ -1744,6 +1759,168 @@ async function setPersonActive(id, active){
     meta.users[idx] = updated;
     await renderMain();
   }catch(e){ alert(e.message); }
+}
+
+// ================= DRIVERS (People tab - HR onboarding) =================
+// A richer driver profile than the quick add-driver form on the Operations
+// screen: HR onboarding fields (Aadhar/ESI/PF/UAN, certificate copies, date
+// of joining, driving level) plus a read-only mileage/efficiency summary.
+// Performance score is shown but not editable here - that's reserved for a
+// future client-ratings feature to populate on the driver dashboard.
+const DRIVING_LEVELS = ["Trainee","Standard","Senior","Expert"];
+let editingDriverId = null;
+async function fetchDriverMileageSummary(){
+  try{
+    const rows = await api("/drivers/mileage-summary");
+    const map = {};
+    rows.forEach(r=>{ map[r.driverId] = r; });
+    return map;
+  }catch(e){ return {}; }
+}
+function driverMileageLabel(summary){
+  if(!summary || !summary.fillCount) return `<span class="muted">No fuel records yet</span>`;
+  const belowNote = summary.belowStandardCount>0 ? ` <span class="badge low">${summary.belowStandardCount} below standard</span>` : "";
+  return `${summary.avgMileage} km/l avg (${summary.fillCount} fill${summary.fillCount===1?'':'s'})${belowNote}`;
+}
+async function driversCardHtml(){
+  const myRole = currentUser.role;
+  const canEditAtAll = myRole==="owner" || myRole==="ops_manager" || myRole==="hr";
+  const mileageSummary = await fetchDriverMileageSummary();
+  // Most recently joined first - drivers without a recorded joining date
+  // (older data, backfilled blank) sort to the end rather than the top.
+  const sorted = [...meta.drivers].sort((a,b)=>{
+    if(!a.dateOfJoining && !b.dateOfJoining) return 0;
+    if(!a.dateOfJoining) return 1;
+    if(!b.dateOfJoining) return -1;
+    return b.dateOfJoining.localeCompare(a.dateOfJoining);
+  });
+  const rows = sorted.map(d=>{
+    const summary = mileageSummary[d.id];
+    return `<tr>
+      <td><b>${d.name}</b></td>
+      <td>${d.phone || "-"}</td>
+      <td>${d.licenseNumber || "-"}</td>
+      <td>${d.dateOfJoining || "-"}</td>
+      <td>${d.drivingLevel || "-"}</td>
+      <td>${d.performanceScore!=null ? d.performanceScore : '<span class="muted">Not yet rated</span>'}</td>
+      <td>${driverMileageLabel(summary)}</td>
+      <td>${canEditAtAll ? `<button class="btn small secondary" onclick="toggleDriverDetails('${d.id}')">${editingDriverId===d.id?'Close':'Details'}</button>` : ''}</td>
+    </tr>
+    ${editingDriverId===d.id ? `<tr><td colspan="8">${driverEditorHtml(d)}</td></tr>` : ''}`;
+  }).join("");
+  return `
+  <div class="card">
+    <h2 class="section-title">Drivers (${meta.drivers.length})</h2>
+    <div class="muted" style="margin-bottom:8px;">Most recently joined first. Performance scores will appear here once client ratings are collected on the driver dashboard.</div>
+    <table><tr><th>Name</th><th>Mobile</th><th>License No.</th><th>Date of Joining</th><th>Driving Level</th><th>Performance</th><th>Mileage / Efficiency</th><th></th></tr>
+    ${rows || "<tr><td colspan='8' class='empty'>No drivers yet.</td></tr>"}
+    </table>
+    ${canEditAtAll ? `
+    <form class="inline-form" onsubmit="return addDriverFull(event)">
+      <div class="f"><label>New driver name</label><input type="text" id="newDriverFullName" required /></div>
+      <div class="f"><label>Mobile Number</label><input type="tel" id="newDriverFullPhone" style="width:130px" /></div>
+      <div class="f"><label>License Number</label><input type="text" id="newDriverFullLicense" style="width:130px" /></div>
+      <div class="f"><label>Aadhar Number</label><input type="text" id="newDriverFullAadhar" style="width:130px" /></div>
+      <div class="f"><label>Date of Joining</label><input type="date" id="newDriverFullDoj" style="width:140px" /></div>
+      <div class="f"><label>Driving Level</label><select id="newDriverFullLevel">
+        <option value="">- select -</option>
+        ${DRIVING_LEVELS.map(l=>`<option value="${l}">${l}</option>`).join("")}
+      </select></div>
+      <button class="btn small" type="submit">+ Add driver</button>
+    </form>
+    <div class="muted" style="margin-top:6px;">ESI/PF/UAN numbers and certificate uploads can be added afterward via "Details" above.</div>
+    ` : ""}
+  </div>`;
+}
+function driverEditorHtml(d){
+  return `
+  <div class="card" style="margin:8px 0; background:#fafafa;">
+    <h3 style="margin-top:0;">Edit driver - ${d.name}</h3>
+    <form class="inline-form" onsubmit="return saveDriverDetails(event,'${d.id}')">
+      <div class="f"><label>Name</label><input type="text" id="ed_name_${d.id}" value="${d.name||''}" required /></div>
+      <div class="f"><label>Mobile Number</label><input type="tel" id="ed_phone_${d.id}" value="${d.phone||''}" style="width:130px" /></div>
+      <div class="f"><label>License Number</label><input type="text" id="ed_license_${d.id}" value="${d.licenseNumber||''}" style="width:130px" /></div>
+      <div class="f"><label>Aadhar Number</label><input type="text" id="ed_aadhar_${d.id}" value="${d.aadharNumber||''}" style="width:130px" /></div>
+      <div class="f"><label>Date of Joining</label><input type="date" id="ed_doj_${d.id}" value="${d.dateOfJoining||''}" style="width:140px" /></div>
+      <div class="f"><label>Driving Level</label><select id="ed_level_${d.id}">
+        <option value="">- select -</option>
+        ${DRIVING_LEVELS.map(l=>`<option value="${l}" ${d.drivingLevel===l?'selected':''}>${l}</option>`).join("")}
+      </select></div>
+      <div class="f"><label>ESI Number</label><input type="text" id="ed_esi_${d.id}" value="${d.esiNumber||''}" style="width:130px" /></div>
+      <div class="f"><label>PF Number</label><input type="text" id="ed_pf_${d.id}" value="${d.pfNumber||''}" style="width:130px" /></div>
+      <div class="f"><label>UAN Number</label><input type="text" id="ed_uan_${d.id}" value="${d.uanNumber||''}" style="width:130px" /></div>
+      <button class="btn small" type="submit">Save</button>
+      <button type="button" class="btn small secondary" onclick="toggleDriverDetails('${d.id}')">Close</button>
+    </form>
+    <div class="grid cols-2" style="margin-top:10px;">
+      <div>
+        <label class="muted">ESI Certificate</label><br/>
+        ${d.esiCertificateUrl ? `<a href="${d.esiCertificateUrl}" target="_blank">View current certificate</a><br/>` : `<span class="muted">Not uploaded yet</span><br/>`}
+        <input type="file" accept="image/*,application/pdf" id="ed_esicert_${d.id}" style="width:220px" />
+        <button type="button" class="btn small secondary" onclick="saveDriverCertificate('${d.id}','esi')">Upload</button>
+      </div>
+      <div>
+        <label class="muted">PF Certificate (states UAN Number)</label><br/>
+        ${d.pfCertificateUrl ? `<a href="${d.pfCertificateUrl}" target="_blank">View current certificate</a><br/>` : `<span class="muted">Not uploaded yet</span><br/>`}
+        <input type="file" accept="image/*,application/pdf" id="ed_pfcert_${d.id}" style="width:220px" />
+        <button type="button" class="btn small secondary" onclick="saveDriverCertificate('${d.id}','pf')">Upload</button>
+      </div>
+    </div>
+  </div>`;
+}
+function toggleDriverDetails(id){
+  editingDriverId = editingDriverId===id ? null : id;
+  renderMain();
+}
+async function saveDriverDetails(evt, id){
+  evt.preventDefault();
+  const body = {
+    name: document.getElementById(`ed_name_${id}`).value,
+    phone: document.getElementById(`ed_phone_${id}`).value,
+    licenseNumber: document.getElementById(`ed_license_${id}`).value,
+    aadharNumber: document.getElementById(`ed_aadhar_${id}`).value,
+    dateOfJoining: document.getElementById(`ed_doj_${id}`).value,
+    drivingLevel: document.getElementById(`ed_level_${id}`).value,
+    esiNumber: document.getElementById(`ed_esi_${id}`).value,
+    pfNumber: document.getElementById(`ed_pf_${id}`).value,
+    uanNumber: document.getElementById(`ed_uan_${id}`).value,
+  };
+  try{
+    const updated = await api(`/drivers/${id}`, {method:"PATCH", body: JSON.stringify(body)});
+    const idx = meta.drivers.findIndex(x=>x.id===id);
+    meta.drivers[idx] = updated;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function saveDriverCertificate(id, kind){
+  const input = document.getElementById(kind==='esi' ? `ed_esicert_${id}` : `ed_pfcert_${id}`);
+  const dataUrl = await readFileAsDataUrl(input);
+  if(!dataUrl){ alert("Choose a file first."); return; }
+  const body = kind==='esi' ? {esiCertificate: dataUrl} : {pfCertificate: dataUrl};
+  try{
+    const updated = await api(`/drivers/${id}`, {method:"PATCH", body: JSON.stringify(body)});
+    const idx = meta.drivers.findIndex(x=>x.id===id);
+    meta.drivers[idx] = updated;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function addDriverFull(evt){
+  evt.preventDefault();
+  const body = {
+    name: document.getElementById("newDriverFullName").value,
+    phone: document.getElementById("newDriverFullPhone").value,
+    licenseNumber: document.getElementById("newDriverFullLicense").value,
+    aadharNumber: document.getElementById("newDriverFullAadhar").value,
+    dateOfJoining: document.getElementById("newDriverFullDoj").value,
+    drivingLevel: document.getElementById("newDriverFullLevel").value,
+  };
+  try{
+    const d = await api("/drivers", {method:"POST", body: JSON.stringify(body)});
+    meta.drivers.push(d);
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
 }
 
 // ================= CORRECTIONS (data_team) =================
@@ -2332,6 +2509,7 @@ Object.assign(window, {
   toggleClientRoutes, saveRouteCap, addRoute, saveRouteEdit, deleteRoute,
   setVehicleUsage, unlockOwnerAssignmentEditing, setAuditRange, downloadFullBackup, setAssignmentsViewDate,
   downloadVehiclesRunning, downloadFuelOverview,
+  toggleDriverDetails, saveDriverDetails, saveDriverCertificate, addDriverFull,
 });
 
 boot();

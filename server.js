@@ -115,6 +115,23 @@ function backfillDefaults() {
     if (c.routeCap === undefined) c.routeCap = 0;
     if (!Array.isArray(c.routes)) c.routes = [];
   });
+  (db.users || []).forEach((u) => {
+    if (u.phone === undefined) u.phone = "";
+    if (u.dateOfJoining === undefined) u.dateOfJoining = "";
+  });
+  (db.drivers || []).forEach((d) => {
+    if (d.phone === undefined) d.phone = "";
+    if (d.licenseNumber === undefined) d.licenseNumber = "";
+    if (d.aadharNumber === undefined) d.aadharNumber = "";
+    if (d.esiNumber === undefined) d.esiNumber = "";
+    if (d.pfNumber === undefined) d.pfNumber = "";
+    if (d.uanNumber === undefined) d.uanNumber = "";
+    if (d.esiCertificateUrl === undefined) d.esiCertificateUrl = null;
+    if (d.pfCertificateUrl === undefined) d.pfCertificateUrl = null;
+    if (d.dateOfJoining === undefined) d.dateOfJoining = "";
+    if (d.drivingLevel === undefined) d.drivingLevel = "";
+    if (d.performanceScore === undefined) d.performanceScore = null;
+  });
 }
 
 // MongoDB Atlas's free (M0) tier doesn't include automatic cloud backups -
@@ -228,7 +245,10 @@ async function audit(user, action, detail) {
 // should use in an <img src="..."> to display it.
 async function savePhoto(dataUrl, tag) {
   if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) return null;
-  const match = dataUrl.match(/^data:(image\/[\w+.-]+);base64,(.+)$/);
+  // Accepts images (camera/gallery captures throughout the app) and PDFs
+  // (scanned certificates like a driver's ESI/PF proof are often PDFs) -
+  // same storage path either way.
+  const match = dataUrl.match(/^data:(image\/[\w+.-]+|application\/pdf);base64,(.+)$/);
   if (!match) return null;
   const contentType = match[1];
   const base64Data = match[2];
@@ -238,7 +258,7 @@ async function savePhoto(dataUrl, tag) {
     await photosCol.insertOne({ _id: id, contentType, data: base64Data, tag: tag || "img", createdAt: nowIso() });
     return "/api/photo/" + id;
   }
-  const ext = contentType.split("/")[1] || "jpg";
+  const ext = contentType === "application/pdf" ? "pdf" : contentType.split("/")[1] || "jpg";
   const filename = `${tag || "img"}_${Date.now()}_${crypto.randomBytes(4).toString("hex")}.${ext}`;
   fs.writeFileSync(path.join(UPLOADS_DIR, filename), Buffer.from(base64Data, "base64"));
   return "/uploads/" + filename;
@@ -369,19 +389,25 @@ const VALID_ROLES = ["site_supervisor", "area_supervisor", "ops_manager", "data_
 
 // People-management permission tiers:
 // - Owner can create/edit anyone, including other Owner/Ops Manager/HR accounts.
-// - Ops Manager and HR can create/edit everyone EXCEPT Owner, Ops Manager, and
-//   HR accounts (so they can't touch their own tier or promote themselves).
+// - HR is the primary staff onboarder: can create/edit Site Supervisor, Area
+//   Supervisor, Operations Manager, Data Team and Bookings Department
+//   accounts (everyone except Owner and other HR accounts).
+// - Ops Manager can create/edit everyone EXCEPT Owner, Ops Manager, and HR
+//   accounts (so they can't touch their own tier or promote themselves).
 // - Data Team can view the People screen (needed for corrections/audit
 //   context) but cannot create or edit anyone - enforced by simply not being
 //   in PEOPLE_EDITOR_ROLES below.
 // - Site/Area Supervisors have no People access at all (no route, no tab).
 const PEOPLE_EDITOR_ROLES = ["ops_manager", "owner", "hr"];
 const PEOPLE_VIEWER_ROLES = ["ops_manager", "owner", "hr", "data_team"];
-const LOCKED_ROLES_FOR_NON_OWNER = ["owner", "ops_manager", "hr"];
+const ROLE_MANAGEMENT_ALLOWED = {
+  hr: ["site_supervisor", "area_supervisor", "ops_manager", "data_team", "bookings"],
+  ops_manager: ["site_supervisor", "area_supervisor", "data_team", "bookings"],
+};
 function canManageUserRole(actorRole, targetRole) {
   if (actorRole === "owner") return true;
-  if (actorRole === "ops_manager" || actorRole === "hr") return !LOCKED_ROLES_FOR_NON_OWNER.includes(targetRole);
-  return false;
+  const allowed = ROLE_MANAGEMENT_ALLOWED[actorRole];
+  return !!allowed && allowed.includes(targetRole);
 }
 
 app.post(
@@ -389,7 +415,7 @@ app.post(
   requireAuth,
   requireRole(...PEOPLE_EDITOR_ROLES),
   h(async (req, res) => {
-    const { name, role, pin, siteId, supervises } = req.body || {};
+    const { name, role, pin, siteId, supervises, phone, dateOfJoining } = req.body || {};
     if (!name || !VALID_ROLES.includes(role) || !pin) {
       return res.status(400).json({ error: "name, role and pin are required." });
     }
@@ -404,6 +430,8 @@ app.post(
       active: true,
       siteId: siteId || null,
       supervises: Array.isArray(supervises) ? supervises : [],
+      phone: phone || "",
+      dateOfJoining: dateOfJoining || "",
     };
     db.users.push(user);
     await audit(req.user, "create_user", `${req.user.name} added ${name} as ${role}`);
@@ -426,7 +454,7 @@ app.patch(
     // Whitelisted fields only - and PIN is left alone unless a new non-empty
     // one is actually provided, so an edit form with a blank PIN field can't
     // accidentally lock someone out.
-    const { name, role, pin, siteId, supervises, active } = req.body || {};
+    const { name, role, pin, siteId, supervises, active, phone, dateOfJoining } = req.body || {};
     if (name !== undefined && String(name).trim()) user.name = String(name).trim();
     if (role !== undefined) {
       if (!VALID_ROLES.includes(role)) return res.status(400).json({ error: "Unknown role." });
@@ -439,6 +467,8 @@ app.patch(
     if (pin !== undefined && String(pin).trim()) user.pin = String(pin).trim();
     if (siteId !== undefined) user.siteId = siteId || null;
     if (supervises !== undefined) user.supervises = Array.isArray(supervises) ? supervises : user.supervises;
+    if (phone !== undefined) user.phone = phone || "";
+    if (dateOfJoining !== undefined) user.dateOfJoining = dateOfJoining || "";
     if (active !== undefined) user.active = !!active;
 
     const after = { name: user.name, role: user.role, siteId: user.siteId, supervises: user.supervises, active: user.active };
@@ -556,18 +586,126 @@ app.post(
 );
 
 // ---------- DRIVERS ----------
+// HR is the primary driver onboarder (per the People/Staff permission
+// model above), alongside Ops Manager, Owner and Data Team who could
+// already add drivers from the Operations screen's quick-add form.
+const DRIVER_EDITOR_ROLES = ["owner", "ops_manager", "hr", "data_team"];
+const DRIVING_LEVELS = ["Trainee", "Standard", "Senior", "Expert"];
 app.post(
   "/api/drivers",
   requireAuth,
-  requireRole(...ADMIN_ROLES),
+  requireRole(...DRIVER_EDITOR_ROLES),
   h(async (req, res) => {
-    const { name, phone, licenseNumber } = req.body || {};
+    const { name, phone, licenseNumber, aadharNumber, dateOfJoining, drivingLevel } = req.body || {};
     if (!name) return res.status(400).json({ error: "name is required." });
-    const driver = { id: uid("d"), name, phone: phone || "", licenseNumber: licenseNumber || "" };
+    if (drivingLevel && !DRIVING_LEVELS.includes(drivingLevel)) {
+      return res.status(400).json({ error: `Driving level must be one of: ${DRIVING_LEVELS.join(", ")}.` });
+    }
+    const driver = {
+      id: uid("d"),
+      name,
+      phone: phone || "",
+      licenseNumber: licenseNumber || "",
+      aadharNumber: aadharNumber || "",
+      esiNumber: "",
+      pfNumber: "",
+      uanNumber: "",
+      esiCertificateUrl: null,
+      pfCertificateUrl: null,
+      dateOfJoining: dateOfJoining || "",
+      drivingLevel: drivingLevel || "",
+      performanceScore: null,
+    };
     db.drivers.push(driver);
     await audit(req.user, "create_driver", `${req.user.name} added driver ${name}`);
     res.json(driver);
   })
+);
+
+// Full driver-profile editor - HR's onboarding fields (Aadhar/ESI/PF/UAN,
+// certificate copies, date of joining, driving level) plus the basic
+// name/phone/license already settable at creation. Performance score is
+// intentionally NOT editable here - it's reserved for a future client-
+// ratings feature to populate, so it stays null ("Not yet rated") until
+// then rather than letting anyone hand-set it.
+app.patch(
+  "/api/drivers/:id",
+  requireAuth,
+  requireRole(...DRIVER_EDITOR_ROLES),
+  h(async (req, res) => {
+    const driver = db.drivers.find((d) => d.id === req.params.id);
+    if (!driver) return res.status(404).json({ error: "Driver not found." });
+    const {
+      name, phone, licenseNumber, aadharNumber, esiNumber, pfNumber, uanNumber,
+      dateOfJoining, drivingLevel, esiCertificate, pfCertificate,
+    } = req.body || {};
+    if (drivingLevel !== undefined && drivingLevel && !DRIVING_LEVELS.includes(drivingLevel)) {
+      return res.status(400).json({ error: `Driving level must be one of: ${DRIVING_LEVELS.join(", ")}.` });
+    }
+    let changed = false;
+    if (name !== undefined && String(name).trim()) { driver.name = String(name).trim(); changed = true; }
+    if (phone !== undefined) { driver.phone = phone || ""; changed = true; }
+    if (licenseNumber !== undefined) { driver.licenseNumber = licenseNumber || ""; changed = true; }
+    if (aadharNumber !== undefined) { driver.aadharNumber = aadharNumber || ""; changed = true; }
+    if (esiNumber !== undefined) { driver.esiNumber = esiNumber || ""; changed = true; }
+    if (pfNumber !== undefined) { driver.pfNumber = pfNumber || ""; changed = true; }
+    if (uanNumber !== undefined) { driver.uanNumber = uanNumber || ""; changed = true; }
+    if (dateOfJoining !== undefined) { driver.dateOfJoining = dateOfJoining || ""; changed = true; }
+    if (drivingLevel !== undefined) { driver.drivingLevel = drivingLevel || ""; changed = true; }
+    if (esiCertificate) {
+      const url = await savePhoto(esiCertificate, "driver_esi_" + driver.id);
+      if (url) { driver.esiCertificateUrl = url; changed = true; }
+    }
+    if (pfCertificate) {
+      const url = await savePhoto(pfCertificate, "driver_pf_" + driver.id);
+      if (url) { driver.pfCertificateUrl = url; changed = true; }
+    }
+    if (changed) {
+      await audit(req.user, "update_driver", `${req.user.name} updated driver ${driver.name} (${driver.id})`);
+    }
+    res.json(driver);
+  })
+);
+
+// Per-driver mileage/efficiency summary for the People tab's Drivers card -
+// averages every fuel-fill day recorded against whichever vehicle(s) that
+// driver is/was currently assigned to (from their driverAssignedDate
+// onward), skipping any day a temporary driver covered instead so a
+// driver's numbers only ever reflect their own driving.
+function computeDriverMileageSummaries() {
+  const stats = {};
+  db.drivers.forEach((d) => { stats[d.id] = { fillCount: 0, totalMileage: 0, belowStandardCount: 0, lastFillDate: null }; });
+  Object.values(db.records).forEach((r) => {
+    if (!r.fuel || !(r.fuel.litres > 0)) return;
+    const vehicle = db.vehicles.find((v) => v.id === r.vehicleId);
+    if (!vehicle || !vehicle.driverId || !stats[vehicle.driverId]) return;
+    const tempArranged = r.attendance && r.attendance.tempDriver && r.attendance.tempDriver.arranged;
+    if (tempArranged) return;
+    if (vehicle.driverAssignedDate && r.date < vehicle.driverAssignedDate) return;
+    const s = stats[vehicle.driverId];
+    s.fillCount += 1;
+    s.totalMileage += r.fuel.mileage;
+    if (r.fuel.belowStandard) s.belowStandardCount += 1;
+    if (!s.lastFillDate || r.date > s.lastFillDate) s.lastFillDate = r.date;
+  });
+  return db.drivers.map((d) => {
+    const s = stats[d.id];
+    return {
+      driverId: d.id,
+      fillCount: s.fillCount,
+      avgMileage: s.fillCount ? Math.round((s.totalMileage / s.fillCount) * 10) / 10 : null,
+      belowStandardCount: s.belowStandardCount,
+      lastFillDate: s.lastFillDate,
+    };
+  });
+}
+app.get(
+  "/api/drivers/mileage-summary",
+  requireAuth,
+  requireRole(...PEOPLE_VIEWER_ROLES),
+  (req, res) => {
+    res.json(computeDriverMileageSummaries());
+  }
 );
 
 // ---------- VEHICLES ----------

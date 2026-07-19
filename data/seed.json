@@ -7,7 +7,9 @@
       "pin": "1111",
       "active": true,
       "siteId": "s_gachibowli",
-      "supervises": []
+      "supervises": [],
+      "phone": "9000100001",
+      "dateOfJoining": "2023-06-12"
     },
     {
       "id": "u_suresh",
@@ -16,7 +18,9 @@
       "pin": "2222",
       "active": true,
       "siteId": "s_kondapur",
-      "supervises": []
+      "supervises": [],
+      "phone": "9000100002",
+      "dateOfJoining": "2023-08-01"
     },
     {
       "id": "u_priya",
@@ -28,7 +32,9 @@
       "supervises": [
         "u_ravi",
         "u_suresh"
-      ]
+      ],
+      "phone": "9000100003",
+      "dateOfJoining": "2022-11-20"
     },
     {
       "id": "u_anil",
@@ -37,7 +43,9 @@
       "pin": "4444",
       "active": true,
       "siteId": null,
-      "supervises": []
+      "supervises": [],
+      "phone": "9000100004",
+      "dateOfJoining": "2021-04-15"
     },
     {
       "id": "u_sneha",
@@ -46,7 +54,9 @@
       "pin": "5555",
       "active": true,
       "siteId": null,
-      "supervises": []
+      "supervises": [],
+      "phone": "9000100005",
+      "dateOfJoining": "2023-01-09"
     },
     {
       "id": "u_owner",
@@ -55,7 +65,9 @@
       "pin": "9999",
       "active": true,
       "siteId": null,
-      "supervises": []
+      "supervises": [],
+      "phone": "9000100006",
+      "dateOfJoining": "2019-01-01"
     },
     {
       "id": "u_hr",
@@ -64,7 +76,9 @@
       "pin": "6666",
       "active": true,
       "siteId": null,
-      "supervises": []
+      "supervises": [],
+      "phone": "9000100007",
+      "dateOfJoining": "2022-03-03"
     },
     {
       "id": "u_bookings",
@@ -73,7 +87,9 @@
       "pin": "7777",
       "active": true,
       "siteId": null,
-      "supervises": []
+      "supervises": [],
+      "phone": "9000100008",
+      "dateOfJoining": "2024-02-14"
     }
   ],
   "clients": [
@@ -426,37 +442,91 @@
       "id": "d_mahesh",
       "name": "Mahesh",
       "phone": "9000000001",
-      "licenseNumber": "TS-DL-0001"
+      "licenseNumber": "TS0920180011223",
+      "aadharNumber": "234501112223",
+      "esiNumber": "ESI-4471102",
+      "pfNumber": "TN/CHN/0098765/000/1234567",
+      "uanNumber": "100234567891",
+      "esiCertificateUrl": null,
+      "pfCertificateUrl": null,
+      "dateOfJoining": "2022-05-10",
+      "drivingLevel": "Senior",
+      "performanceScore": null
     },
     {
       "id": "d_kiran",
       "name": "Kiran",
       "phone": "9000000002",
-      "licenseNumber": "TS-DL-0002"
+      "licenseNumber": "TS0920190022334",
+      "aadharNumber": "234502223334",
+      "esiNumber": "ESI-4471103",
+      "pfNumber": "TN/CHN/0098765/000/1234568",
+      "uanNumber": "100234567892",
+      "esiCertificateUrl": null,
+      "pfCertificateUrl": null,
+      "dateOfJoining": "2023-02-18",
+      "drivingLevel": "Standard",
+      "performanceScore": null
     },
     {
       "id": "d_raju",
       "name": "Raju",
       "phone": "9000000003",
-      "licenseNumber": "TS-DL-0003"
+      "licenseNumber": "TS0920170033445",
+      "aadharNumber": "234503334445",
+      "esiNumber": "ESI-4471104",
+      "pfNumber": "TN/CHN/0098765/000/1234569",
+      "uanNumber": "100234567893",
+      "esiCertificateUrl": null,
+      "pfCertificateUrl": null,
+      "dateOfJoining": "2021-09-01",
+      "drivingLevel": "Expert",
+      "performanceScore": null
     },
     {
       "id": "d_prasad",
       "name": "Prasad",
       "phone": "9000000004",
-      "licenseNumber": "TS-DL-0004"
+      "licenseNumber": "TS0920230044556",
+      "aadharNumber": "234504445556",
+      "esiNumber": "ESI-4471105",
+      "pfNumber": "TN/CHN/0098765/000/1234570",
+      "uanNumber": "100234567894",
+      "esiCertificateUrl": null,
+      "pfCertificateUrl": null,
+      "dateOfJoining": "2024-06-20",
+      "drivingLevel": "Trainee",
+      "performanceScore": null
     },
     {
       "id": "d_vijay",
       "name": "Vijay",
       "phone": "9000000005",
-      "licenseNumber": "TS-DL-0005"
+      "licenseNumber": "TS0920210055667",
+      "aadharNumber": "234505556667",
+      "esiNumber": "ESI-4471106",
+      "pfNumber": "TN/CHN/0098765/000/1234571",
+      "uanNumber": "100234567895",
+      "esiCertificateUrl": null,
+      "pfCertificateUrl": null,
+      "dateOfJoining": "2023-11-11",
+      "drivingLevel": "Standard",
+      "performanceScore": null
     },
     {
       "id": "d_naveen",
       "name": "Naveen",
       "phone": "9000000006",
-      "licenseNumber": "TS-DL-0006"
+      "licenseNumber": "TS0920240066778",
+      "aadharNumber": "234506667778",
+      "esiNumber": "ESI-4471107",
+      "pfNumber": "TN/CHN/0098765/000/1234572",
+      "uanNumber": "100234567896",
+      "esiCertificateUrl": null,
+      "pfCertificateUrl": null,
+      "dateOfJoining": "2025-01-05",
+      "drivingLevel": "Trainee",
+      "performanceScore": null
     }
   ],
   "vehicles": [
