@@ -1954,12 +1954,33 @@ async function correctOdometer(vehicleId, date){
 }
 
 // ================= HR / OWNER ATTENDANCE =================
+// Defaults to today only - widen either end to look back over a range
+// (up to the last month is the common case HR needs, for payroll/discipline
+// review), same "from/to" pattern as the Audit Log. Shared by both the
+// supervisor clock-in/out table and the driver attendance table below so
+// they always stay in sync when the range is changed.
+let attFrom = todayStr();
+let attTo = todayStr();
+function daysAgoStr(n){
+  const d = new Date();
+  d.setDate(d.getDate()-n);
+  return d.toISOString().slice(0,10);
+}
+async function setAttRange(from, to){
+  attFrom = from || todayStr();
+  attTo = to || todayStr();
+  await renderMain();
+}
+async function fetchDriverAttendanceRange(from, to){
+  try{ return await api(`/driver-attendance?from=${from}&to=${to}`); }catch(e){ return []; }
+}
 async function hrAttendanceScreen(){
-  const dateInput = view.attDate || todayStr();
+  const canDownload = currentUser.role==="hr" || currentUser.role==="owner";
   let entries = [];
-  try{ entries = await api(`/attendance?date=${dateInput}`); }catch(e){}
+  try{ entries = await api(`/attendance?from=${attFrom}&to=${attTo}`); }catch(e){}
   const supRows = entries.map(a=>`
     <tr>
+      <td>${a.date}</td>
       <td>${a.selfieUrl? `<img class="selfie-thumb" src="${a.selfieUrl}"/>` : "-"}</td>
       <td>${a.userName}</td><td>${roleLabel(a.role)}</td>
       <td>${a.type==='clockin'?'Clock in':'Clock out'}</td>
@@ -1969,26 +1990,173 @@ async function hrAttendanceScreen(){
       <td><span class="badge ${a.withinGeofence? 'ok':'low'}">${a.withinGeofence==null?'n/a':(a.withinGeofence?'AT SITE':'AWAY')}</span></td>
     </tr>`).join("");
 
-  const driverRows = vehicles.map(v=>{
-    const r = records[v.id];
-    if(!r || !r.attendance || !r.attendance.driver) return "";
-    return `<tr><td>${r.attendance.driver}</td><td>${v.reg}</td><td><span class="badge ${r.attendance.status==='present'?'ok':'low'}">${r.attendance.status}</span></td><td><span class="badge ${r.attendance.uniform==='compliant'?'ok':'low'}">${r.attendance.uniform}</span></td></tr>`;
-  }).join("");
+  const driverEntries = await fetchDriverAttendanceRange(attFrom, attTo);
+  const driverRows = driverEntries.map(a=>
+    `<tr><td>${a.date}</td><td>${a.driver}</td><td>${a.vehicleReg}</td><td><span class="badge ${a.status==='present'?'ok':'low'}">${a.status}</span></td><td><span class="badge ${a.uniform==='compliant'?'ok':'low'}">${a.uniform}</span></td></tr>`
+  ).join("");
 
   return `
   <h1 class="page-title">Attendance</h1>
+  ${canDownload ? await attendanceBackupReminderBannerHtml() : ""}
   <div class="card">
-    <h2 class="section-title">Supervisor clock-in / clock-out - ${dateInput}</h2>
-    <div class="field" style="max-width:200px;"><input type="date" value="${dateInput}" onchange="setAttDate(this.value)" /></div>
-    <table><tr><th>Selfie</th><th>Name</th><th>Role</th><th>Type</th><th>Time</th><th>Site</th><th>Distance</th><th>Status</th></tr>
-    ${supRows || "<tr><td colspan='8' class='empty'>No clock-ins for this date.</td></tr>"}</table>
+    <div class="check-row">
+      <div class="label">Date range</div>
+      <div class="controls">
+        <input type="date" id="attFromInput" value="${attFrom}" max="${todayStr()}" onchange="setAttRange(this.value, attTo)" /> to
+        <input type="date" id="attToInput" value="${attTo}" max="${todayStr()}" onchange="setAttRange(attFrom, this.value)" />
+        <button class="btn small secondary" onclick="setAttRange('${todayStr()}','${todayStr()}')">Today only</button>
+        <button class="btn small secondary" onclick="setAttRange('${daysAgoStr(30)}','${todayStr()}')">Last 30 days</button>
+      </div>
+    </div>
   </div>
   <div class="card">
-    <h2 class="section-title">Driver attendance today (from vehicle checklists)</h2>
-    <table><tr><th>Driver</th><th>Vehicle</th><th>Attendance</th><th>Uniform</th></tr>${driverRows || "<tr><td colspan='4' class='empty'>No entries submitted yet today.</td></tr>"}</table>
+    <h2 class="section-title">Supervisor clock-in / clock-out - ${attFrom} to ${attTo}</h2>
+    ${canDownload ? `<div class="controls" style="margin-bottom:8px;">
+      <button class="btn small secondary" onclick="downloadAttendanceSupervisors('csv')">Download CSV</button>
+      <button class="btn small secondary" onclick="downloadAttendanceSupervisors('xlsx')">Download Excel</button>
+    </div>` : ""}
+    <table><tr><th>Date</th><th>Selfie</th><th>Name</th><th>Role</th><th>Type</th><th>Time</th><th>Site</th><th>Distance</th><th>Status</th></tr>
+    ${supRows || "<tr><td colspan='9' class='empty'>No clock-ins for this range.</td></tr>"}</table>
+  </div>
+  <div class="card">
+    <h2 class="section-title">Driver attendance (from vehicle checklists) - ${attFrom} to ${attTo}</h2>
+    ${canDownload ? `<div class="controls" style="margin-bottom:8px;">
+      <button class="btn small secondary" onclick="downloadAttendanceDrivers('csv')">Download CSV</button>
+      <button class="btn small secondary" onclick="downloadAttendanceDrivers('xlsx')">Download Excel</button>
+    </div>` : ""}
+    <table><tr><th>Date</th><th>Driver</th><th>Vehicle</th><th>Attendance</th><th>Uniform</th></tr>${driverRows || "<tr><td colspan='5' class='empty'>No entries submitted for this range.</td></tr>"}</table>
+  </div>
+  ${canDownload ? await attendanceBackupCardHtml() : ""}`;
+}
+async function downloadAttendanceSupervisors(format){
+  try{
+    const headers = {};
+    if(authToken) headers["Authorization"] = "Bearer " + authToken;
+    const res = await fetch(`${API}/reports/attendance-supervisors?from=${attFrom}&to=${attTo}&format=${format}`, {headers});
+    if(!res.ok){
+      const data = await res.json().catch(()=>({}));
+      throw new Error(data.error || `Download failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `supervisor_attendance_${attFrom}_${attTo}.${format==='xlsx'?'xlsx':'csv'}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){ alert(e.message); }
+}
+async function downloadAttendanceDrivers(format){
+  try{
+    const headers = {};
+    if(authToken) headers["Authorization"] = "Bearer " + authToken;
+    const res = await fetch(`${API}/reports/attendance-drivers?from=${attFrom}&to=${attTo}&format=${format}`, {headers});
+    if(!res.ok){
+      const data = await res.json().catch(()=>({}));
+      throw new Error(data.error || `Download failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `driver_attendance_${attFrom}_${attTo}.${format==='xlsx'?'xlsx':'csv'}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){ alert(e.message); }
+}
+
+// ================= ATTENDANCE BACKUP (HR, Owner) =================
+// Separate from the general full-data Backup tab (Owner/Ops Manager) - HR
+// needs their own roughly-every-15-days archive of attendance data
+// specifically, kept outside the app. Every download is logged (who, when)
+// so it's visible whether this is happening on schedule, plus the next
+// due date computed straight from that log.
+const ATTENDANCE_BACKUP_TARGET_DAYS = 15;
+const ATTENDANCE_BACKUP_REMINDER_AFTER_DAYS = 12;
+async function fetchAttendanceBackupHistory(){
+  try{ return await api("/attendance-backup/history"); }catch(e){ return null; }
+}
+function nextScheduledDate(lastTakenIso){
+  if(!lastTakenIso) return null;
+  const d = new Date(lastTakenIso);
+  d.setDate(d.getDate() + ATTENDANCE_BACKUP_TARGET_DAYS);
+  return d.toISOString().slice(0,10);
+}
+async function attendanceBackupCardHtml(){
+  const history = await fetchAttendanceBackupHistory();
+  if(history===null) return "";
+  const last = history[0];
+  const days = last ? daysSinceIso(last.takenAt) : null;
+  const nextDue = last ? nextScheduledDate(last.takenAt) : null;
+  let statusHtml;
+  if(days===null){
+    statusHtml = `<div class="banner error">No attendance backup has ever been downloaded - please take one now.</div>`;
+  } else if(days >= ATTENDANCE_BACKUP_TARGET_DAYS){
+    statusHtml = `<div class="banner error">It's been ${days} days since the last attendance backup (target: every ${ATTENDANCE_BACKUP_TARGET_DAYS} days) - please download one now. It was due on ${nextDue}.</div>`;
+  } else if(days >= ATTENDANCE_BACKUP_REMINDER_AFTER_DAYS){
+    statusHtml = `<div class="banner">It's been ${days} days since the last attendance backup - one is due soon, by ${nextDue}.</div>`;
+  } else {
+    statusHtml = `<div class="banner">Last attendance backup was ${days} day${days===1?'':'s'} ago, by ${last.userName}. Next one due by ${nextDue}.</div>`;
+  }
+  const rows = history.map(b=>`
+    <tr>
+      <td>${new Date(b.takenAt).toLocaleString()}</td>
+      <td>${b.userName}</td>
+      <td>${roleLabel(b.role)}</td>
+      <td>${nextScheduledDate(b.takenAt)}</td>
+    </tr>`).join("");
+  return `
+  <div class="card">
+    <h2 class="section-title">Attendance Backup</h2>
+    <p class="muted">Download a complete archive of every supervisor clock-in/out and driver attendance record roughly every ${ATTENDANCE_BACKUP_TARGET_DAYS} days and keep it somewhere outside the app.</p>
+    ${statusHtml}
+    <button class="btn" onclick="downloadAttendanceBackup()">Download Attendance Backup</button>
+    <table style="margin-top:12px;"><tr><th>Taken</th><th>By</th><th>Role</th><th>Next Scheduled</th></tr>
+    ${rows || "<tr><td colspan='4' class='empty'>No attendance backups downloaded yet.</td></tr>"}
+    </table>
   </div>`;
 }
-async function setAttDate(v){ view.attDate = v; await renderMain(); }
+async function downloadAttendanceBackup(){
+  try{
+    const headers = {};
+    if(authToken) headers["Authorization"] = "Bearer " + authToken;
+    const res = await fetch(`${API}/attendance-backup/full`, {headers});
+    if(!res.ok){
+      const data = await res.json().catch(()=>({}));
+      throw new Error(data.error || `Download failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `padmasri_attendance_backup_${todayStr()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+// Shown at the top of HR's Attendance tab (their home tab) and the Owner
+// Dashboard - the two "home" views for the roles who can take this backup.
+async function attendanceBackupReminderBannerHtml(){
+  const history = await fetchAttendanceBackupHistory();
+  if(history===null) return "";
+  const last = history[0];
+  const days = last ? daysSinceIso(last.takenAt) : null;
+  if(days!==null && days < ATTENDANCE_BACKUP_REMINDER_AFTER_DAYS) return "";
+  const nextDue = last ? nextScheduledDate(last.takenAt) : null;
+  const msg = days===null
+    ? "No attendance backup has ever been downloaded."
+    : `It's been ${days} days since the last attendance backup (target: every ${ATTENDANCE_BACKUP_TARGET_DAYS} days, next due ${nextDue}).`;
+  return `<div class="banner ${days!==null && days>=ATTENDANCE_BACKUP_TARGET_DAYS ? 'error' : ''}" style="margin-bottom:14px;">
+    ⏰ ${msg} <button class="btn small secondary" onclick="switchTab('attendance')" style="margin-left:8px;">Go to Attendance</button>
+  </div>`;
+}
 
 // ================= AUDIT =================
 // opts: {limit, date, from, to, sinceMinutes} - defaults to today server-side
@@ -2258,6 +2426,7 @@ async function ownerDashboardScreen(){
   <p class="muted" style="margin-top:-8px;">Click any number below to see the full list and take action.</p>
 
   ${await backupReminderBannerHtml()}
+  ${await attendanceBackupReminderBannerHtml()}
 
   ${await priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpenses)}
 
@@ -2503,13 +2672,14 @@ function drawCharts(approved,pending,rejected,fails,passes){
 Object.assign(window, {
   selectLoginUser, doLogin, doLogout, switchTab, goto, draftSet, updateBreathalyzer, startPhotoCapture,
   updateDoc, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
-  addSite, addDriver, addPerson, correctOdometer, setAttDate, captureBillPhoto, submitExpense, decideExpense,
+  addSite, addDriver, addPerson, correctOdometer, captureBillPhoto, submitExpense, decideExpense,
   startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, saveOdometer, restoreBackup, downloadReport,
   toggleVehicleDetails, saveVehicleDetails, saveVehicleDoc, onNewVehicleTypeChange, onVdVehicleTypeChange, onPermitStateToggle,
   toggleClientRoutes, saveRouteCap, addRoute, saveRouteEdit, deleteRoute,
   setVehicleUsage, unlockOwnerAssignmentEditing, setAuditRange, downloadFullBackup, setAssignmentsViewDate,
   downloadVehiclesRunning, downloadFuelOverview,
   toggleDriverDetails, saveDriverDetails, saveDriverCertificate, addDriverFull,
+  setAttRange, downloadAttendanceSupervisors, downloadAttendanceDrivers, downloadAttendanceBackup,
 });
 
 boot();

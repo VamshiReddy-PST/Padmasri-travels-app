@@ -82,6 +82,7 @@ async function initStorage() {
 function backfillDefaults() {
   if (!db.odometerLogs) db.odometerLogs = {};
   if (!Array.isArray(db.backupDownloads)) db.backupDownloads = [];
+  if (!Array.isArray(db.attendanceBackupDownloads)) db.attendanceBackupDownloads = [];
   (db.vehicles || []).forEach((v) => {
     if (v.driverAssignedDate === undefined) v.driverAssignedDate = null;
     if (v.make === undefined) v.make = "";
@@ -1491,9 +1492,15 @@ app.post(
 );
 
 app.get("/api/attendance", requireAuth, requireRole("hr", "owner", "ops_manager", "data_team"), (req, res) => {
-  const { date, userId } = req.query;
+  const { date, userId, from, to } = req.query;
   let rows = db.supervisorAttendance;
-  if (date) rows = rows.filter((r) => r.date === date);
+  if (from || to) {
+    const f = from || to;
+    const t = to || from;
+    rows = rows.filter((r) => r.date >= f && r.date <= t);
+  } else if (date) {
+    rows = rows.filter((r) => r.date === date);
+  }
   if (userId) rows = rows.filter((r) => r.userId === userId);
   res.json(rows);
 });
@@ -1502,6 +1509,115 @@ app.get("/api/attendance", requireAuth, requireRole("hr", "owner", "ops_manager"
 app.get("/api/attendance/me", requireAuth, (req, res) => {
   res.json(db.supervisorAttendance.filter((r) => r.userId === req.user.id).slice(0, 60));
 });
+
+// Driver attendance (present/absent + uniform compliance) for a date range -
+// unlike supervisor clock-in/out (its own log), a driver's daily attendance
+// only lives inside that day's vehicle checklist record, so this walks
+// every record in range and pulls it out into its own rows.
+function computeDriverAttendanceRows(from, to) {
+  const rows = [];
+  Object.values(db.records).forEach((r) => {
+    if (from && r.date < from) return;
+    if (to && r.date > to) return;
+    if (!r.attendance || !r.attendance.driver) return;
+    const vehicle = db.vehicles.find((v) => v.id === r.vehicleId);
+    rows.push({
+      date: r.date,
+      driver: r.attendance.driver,
+      vehicleReg: vehicle ? vehicle.reg : r.vehicleId,
+      status: r.attendance.status || "",
+      uniform: r.attendance.uniform || "",
+    });
+  });
+  rows.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  return rows;
+}
+app.get("/api/driver-attendance", requireAuth, requireRole("hr", "owner", "ops_manager", "data_team"), (req, res) => {
+  const { date, from, to } = req.query;
+  let f = from;
+  let t = to;
+  if (!f && !t && date) {
+    f = date;
+    t = date;
+  }
+  res.json(computeDriverAttendanceRows(f, t));
+});
+
+// ---------- ATTENDANCE DOWNLOADS + BACKUP (HR, Owner only) ----------
+// HR is the one who actually needs the last-month attendance picture (for
+// payroll/discipline review), so unlike the general Reports tab (Owner/Ops
+// Manager/Area Supervisor), these downloads are scoped to HR and Owner only.
+const ATTENDANCE_DOWNLOAD_ROLES = ["hr", "owner"];
+app.get("/api/reports/attendance-supervisors", requireAuth, requireRole(...ATTENDANCE_DOWNLOAD_ROLES), (req, res) => {
+  const { from, to, format } = req.query;
+  let rows = db.supervisorAttendance;
+  if (from || to) {
+    const f = from || to;
+    const t = to || from;
+    rows = rows.filter((r) => r.date >= f && r.date <= t);
+  }
+  const columns = [
+    { label: "Date", key: "date" },
+    { label: "Name", key: "userName" },
+    { label: "Role", key: (a) => roleLabelServer(a.role) },
+    { label: "Type", key: (a) => (a.type === "clockin" ? "Clock In" : "Clock Out") },
+    { label: "Time", key: (a) => new Date(a.ts).toLocaleTimeString() },
+    { label: "Site", key: (a) => a.siteName || "" },
+    { label: "Distance From Site (m)", key: "distanceMeters" },
+    { label: "Within Geofence", key: (a) => (a.withinGeofence == null ? "n/a" : a.withinGeofence ? "Yes" : "No") },
+  ];
+  sendDownload(res, rows, columns, `supervisor_attendance_${from || "all"}_${to || "all"}`, format);
+});
+app.get("/api/reports/attendance-drivers", requireAuth, requireRole(...ATTENDANCE_DOWNLOAD_ROLES), (req, res) => {
+  const { from, to, format } = req.query;
+  const rows = computeDriverAttendanceRows(from, to);
+  const columns = [
+    { label: "Date", key: "date" },
+    { label: "Driver", key: "driver" },
+    { label: "Vehicle", key: "vehicleReg" },
+    { label: "Attendance", key: "status" },
+    { label: "Uniform", key: "uniform" },
+  ];
+  sendDownload(res, rows, columns, `driver_attendance_${from || "all"}_${to || "all"}`, format);
+});
+
+// Attendance Backup - separate from the general full-data Backup tab
+// (Owner/Ops Manager). HR needs to pull a complete archive of every
+// supervisor clock-in/out and driver attendance record roughly every 15
+// days and keep it outside the app - every download is logged (who, when)
+// so it's visible whether this is actually happening on schedule, the same
+// way the full-data backup already tracks itself.
+const ATTENDANCE_BACKUP_ROLES = ["hr", "owner"];
+app.get(
+  "/api/attendance-backup/full",
+  requireAuth,
+  requireRole(...ATTENDANCE_BACKUP_ROLES),
+  h(async (req, res) => {
+    const takenAt = nowIso();
+    db.attendanceBackupDownloads = db.attendanceBackupDownloads || [];
+    db.attendanceBackupDownloads.unshift({ id: uid("attbkdl"), userId: req.user.id, userName: req.user.name, role: req.user.role, takenAt });
+    if (db.attendanceBackupDownloads.length > 200) db.attendanceBackupDownloads.length = 200;
+    await audit(req.user, "download_attendance_backup", `${req.user.name} downloaded a full attendance backup`);
+
+    const payload = {
+      exportedAt: takenAt,
+      supervisorAttendance: db.supervisorAttendance,
+      driverAttendance: computeDriverAttendanceRows(null, null),
+    };
+    const filename = `padmasri_attendance_backup_${takenAt.slice(0, 10)}.json`;
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(payload, null, 2));
+  })
+);
+app.get(
+  "/api/attendance-backup/history",
+  requireAuth,
+  requireRole(...ATTENDANCE_BACKUP_ROLES),
+  (req, res) => {
+    res.json((db.attendanceBackupDownloads || []).slice(0, 100));
+  }
+);
 
 // ---------- OWNER DASHBOARD - fleet average mileage ----------
 // Computed from every daily record ever submitted (not just today's), since
