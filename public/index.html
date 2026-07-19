@@ -279,7 +279,7 @@ async function render(){
   `;
   await renderMain();
 }
-async function switchTab(tab){ view = {tab, name:"home"}; ownerAssignUnlocked = false; await render(); window.scrollTo(0,0); }
+async function switchTab(tab){ view = {tab, name:"home"}; ownerAssignUnlocked = false; assignmentsViewDate = todayStr(); await render(); window.scrollTo(0,0); }
 async function goto(name, params){ view = Object.assign({tab: view.tab}, {name}, params||{}); await renderMain(); window.scrollTo(0,0); }
 
 async function renderMain(){
@@ -984,7 +984,7 @@ async function setLeave(id, status){
 // rest of the current visit to the tab.
 async function assignmentsScreen(){
   if(currentUser.role==="owner" && !ownerAssignUnlocked){
-    return ownerAssignmentsReadOnlyHtml();
+    return await ownerAssignmentsReadOnlyHtml();
   }
   return assignmentsEditorHtml();
 }
@@ -993,25 +993,70 @@ function areaSupervisorNameForVehicle(v){
   return site && site.areaSupervisorId ? userName(site.areaSupervisorId) : "-";
 }
 function driverPhone(id){ const d = meta.drivers.find(x=>x.id===id); return d ? (d.phone||"-") : "-"; }
-function ownerAssignmentsReadOnlyHtml(){
+
+// ---- "Vehicles running on <date>" - shared by the Owner's read-only
+// Assignments view and the Operations Manager's Assignments screen, so both
+// can look back at a past day, not just today. If a temporary driver was
+// arranged for a vehicle on that date, their name replaces the regular
+// driver's for that row, tagged "TEMPORARY" with the amount requested shown
+// in a small red badge (matching daily attendance/temp-driver records).
+let assignmentsViewDate = todayStr();
+async function setAssignmentsViewDate(date){
+  assignmentsViewDate = date || todayStr();
+  await renderMain();
+}
+async function fetchRecordsForDate(date){
+  try{ return await api("/records?date="+date); }catch(e){ return {}; }
+}
+function driverCellsHtml(v, recordsForDate){
+  const r = recordsForDate[v.id];
+  const temp = r && r.attendance && r.attendance.tempDriver && r.attendance.tempDriver.arranged ? r.attendance.tempDriver : null;
+  if(temp){
+    return `
+      <td>${temp.name || '-'}<br>
+        <span style="font-size:9px;color:#b00020;font-weight:700;letter-spacing:.3px;">TEMPORARY</span>
+        <span style="display:inline-block;background:#fdecea;color:#b00020;border:1px solid #f1a9ad;border-radius:4px;padding:1px 5px;font-size:9px;font-weight:700;margin-left:4px;">₹${temp.amount||0}</span>
+      </td>
+      <td>${temp.phone || '-'}</td>`;
+  }
+  const driverDisplay = (r && r.attendance && r.attendance.driver) || (v.driverId? driverName(v.driverId) : '-');
+  const mobileDisplay = v.driverId ? driverPhone(v.driverId) : '-';
+  return `<td>${driverDisplay}</td><td>${mobileDisplay}</td>`;
+}
+async function assignmentsDateViewCardHtml(){
+  const date = assignmentsViewDate;
+  const recordsForDate = await fetchRecordsForDate(date);
   const rows = vehicles.map(v=>`
     <tr>
       <td><b>${v.reg}</b></td>
       <td>${v.clientId? clientName(v.clientId) : 'Internal / Fixed Route'}</td>
       <td>${areaSupervisorNameForVehicle(v)}</td>
       <td>${v.supervisorId? userName(v.supervisorId) : '-'}</td>
-      <td>${v.driverId? driverName(v.driverId) : '-'}</td>
-      <td>${v.driverId? driverPhone(v.driverId) : '-'}</td>
+      ${driverCellsHtml(v, recordsForDate)}
       <td>${v.route || siteName(v.siteId)}</td>
     </tr>`).join("");
   return `
-  <h1 class="page-title">Assignments - Vehicles running today</h1>
-  <div class="banner">View only. Vehicle, route and supervisor details are managed by Operations Manager - re-enter your PIN below if you need to make a change yourself (this guards against accidental taps).</div>
   <div class="card">
+    <h2 class="section-title">Vehicles running on ${date}${date===todayStr()?' (today)':''}</h2>
+    <div class="check-row">
+      <div class="label">Date</div>
+      <div class="controls">
+        <input type="date" value="${date}" max="${todayStr()}" onchange="setAssignmentsViewDate(this.value)" />
+        <button class="btn small secondary" onclick="setAssignmentsViewDate('${todayStr()}')">Today</button>
+      </div>
+    </div>
     <table><tr><th>Vehicle</th><th>Company</th><th>Area Supervisor</th><th>Site Supervisor</th><th>Driver</th><th>Driver Mobile</th><th>Route</th></tr>
     ${rows || "<tr><td colspan='7' class='empty'>No vehicles yet.</td></tr>"}
     </table>
-    <button class="btn small secondary" style="margin-top:10px;" onclick="unlockOwnerAssignmentEditing()">Unlock editing (PIN required)</button>
+  </div>`;
+}
+async function ownerAssignmentsReadOnlyHtml(){
+  return `
+  <h1 class="page-title">Assignments - Vehicles running today</h1>
+  <div class="banner">View only. Pick a date below to look back at a past day. Vehicle, route and supervisor details are managed by Operations Manager - re-enter your PIN below if you need to make a change yourself (this guards against accidental taps).</div>
+  ${await assignmentsDateViewCardHtml()}
+  <div class="card">
+    <button class="btn small secondary" onclick="unlockOwnerAssignmentEditing()">Unlock editing (PIN required)</button>
   </div>`;
 }
 async function unlockOwnerAssignmentEditing(){
@@ -1098,6 +1143,8 @@ async function assignmentsEditorHtml(){
     <div class="muted" style="margin-top:6px;">Buses in this fleet only run on Diesel. Once added, these onboarding details (and each vehicle's documents) can be edited later via "Vehicle Details" below.</div>
     ${editingVehicleId ? await vehicleDetailsEditorHtml(editingVehicleId) : ""}
   </div>
+
+  ${(currentUser.role==="ops_manager" || currentUser.role==="owner") ? await assignmentsDateViewCardHtml() : ""}
 
   <div class="grid cols-3">
     <div class="card">
@@ -2157,7 +2204,7 @@ Object.assign(window, {
   startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, saveOdometer, restoreBackup, downloadReport,
   toggleVehicleDetails, saveVehicleDetails, saveVehicleDoc, onNewVehicleTypeChange, onVdVehicleTypeChange, onPermitStateToggle,
   toggleClientRoutes, saveRouteCap, addRoute, saveRouteEdit, deleteRoute,
-  setVehicleUsage, unlockOwnerAssignmentEditing, setAuditRange, downloadFullBackup,
+  setVehicleUsage, unlockOwnerAssignmentEditing, setAuditRange, downloadFullBackup, setAssignmentsViewDate,
 });
 
 boot();
