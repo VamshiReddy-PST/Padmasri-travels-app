@@ -2461,6 +2461,25 @@ app.post(
   })
 );
 
+// Adds everything the driver app's trip screens display beyond the bare
+// trip record: the vehicle's registration, its client/site (so the driver
+// knows who the run is for), its route, and the Site Supervisor who owns
+// that vehicle - name + mobile number, so the driver has someone to call.
+function enrichTripForDriver(trip) {
+  const vehicle = db.vehicles.find((v) => v.id === trip.vehicleId);
+  const client = vehicle && vehicle.clientId ? db.clients.find((c) => c.id === vehicle.clientId) : null;
+  const site = vehicle && vehicle.siteId ? db.sites.find((s) => s.id === vehicle.siteId) : null;
+  const supervisor = vehicle && vehicle.supervisorId ? db.users.find((u) => u.id === vehicle.supervisorId) : null;
+  return Object.assign({}, trip, {
+    vehicleReg: vehicle ? vehicle.reg : "",
+    clientName: client ? client.name : "",
+    siteName: site ? site.name : "",
+    route: vehicle ? vehicle.route || "" : "",
+    supervisorName: supervisor ? supervisor.name : "",
+    supervisorPhone: supervisor ? supervisor.phone || "" : "",
+  });
+}
+
 // The whole month's schedule for the "Upcoming Trips" tab - defaults to the
 // current month if none given. Still excludes cancelled trips (nothing
 // useful for a driver to do with those).
@@ -2471,7 +2490,8 @@ app.get(
     const month = /^\d{4}-\d{2}$/.test(req.query.month || "") ? req.query.month : nowIso().slice(0, 7);
     const rows = db.trips
       .filter((t) => t.driverId === req.driver.id && t.status !== "cancelled" && t.date.slice(0, 7) === month)
-      .sort((a, b) => (a.date + (a.scheduledTime || "")).localeCompare(b.date + (b.scheduledTime || "")));
+      .sort((a, b) => (a.date + (a.scheduledTime || "")).localeCompare(b.date + (b.scheduledTime || "")))
+      .map(enrichTripForDriver);
     res.json({
       month,
       upcoming: rows.filter((t) => t.status === "upcoming" || t.status === "in_progress"),
@@ -2489,9 +2509,7 @@ app.get(
   driverAuth,
   h(async (req, res) => {
     const trip = db.trips.find((t) => t.driverId === req.driver.id && t.status === "in_progress") || null;
-    if (!trip) return res.json(null);
-    const vehicle = db.vehicles.find((v) => v.id === trip.vehicleId);
-    res.json(Object.assign({}, trip, { vehicleReg: vehicle ? vehicle.reg : "" }));
+    res.json(trip ? enrichTripForDriver(trip) : null);
   })
 );
 

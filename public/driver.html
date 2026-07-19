@@ -182,17 +182,18 @@ function startLocationPings(){
 }
 function stopLocationPings(){ if(pingTimer){ clearInterval(pingTimer); pingTimer=null; } }
 
-// ---------- polling (keeps whichever tab is open fresh while active) ----------
-// Skipped entirely while awaiting_odometer - the dedicated countdown
-// ticker below already handles that screen's one job (catching the
-// server's 10-minute auto-expiry) without the full re-render a poll
-// here would cause, which would otherwise interrupt the driver mid-type.
+// ---------- polling (keeps whichever tab is open fresh, catches auto-expiry) ----------
+// Runs the whole time the driver is logged in, including while
+// awaiting_odometer - the driver can now freely browse Upcoming Trips /
+// Profile / Documents during that 10-minute window instead of being stuck
+// on a blocking odometer screen, so this is what notices the server auto-
+// closing the shift if the window runs out while they're on another tab.
+// This used to skip awaiting_odometer to protect the odometer input from
+// being wiped by a re-render mid-type; that's now handled by odoOpenDraft
+// surviving any re-render, so it's safe to poll here too.
 function startPolling(){
   stopPolling();
-  pollTimer = setInterval(()=>{
-    if(shift && shift.status==="awaiting_odometer") return;
-    refreshMe();
-  }, 15000);
+  pollTimer = setInterval(refreshMe, 15000);
 }
 function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
 async function refreshMe(){
@@ -200,7 +201,7 @@ async function refreshMe(){
   try{
     const m = await api("/driver-auth/me");
     driver = m.driver; shift = m.shift;
-    if(shift && shift.status!=="awaiting_odometer" && shift.status!=="closed") await loadActiveTabData();
+    if(shift && shift.status!=="closed") await loadActiveTabData();
     render();
   }catch(e){ /* api() already resets session on 401 */ }
 }
@@ -208,11 +209,10 @@ async function refreshMe(){
 // both when switching tabs and by the 15s poll, so whichever tab is open
 // always has fresh data without re-fetching every tab on every poll.
 async function loadActiveTabData(){
-  if(driverTab==="current") await fetchCurrentTrip();
-  else if(driverTab==="upcoming") await Promise.all([fetchMonthTrips(), fetchMyLeaveRequests()]);
-  else if(driverTab==="attendance") await fetchAttendance();
-  else if(driverTab==="payroll") await fetchPayslip();
+  if(driverTab==="upcoming") await Promise.all([fetchMonthTrips(), fetchMyLeaveRequests()]);
+  else if(driverTab==="profile") await Promise.all([fetchPayslip(), fetchAttendance()]);
   else if(driverTab==="documents") await fetchDocuments();
+  else await fetchCurrentTrip(); // "current" tab, and the default
 }
 async function setDriverTab(tab){
   driverTab = tab;
@@ -264,11 +264,12 @@ async function boot(){
     const m = await api("/driver-auth/me");
     driver = m.driver; shift = m.shift;
     if(shift && shift.status!=="closed"){
+      // Land straight on the tab bar (Current Trip active) no matter which
+      // stage the shift is in - awaiting_odometer no longer blocks access
+      // to Upcoming Trips / Profile / Documents.
       startLocationPings(); startPolling();
-      if(shift.status==="on_trip" || shift.status==="ready_to_logout"){
-        driverTab = "current";
-        await fetchCurrentTrip();
-      }
+      driverTab = "current";
+      await fetchCurrentTrip();
     }
     render();
   }catch(e){
@@ -363,10 +364,8 @@ async function doDriverLogin(){
     driverToken = r.token; driver = r.driver; shift = r.shift;
     localStorage.setItem("driverAuthToken", driverToken);
     startLocationPings(); startPolling();
-    if(shift && (shift.status==="on_trip" || shift.status==="ready_to_logout")){
-      driverTab = "current";
-      await fetchCurrentTrip();
-    }
+    driverTab = "current";
+    await fetchCurrentTrip();
   }catch(e){
     lastError = e.message;
   }
@@ -481,7 +480,9 @@ function errorBannerHtml(){
 function bodyHtml(){
   if(!driverToken || !driver) return loginScreen();
   if(!shift || shift.status==="closed") return loggedOutScreen();
-  if(shift.status==="awaiting_odometer") return odometerOpenScreen();
+  // Every other stage (awaiting_odometer, on_trip, ready_to_logout) lands
+  // on the tab bar - odometer entry lives inside the Current Trip tab now,
+  // it no longer blocks Upcoming Trips / Profile / Documents.
   return activeShiftScreen();
 }
 
@@ -521,27 +522,6 @@ function odometerCountdownParts(){
   const ss = String(Math.floor((remainMs%60000)/1000)).padStart(2,"0");
   return { remainMs, text: `${mm}:${ss}` };
 }
-function odometerOpenScreen(){
-  const { remainMs, text } = odometerCountdownParts();
-  return `
-  <h1 class="page-title">Welcome, ${driver.name}</h1>
-  ${errorBannerHtml()}
-  <div class="card">
-    <h2 class="section-title">Enter Opening Odometer Reading</h2>
-    <p class="muted">You must enter this within 10 minutes of logging in, or you'll be logged out automatically.</p>
-    <div class="countdown${remainMs<120000?" warn":""}" id="odoCountdown">${text}</div>
-    <div class="field">
-      <label>Odometer Reading (km)</label>
-      <input type="text" id="odoOpenValue" value="${odoOpenDraft}" placeholder="e.g. 45210" inputmode="numeric" pattern="[0-9]*" maxlength="7" autocomplete="off" oninput="odoOpenDraft=this.value=this.value.replace(/[^0-9]/g,'');" />
-    </div>
-    <div class="photo-box">
-      ${capturedOpenPhoto ? `<img src="${capturedOpenPhoto}"/><br/>` : ""}
-      <button type="button" class="big-btn secondary" style="margin-top:${capturedOpenPhoto?'10px':'0'};" onclick="captureOpenPhoto()">${capturedOpenPhoto? "📷 Retake Photo" : "📷 Take Odometer Photo"}</button>
-    </div>
-    <button class="big-btn" ${busy?"disabled":""} onclick="submitOdometerOpen()">${busy?'<span class="spinner"></span>Starting...':"Start Trip"}</button>
-  </div>`;
-}
-
 function activeShiftScreen(){
   return `
   <h1 class="page-title">Welcome, ${driver.name}</h1>
@@ -551,9 +531,10 @@ function activeShiftScreen(){
   `;
 }
 
+// 4 tabs, deliberately - Attendance/Payroll/Settings are folded into one
+// "Profile" tab so the driver isn't choosing between 6 things.
 const DRIVER_TABS = [
-  ["current","Current Trip"], ["upcoming","Upcoming Trips"], ["attendance","Attendance"],
-  ["payroll","Payroll"], ["documents","Documents"], ["settings","Settings"],
+  ["current","Current Trip"], ["upcoming","Upcoming Trips"], ["profile","Profile"], ["documents","Documents"],
 ];
 function driverTabBarHtml(){
   return `<div class="driver-tabbar">${DRIVER_TABS.map(([k,l])=>
@@ -562,15 +543,19 @@ function driverTabBarHtml(){
 }
 function driverTabContentHtml(){
   if(driverTab==="upcoming") return upcomingTripsTabHtml();
-  if(driverTab==="attendance") return attendanceTabHtml();
-  if(driverTab==="payroll") return payslipCardHtml();
+  if(driverTab==="profile") return profileTabHtml();
   if(driverTab==="documents") return documentsTabHtml();
-  if(driverTab==="settings") return settingsTabHtml();
   return currentTripTabHtml();
 }
 
 // ---------- Current Trip tab ----------
+// This is the landing tab right after login. While the shift is still
+// awaiting_odometer, it's where the opening-odometer gate (with its
+// 10-minute countdown) lives now - it no longer blocks the other tabs,
+// so the driver can check Documents/Profile/Upcoming Trips while that
+// countdown is still running if they want to.
 function currentTripTabHtml(){
+  if(shift.status==="awaiting_odometer") return odometerOpenCardHtml();
   let tripHtml;
   if(!currentTrip){
     tripHtml = `<div class="card"><h2 class="section-title">Current Trip</h2><div class="empty">No trip currently running. Start one from the Upcoming Trips tab.</div></div>`;
@@ -580,6 +565,16 @@ function currentTripTabHtml(){
     <div class="card">
       <h2 class="section-title">Current Trip</h2>
       <p class="muted">${fmtDate(t.date)}${t.scheduledTime? " &middot; "+t.scheduledTime : ""}${t.vehicleReg? " &middot; "+t.vehicleReg : ""}</p>
+      ${(t.clientName || t.siteName || t.route) ? `
+      <div class="doc-row" style="display:block;">
+        ${t.clientName ? `<div><b>Client:</b> ${t.clientName}</div>` : ""}
+        ${t.siteName ? `<div><b>Site:</b> ${t.siteName}</div>` : ""}
+        ${t.route ? `<div><b>Route:</b> ${t.route}</div>` : ""}
+      </div>` : ""}
+      ${t.supervisorName ? `
+      <div class="doc-row" style="display:block;">
+        <div><b>Site Supervisor:</b> ${t.supervisorName}${t.supervisorPhone ? ` &middot; <a href="tel:${t.supervisorPhone}">${t.supervisorPhone}</a>` : ""}</div>
+      </div>` : ""}
       <div class="trip-point">
         <div class="trip-point-label">Pickup Point</div>
         <div>${t.pickupPoint || "Not specified"}</div>
@@ -596,6 +591,24 @@ function currentTripTabHtml(){
   }
   const shiftHtml = shift.status==="ready_to_logout" ? logoutCardHtml() : closingOdometerCardHtml();
   return tripHtml + shiftHtml;
+}
+function odometerOpenCardHtml(){
+  const { remainMs, text } = odometerCountdownParts();
+  return `
+  <div class="card">
+    <h2 class="section-title">Enter Opening Odometer Reading</h2>
+    <p class="muted">You must enter this within 10 minutes of logging in, or you'll be logged out automatically. You can still check the other tabs while this counts down.</p>
+    <div class="countdown${remainMs<120000?" warn":""}" id="odoCountdown">${text}</div>
+    <div class="field">
+      <label>Odometer Reading (km)</label>
+      <input type="text" id="odoOpenValue" value="${odoOpenDraft}" placeholder="e.g. 45210" inputmode="numeric" pattern="[0-9]*" maxlength="7" autocomplete="off" oninput="odoOpenDraft=this.value=this.value.replace(/[^0-9]/g,'');" />
+    </div>
+    <div class="photo-box">
+      ${capturedOpenPhoto ? `<img src="${capturedOpenPhoto}"/><br/>` : ""}
+      <button type="button" class="big-btn secondary" style="margin-top:${capturedOpenPhoto?'10px':'0'};" onclick="captureOpenPhoto()">${capturedOpenPhoto? "📷 Retake Photo" : "📷 Take Odometer Photo"}</button>
+    </div>
+    <button class="big-btn" ${busy?"disabled":""} onclick="submitOdometerOpen()">${busy?'<span class="spinner"></span>Starting...':"Start Trip"}</button>
+  </div>`;
 }
 
 // ---------- Upcoming Trips tab ----------
@@ -632,8 +645,8 @@ function upcomingTripsTabHtml(){
   </div>`;
 }
 
-// ---------- Attendance tab ----------
-function attendanceTabHtml(){
+// ---------- Profile tab (Attendance + Payroll + Settings combined) ----------
+function attendanceCardHtml(){
   const rows = attendanceRows.map(r=>`
     <tr>
       <td>${fmtDate(r.date)}</td>
@@ -652,6 +665,22 @@ function attendanceTabHtml(){
       ${rows}
     </table>`}
   </div>`;
+}
+function accountInfoCardHtml(){
+  const dot = locationOk ? "" : " off";
+  return `
+  <div class="card">
+    <h2 class="section-title">Account Info</h2>
+    <div class="doc-row"><div>Name</div><div>${driver.name}</div></div>
+    <div class="doc-row"><div>Mobile Number</div><div>${driver.phone || "-"}</div></div>
+    <div class="doc-row"><div>License Number</div><div>${driver.licenseNumber || "-"}</div></div>
+    <div class="doc-row"><div>Driving Level</div><div>${driver.drivingLevel || "-"}</div></div>
+    <div class="doc-row"><div>Location Tracking</div><div class="status-pill"><span class="dot${dot}"></span>${locationOk?"On":"Off"}</div></div>
+    <p class="muted" style="margin-top:12px;">These details are set by the office and can't be edited here. To log out, use the swipe control in the Current Trip tab.</p>
+  </div>`;
+}
+function profileTabHtml(){
+  return payslipCardHtml() + attendanceCardHtml() + accountInfoCardHtml();
 }
 
 // ---------- Documents tab ----------
@@ -700,21 +729,6 @@ function documentsTabHtml(){
     <h2 class="section-title">Vehicle Documents${v ? " - "+v.reg : ""}</h2>
     <p class="muted">For RTA checks. View/download only.</p>
     ${vehicleHtml}
-  </div>`;
-}
-
-// ---------- Settings tab ----------
-function settingsTabHtml(){
-  const dot = locationOk ? "" : " off";
-  return `
-  <div class="card">
-    <h2 class="section-title">Settings</h2>
-    <div class="doc-row"><div>Name</div><div>${driver.name}</div></div>
-    <div class="doc-row"><div>Mobile Number</div><div>${driver.phone || "-"}</div></div>
-    <div class="doc-row"><div>License Number</div><div>${driver.licenseNumber || "-"}</div></div>
-    <div class="doc-row"><div>Driving Level</div><div>${driver.drivingLevel || "-"}</div></div>
-    <div class="doc-row"><div>Location Tracking</div><div class="status-pill"><span class="dot${dot}"></span>${locationOk?"On":"Off"}</div></div>
-    <p class="muted" style="margin-top:12px;">These details are set by the office and can't be edited here. To log out, use the swipe control in the Current Trip tab.</p>
   </div>`;
 }
 
