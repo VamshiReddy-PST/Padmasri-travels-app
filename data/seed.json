@@ -467,6 +467,8 @@
       "chassisNo": "CHS1001",
       "rcDate": "2022-09-01",
       "seatingCapacity": 13,
+      "vehicleType": "Bus",
+      "fuelType": "Diesel",
       "standardMileage": 4.2,
       "lastOdometer": 45260,
       "docs": {
@@ -515,6 +517,8 @@
       "chassisNo": "CHS1002",
       "rcDate": "2022-09-08",
       "seatingCapacity": 17,
+      "vehicleType": "Bus",
+      "fuelType": "Diesel",
       "standardMileage": 4.2,
       "lastOdometer": 45480,
       "docs": {
@@ -563,6 +567,8 @@
       "chassisNo": "CHS1003",
       "rcDate": "2022-09-15",
       "seatingCapacity": 7,
+      "vehicleType": "Cab",
+      "fuelType": "Petrol",
       "standardMileage": 4.5,
       "lastOdometer": 45700,
       "docs": {
@@ -611,6 +617,8 @@
       "chassisNo": "CHS1004",
       "rcDate": "2022-09-20",
       "seatingCapacity": 9,
+      "vehicleType": "Cab",
+      "fuelType": "CNG",
       "standardMileage": 4,
       "lastOdometer": 45920,
       "docs": {
@@ -622,8 +630,8 @@
           "number": "PM2004",
           "expiry": "2026-08-14",
           "isStatePermit": false,
-          "districtCount": 3,
-          "districtNames": "Hyderabad, Rangareddy, Medchal"
+          "districtCount": 2,
+          "districtNames": "Hyderabad, Rangareddy"
         },
         "Insurance": {
           "number": "INS3004",
@@ -659,6 +667,8 @@
       "chassisNo": "CHS1005",
       "rcDate": "2022-09-25",
       "seatingCapacity": 9,
+      "vehicleType": "Cab",
+      "fuelType": "EV",
       "standardMileage": 4,
       "lastOdometer": 46140,
       "docs": {
@@ -707,6 +717,8 @@
       "chassisNo": "CHS1006",
       "rcDate": "2022-09-28",
       "seatingCapacity": 17,
+      "vehicleType": "Bus",
+      "fuelType": "Diesel",
       "standardMileage": 4.2,
       "lastOdometer": 46360,
       "docs": {

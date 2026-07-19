@@ -89,10 +89,25 @@ function backfillDefaults() {
     if (v.chassisNo === undefined) v.chassisNo = "";
     if (v.rcDate === undefined) v.rcDate = "";
     if (v.seatingCapacity === undefined) v.seatingCapacity = null;
+    // Existing fleet is all vans/cabs run on Diesel - safe defaults for
+    // records created before vehicle class/fuel type existed as fields.
+    if (v.vehicleType === undefined) v.vehicleType = "Cab";
+    if (v.fuelType === undefined) v.fuelType = "Diesel";
     if (v.docs && v.docs.Permit) {
       if (v.docs.Permit.isStatePermit === undefined) v.docs.Permit.isStatePermit = false;
       if (v.docs.Permit.districtCount === undefined) v.docs.Permit.districtCount = 0;
       if (v.docs.Permit.districtNames === undefined) v.docs.Permit.districtNames = "";
+    }
+    if (v.docs) {
+      DOC_COPY_TYPES.forEach((docType) => {
+        const doc = v.docs[docType];
+        if (!doc) return;
+        if (doc.updatedAt === undefined) doc.updatedAt = null;
+        if (doc.copyUrl === undefined) doc.copyUrl = null;
+      });
+      // Older seed data set RC.expiry by hand - re-derive it from rcDate so
+      // it always reflects the 15-year rule going forward.
+      if (v.docs.RC && v.rcDate) v.docs.RC.expiry = computeRcExpiry(v.rcDate);
     }
   });
   (db.clients || []).forEach((c) => {
@@ -154,6 +169,32 @@ function nowIso() {
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
+// RC Date is the registration date, not an expiry - RC expiry is always 15
+// years from registration, computed here rather than entered by hand.
+function computeRcExpiry(rcDate) {
+  if (!rcDate) return "";
+  const d = new Date(rcDate);
+  if (isNaN(d.getTime())) return "";
+  d.setFullYear(d.getFullYear() + 15);
+  return d.toISOString().slice(0, 10);
+}
+// These 5 document types get a photo/scan of the physical document attached
+// (Insurance does not, per the Owner's spec).
+const DOC_COPY_TYPES = ["RC", "Permit", "Fitness", "Tax", "PUC"];
+
+// Vehicle class + fuel type - the fleet only has Diesel buses (no Petrol/
+// CNG/EV/Hybrid buses), so a Bus is always forced to Diesel. Cabs can be
+// any of the 5 fuel types. Used to break mileage reporting out by category
+// instead of one misleading blended fleet-wide average.
+const VEHICLE_TYPES = ["Bus", "Cab"];
+const FUEL_TYPES = ["Diesel", "Petrol", "CNG", "EV", "Hybrid"];
+function validateVehicleTypeFuel(vehicleType, fuelType) {
+  if (!VEHICLE_TYPES.includes(vehicleType)) return `Vehicle Type must be one of: ${VEHICLE_TYPES.join(", ")}.`;
+  if (!FUEL_TYPES.includes(fuelType)) return `Fuel Type must be one of: ${FUEL_TYPES.join(", ")}.`;
+  if (vehicleType === "Bus" && fuelType !== "Diesel") return "Buses can only be Diesel - there are no Petrol/CNG/EV/Hybrid buses in this fleet.";
+  return null;
+}
+
 function roleLabelServer(role) {
   return (
     {
@@ -546,8 +587,30 @@ app.post(
   requireAuth,
   requireRole(...ADMIN_ROLES),
   h(async (req, res) => {
-    const { reg, route, usage, standardMileage, make, model, engineNo, chassisNo, rcDate, seatingCapacity } = req.body || {};
-    if (!reg) return res.status(400).json({ error: "Registration number is required." });
+    const { reg, route, usage, standardMileage, make, model, engineNo, chassisNo, rcDate, seatingCapacity, vehicleType, fuelType } = req.body || {};
+    // A vehicle record without its full onboarding data is not usable for
+    // compliance/reporting purposes, so every field below is mandatory at
+    // creation time - there is no "add now, fill in details later" path.
+    const missing = [];
+    if (!reg || !String(reg).trim()) missing.push("Registration number");
+    if (!make || !String(make).trim()) missing.push("Make");
+    if (!model || !String(model).trim()) missing.push("Model");
+    if (!engineNo || !String(engineNo).trim()) missing.push("Engine No");
+    if (!chassisNo || !String(chassisNo).trim()) missing.push("Chassis No");
+    if (!rcDate || !String(rcDate).trim()) missing.push("RC Date");
+    if (seatingCapacity === undefined || seatingCapacity === null || seatingCapacity === "" || !(Number(seatingCapacity) > 0)) {
+      missing.push("Seating Capacity");
+    }
+    if (!usage || !String(usage).trim()) missing.push("Usage");
+    if (!vehicleType || !String(vehicleType).trim()) missing.push("Vehicle Type");
+    if (!fuelType || !String(fuelType).trim()) missing.push("Fuel Type");
+    if (missing.length) {
+      return res.status(400).json({
+        error: `Cannot add vehicle - missing required field(s): ${missing.join(", ")}.`,
+      });
+    }
+    const typeFuelError = validateVehicleTypeFuel(vehicleType, fuelType);
+    if (typeFuelError) return res.status(400).json({ error: typeFuelError });
     const vehicle = {
       id: uid("v"),
       reg,
@@ -564,15 +627,17 @@ app.post(
       chassisNo: chassisNo || "",
       rcDate: rcDate || "",
       seatingCapacity: seatingCapacity != null && seatingCapacity !== "" ? Number(seatingCapacity) : null,
+      vehicleType,
+      fuelType,
       standardMileage: Number(standardMileage) || 4.0,
       lastOdometer: null,
       docs: {
-        RC: { number: "", expiry: "" },
-        Permit: { number: "", expiry: "", isStatePermit: false, districtCount: 0, districtNames: "" },
+        RC: { number: "", expiry: computeRcExpiry(rcDate), updatedAt: null, copyUrl: null },
+        Permit: { number: "", expiry: "", isStatePermit: false, districtCount: 0, districtNames: "", updatedAt: null, copyUrl: null },
         Insurance: { number: "", expiry: "" },
-        Fitness: { number: "", expiry: "" },
-        Tax: { number: "", expiry: "" },
-        PUC: { number: "", expiry: "" },
+        Fitness: { number: "", expiry: "", updatedAt: null, copyUrl: null },
+        Tax: { number: "", expiry: "", updatedAt: null, copyUrl: null },
+        PUC: { number: "", expiry: "", updatedAt: null, copyUrl: null },
       },
     };
     db.vehicles.push(vehicle);
@@ -592,15 +657,50 @@ app.patch(
   h(async (req, res) => {
     const vehicle = db.vehicles.find((v) => v.id === req.params.id);
     if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
-    const before = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity };
-    const { make, model, engineNo, chassisNo, rcDate, seatingCapacity } = req.body || {};
-    if (make !== undefined) vehicle.make = make || "";
-    if (model !== undefined) vehicle.model = model || "";
-    if (engineNo !== undefined) vehicle.engineNo = engineNo || "";
-    if (chassisNo !== undefined) vehicle.chassisNo = chassisNo || "";
-    if (rcDate !== undefined) vehicle.rcDate = rcDate || "";
-    if (seatingCapacity !== undefined) vehicle.seatingCapacity = seatingCapacity !== "" && seatingCapacity != null ? Number(seatingCapacity) : null;
-    const after = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity };
+    const before = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity, vehicleType: vehicle.vehicleType, fuelType: vehicle.fuelType };
+    const { make, model, engineNo, chassisNo, rcDate, seatingCapacity, vehicleType, fuelType } = req.body || {};
+    // Vehicle Type / Fuel Type are validated together (Bus => Diesel only),
+    // using whichever value is being kept if only one of the two changed.
+    if (vehicleType !== undefined || fuelType !== undefined) {
+      const resultType = vehicleType !== undefined ? vehicleType : vehicle.vehicleType;
+      const resultFuel = fuelType !== undefined ? fuelType : vehicle.fuelType;
+      const typeFuelError = validateVehicleTypeFuel(resultType, resultFuel);
+      if (typeFuelError) return res.status(400).json({ error: typeFuelError });
+      vehicle.vehicleType = resultType;
+      vehicle.fuelType = resultFuel;
+    }
+    if (make !== undefined) {
+      if (!String(make).trim()) return res.status(400).json({ error: "Make cannot be blank." });
+      vehicle.make = make;
+    }
+    if (model !== undefined) {
+      if (!String(model).trim()) return res.status(400).json({ error: "Model cannot be blank." });
+      vehicle.model = model;
+    }
+    if (engineNo !== undefined) {
+      if (!String(engineNo).trim()) return res.status(400).json({ error: "Engine No cannot be blank." });
+      vehicle.engineNo = engineNo;
+    }
+    if (chassisNo !== undefined) {
+      if (!String(chassisNo).trim()) return res.status(400).json({ error: "Chassis No cannot be blank." });
+      vehicle.chassisNo = chassisNo;
+    }
+    if (rcDate !== undefined) {
+      if (!String(rcDate).trim()) return res.status(400).json({ error: "RC Date cannot be blank." });
+      vehicle.rcDate = rcDate;
+      // RC Date is the registration date, not an expiry - RC expiry is
+      // always derived as 15 years from registration, recomputed here
+      // whenever the registration date changes.
+      vehicle.docs.RC.expiry = computeRcExpiry(vehicle.rcDate);
+      vehicle.docs.RC.updatedAt = nowIso();
+    }
+    if (seatingCapacity !== undefined) {
+      if (seatingCapacity === "" || seatingCapacity == null || !(Number(seatingCapacity) > 0)) {
+        return res.status(400).json({ error: "Seating Capacity must be a positive number." });
+      }
+      vehicle.seatingCapacity = Number(seatingCapacity);
+    }
+    const after = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity, vehicleType: vehicle.vehicleType, fuelType: vehicle.fuelType };
     await audit(req.user, "update_vehicle_details", `${req.user.name} updated onboarding details for ${vehicle.reg}: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
     res.json(vehicle);
   })
@@ -652,19 +752,71 @@ app.patch(
     if (!isOwnerSupervisor && !ADMIN_ROLES.includes(req.user.role)) {
       return res.status(403).json({ error: "Not allowed to edit this vehicle's documents." });
     }
-    const { docType, number, expiry, isStatePermit, districtCount, districtNames } = req.body || {};
+    const { docType, number, expiry, isStatePermit, districtCount, districtNames, copy } = req.body || {};
     if (!vehicle.docs[docType]) return res.status(400).json({ error: "Unknown document type." });
     // Merge onto the existing doc object rather than replacing it wholesale,
     // so setting one field (e.g. just the expiry, from the daily checklist)
     // never wipes out Permit's district details or vice versa.
     const doc = vehicle.docs[docType];
-    if (number !== undefined) doc.number = number;
-    if (expiry !== undefined) doc.expiry = expiry;
-    if (docType === "Permit") {
-      if (isStatePermit !== undefined) doc.isStatePermit = !!isStatePermit;
-      if (districtCount !== undefined) doc.districtCount = Number(districtCount) || 0;
-      if (districtNames !== undefined) doc.districtNames = districtNames || "";
+    let changed = false;
+
+    if (docType === "RC" && expiry !== undefined) {
+      return res.status(400).json({
+        error: "RC expiry is calculated automatically as 15 years from the RC Date - edit RC Date in Vehicle Details instead.",
+      });
     }
+
+    if (number !== undefined) {
+      doc.number = number;
+      changed = true;
+    }
+    if (expiry !== undefined) {
+      doc.expiry = expiry;
+      changed = true;
+    }
+    if (docType === "Permit") {
+      // A permit is either a State Permit or a district permit, never both -
+      // checking State Permit clears any district details, and a district
+      // permit must name 1 or 2 districts (use State Permit for anything
+      // wider than that).
+      const resultStatePermit = isStatePermit !== undefined ? !!isStatePermit : doc.isStatePermit;
+      if (resultStatePermit) {
+        if (isStatePermit !== undefined || districtCount !== undefined || districtNames !== undefined) {
+          doc.isStatePermit = true;
+          doc.districtCount = 0;
+          doc.districtNames = "";
+          changed = true;
+        }
+      } else {
+        if (isStatePermit !== undefined) {
+          doc.isStatePermit = false;
+          changed = true;
+        }
+        if (districtCount !== undefined) {
+          const dc = Number(districtCount);
+          if (!Number.isFinite(dc) || dc < 1 || dc > 2) {
+            return res.status(400).json({
+              error: "Number of districts must be 1 or 2 for a district permit - use State Permit instead if it covers more.",
+            });
+          }
+          doc.districtCount = dc;
+          changed = true;
+        }
+        if (districtNames !== undefined) {
+          doc.districtNames = districtNames || "";
+          changed = true;
+        }
+      }
+    }
+    if (DOC_COPY_TYPES.includes(docType) && copy) {
+      const url = await savePhoto(copy, "doc_" + docType);
+      if (url) {
+        doc.copyUrl = url;
+        changed = true;
+      }
+    }
+    if (changed) doc.updatedAt = nowIso();
+
     await audit(req.user, "update_doc", `${req.user.name} updated ${docType} on ${vehicle.reg}`);
     res.json(vehicle);
   })
@@ -1058,6 +1210,14 @@ app.get("/api/attendance/me", requireAuth, (req, res) => {
 // running average per vehicle, worst-performing first, plus a fleet-wide
 // figure. Records are never deleted, so this covers the vehicle's whole
 // history in the app.
+// A single blended "fleet average" hides which vehicle class/fuel type is
+// actually underperforming (Buses only run Diesel; Cabs may be Diesel,
+// Petrol, CNG, EV or Hybrid), so mileage is broken out into one category
+// per Vehicle Type + Fuel Type combination that actually exists in the
+// fleet. Within each category, only the worst-performing vehicles (lowest
+// mileage first) are returned, so the dashboard stays a short, actionable
+// list instead of a full per-vehicle table.
+const MILEAGE_WORST_N = 5;
 app.get("/api/dashboard/mileage-summary", requireAuth, requireRole("owner", "ops_manager"), (req, res) => {
   const perVehicle = {};
   Object.values(db.records).forEach((r) => {
@@ -1072,15 +1232,39 @@ app.get("/api/dashboard/mileage-summary", requireAuth, requireRole("owner", "ops
     return {
       vehicleId,
       reg: vehicle ? vehicle.reg : vehicleId,
+      vehicleType: (vehicle && vehicle.vehicleType) || "Cab",
+      fuelType: (vehicle && vehicle.fuelType) || "Diesel",
       avgMileage,
       standardMileage: vehicle ? vehicle.standardMileage : null,
       fillCount: agg.fillCount,
       belowStandard: vehicle ? avgMileage < vehicle.standardMileage : false,
     };
   });
-  rows.sort((a, b) => a.avgMileage - b.avgMileage);
-  const fleetAverage = rows.length ? Math.round((rows.reduce((s, r) => s + r.avgMileage, 0) / rows.length) * 10) / 10 : 0;
-  res.json({ fleetAverage, perVehicle: rows });
+
+  const byCategory = {};
+  rows.forEach((r) => {
+    const key = `${r.vehicleType}_${r.fuelType}`;
+    if (!byCategory[key]) byCategory[key] = { vehicleType: r.vehicleType, fuelType: r.fuelType, rows: [] };
+    byCategory[key].rows.push(r);
+  });
+  const categories = Object.values(byCategory)
+    .map((cat) => {
+      const sorted = cat.rows.slice().sort((a, b) => a.avgMileage - b.avgMileage);
+      const categoryAverage = sorted.length
+        ? Math.round((sorted.reduce((s, r) => s + r.avgMileage, 0) / sorted.length) * 10) / 10
+        : 0;
+      return {
+        vehicleType: cat.vehicleType,
+        fuelType: cat.fuelType,
+        label: `${cat.vehicleType === "Bus" ? "Buses" : "Cabs"} - ${cat.fuelType}`,
+        vehicleCount: sorted.length,
+        categoryAverage,
+        worst: sorted.slice(0, MILEAGE_WORST_N),
+      };
+    })
+    .sort((a, b) => (a.vehicleType === b.vehicleType ? a.fuelType.localeCompare(b.fuelType) : a.vehicleType.localeCompare(b.vehicleType)));
+
+  res.json({ categories });
 });
 
 // ---------- AUDIT ----------
@@ -1212,6 +1396,8 @@ function buildReport(dataset, user, query) {
     const rows = visibleVehiclesFor(user);
     const columns = [
       { label: "Registration", key: "reg" },
+      { label: "Vehicle Type", key: "vehicleType" },
+      { label: "Fuel Type", key: "fuelType" },
       { label: "Route", key: "route" },
       { label: "Usage", key: "usage" },
       { label: "Client", key: (v) => (v.clientId ? clientNameServer(v.clientId) : "") },
@@ -1303,6 +1489,8 @@ function buildReport(dataset, user, query) {
     const columns = [
       { label: "Date", key: "date" },
       { label: "Vehicle", key: (r) => vehicleReg(r.vehicleId) },
+      { label: "Vehicle Type", key: (r) => { const v = db.vehicles.find((x) => x.id === r.vehicleId); return v ? v.vehicleType : ""; } },
+      { label: "Fuel Type", key: (r) => { const v = db.vehicles.find((x) => x.id === r.vehicleId); return v ? v.fuelType : ""; } },
       { label: "Previous Odometer", key: (r) => r.fuel.previousOdometer },
       { label: "Odometer", key: (r) => r.fuel.odometer },
       { label: "Distance (km)", key: (r) => r.fuel.distance },
