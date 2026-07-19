@@ -204,6 +204,7 @@ function roleLabelServer(role) {
       data_team: "Data Team",
       owner: "Owner",
       hr: "HR",
+      bookings: "Bookings Department",
     }[role] || role
   );
 }
@@ -363,7 +364,7 @@ app.get("/api/meta", requireAuth, (req, res) => {
 
 // ---------- USERS (People admin) ----------
 const ADMIN_ROLES = ["ops_manager", "owner", "data_team"];
-const VALID_ROLES = ["site_supervisor", "area_supervisor", "ops_manager", "data_team", "owner", "hr"];
+const VALID_ROLES = ["site_supervisor", "area_supervisor", "ops_manager", "data_team", "owner", "hr", "bookings"];
 
 // People-management permission tiers:
 // - Owner can create/edit anyone, including other Owner/Ops Manager/HR accounts.
@@ -739,6 +740,55 @@ app.patch(
       `${req.user.name} reassigned ${vehicle.reg}: ${JSON.stringify(before)} -> ${JSON.stringify({ siteId: vehicle.siteId, supervisorId: vehicle.supervisorId, driverId: vehicle.driverId, clientId: vehicle.clientId, driverAssignedDate: vehicle.driverAssignedDate })}`
     );
     res.json(vehicle);
+  })
+);
+
+// Usage (Fixed / Client on demand / Booking) is deliberately editable by a
+// wider set of roles than the rest of the vehicle assignment - Site
+// Supervisors, Area Supervisors and the Bookings Department all need to be
+// able to flip this without going through Operations Manager. Supervisors
+// are still scoped to vehicles they can already see elsewhere in the app.
+const USAGE_EDITOR_ROLES = [...ADMIN_ROLES, "site_supervisor", "area_supervisor", "bookings"];
+const VALID_USAGE_VALUES = ["fixed_route", "client_on_demand", "booking"];
+app.patch(
+  "/api/vehicles/:id/usage",
+  requireAuth,
+  requireRole(...USAGE_EDITOR_ROLES),
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+    if (["site_supervisor", "area_supervisor"].includes(req.user.role)) {
+      const canSee = visibleVehiclesFor(req.user).some((v) => v.id === vehicle.id);
+      if (!canSee) return res.status(403).json({ error: "You can only change the usage of vehicles assigned to you." });
+    }
+    const { usage } = req.body || {};
+    if (!VALID_USAGE_VALUES.includes(usage)) {
+      return res.status(400).json({ error: "Usage must be Fixed, Client on demand, or Booking." });
+    }
+    const before = vehicle.usage;
+    vehicle.usage = usage;
+    await audit(req.user, "update_vehicle_usage", `${req.user.name} changed ${vehicle.reg} usage: ${before} -> ${usage}`);
+    res.json(vehicle);
+  })
+);
+
+// Lets the currently-logged-in user re-confirm their own PIN mid-session -
+// used as a "step-up" confirmation (not a separate login) before letting the
+// Owner edit Assignments data, so an accidental tap can't silently change a
+// vehicle/route/supervisor. Never exposes the stored PIN to the client.
+app.post(
+  "/api/verify-pin",
+  requireAuth,
+  h(async (req, res) => {
+    const { pin } = req.body || {};
+    // Deliberately always a 200 (never 401) - the frontend's generic api()
+    // helper treats any 401 as "session expired" and force-logs-out, which
+    // would be wrong here: an incorrect PIN re-entry is an expected, normal
+    // outcome, not an invalid/expired session.
+    if (!pin || String(pin) !== String(req.user.pin)) {
+      return res.json({ ok: false, error: "Incorrect PIN." });
+    }
+    res.json({ ok: true });
   })
 );
 
@@ -1268,9 +1318,21 @@ app.get("/api/dashboard/mileage-summary", requireAuth, requireRole("owner", "ops
 });
 
 // ---------- AUDIT ----------
+// The Audit Log tab shows one day at a time (today by default, or whichever
+// date the caller picks) rather than the whole history at once - and the
+// Dashboard's "recent activity" feed asks for the last hour specifically
+// via sinceMinutes, independent of day boundaries.
 app.get("/api/audit", requireAuth, requireRole("owner", "data_team", "hr", "ops_manager"), (req, res) => {
-  const limit = Math.min(Number(req.query.limit) || 100, 1000);
-  res.json(db.auditLog.slice(0, limit));
+  const limit = Math.min(Number(req.query.limit) || 200, 1000);
+  let rows = db.auditLog;
+  if (req.query.sinceMinutes) {
+    const cutoff = Date.now() - Number(req.query.sinceMinutes) * 60000;
+    rows = rows.filter((a) => new Date(a.ts).getTime() >= cutoff);
+  } else {
+    const date = req.query.date || todayStr();
+    rows = rows.filter((a) => (a.ts || "").slice(0, 10) === date);
+  }
+  res.json(rows.slice(0, limit));
 });
 
 // ---------- REPORTS (Owner, Operations Manager, Area Supervisor) ----------

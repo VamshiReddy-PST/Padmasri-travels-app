@@ -65,6 +65,15 @@
       "active": true,
       "siteId": null,
       "supervises": []
+    },
+    {
+      "id": "u_bookings",
+      "name": "Kavya Reddy",
+      "role": "bookings",
+      "pin": "7777",
+      "active": true,
+      "siteId": null,
+      "supervises": []
     }
   ],
   "clients": [

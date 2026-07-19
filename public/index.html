@@ -150,7 +150,7 @@ async function api(path, opts={}){
 }
 
 function roleLabel(r){
-  return {site_supervisor:"Site Supervisor", area_supervisor:"Area Supervisor", ops_manager:"Operations Manager", data_team:"Data Team", owner:"Owner", hr:"HR"}[r] || r;
+  return {site_supervisor:"Site Supervisor", area_supervisor:"Area Supervisor", ops_manager:"Operations Manager", data_team:"Data Team", owner:"Owner", hr:"HR", bookings:"Bookings Department"}[r] || r;
 }
 function userName(id){ const u = meta.users.find(x=>x.id===id); return u? u.name : "-"; }
 function siteName(id){ const s = meta.sites.find(x=>x.id===id); return s? s.name : "Unassigned"; }
@@ -171,7 +171,7 @@ async function boot(){
   }
 }
 function defaultTab(role){
-  return {site_supervisor:"my_vehicles", area_supervisor:"queue", ops_manager:"operations", data_team:"corrections", hr:"attendance", owner:"dashboard"}[role];
+  return {site_supervisor:"my_vehicles", area_supervisor:"queue", ops_manager:"operations", data_team:"corrections", hr:"attendance", owner:"dashboard", bookings:"usage"}[role];
 }
 async function loadCoreData(){
   const [v, r, o, l, ex] = await Promise.all([
@@ -185,7 +185,7 @@ async function loadCoreData(){
 }
 
 function doLogout(silent){
-  authToken = null; currentUser = null;
+  authToken = null; currentUser = null; ownerAssignUnlocked = false;
   localStorage.removeItem("fleetAuthToken");
   if(!silent) api("/logout", {method:"POST"}).catch(()=>{});
   view = {tab:null, name:"home"};
@@ -249,12 +249,13 @@ async function doLogin(){
 
 // ---------- shell ----------
 function tabsFor(role){
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["routes","Routes"]];
-  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["reports","Reports"],["routes","Routes"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["routes","Routes"]];
+  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["reports","Reports"],["routes","Routes"]];
   if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Assignments"],["people","People"],["reports","Reports"]];
   if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Assignments"],["people","People"],["audit","Audit Log"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"]];
   if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Assignments"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"]];
+  if(role==="bookings") return [["usage","Vehicle Usage"]];
   return [];
 }
 
@@ -278,7 +279,7 @@ async function render(){
   `;
   await renderMain();
 }
-async function switchTab(tab){ view = {tab, name:"home"}; await render(); window.scrollTo(0,0); }
+async function switchTab(tab){ view = {tab, name:"home"}; ownerAssignUnlocked = false; await render(); window.scrollTo(0,0); }
 async function goto(name, params){ view = Object.assign({tab: view.tab}, {name}, params||{}); await renderMain(); window.scrollTo(0,0); }
 
 async function renderMain(){
@@ -297,11 +298,13 @@ async function routeView(){
     if(tab==="my_vehicles") return view.name==="vehicle_detail" ? vehicleChecklistScreen(view.vehicleId) : supervisorHome();
     if(tab==="my_attendance") return myAttendanceScreen();
     if(tab==="my_expenses") return myExpensesScreen();
+    if(tab==="usage") return vehicleUsageScreen();
     if(tab==="routes") return routesViewScreen();
   }
   if(role==="area_supervisor"){
     if(tab==="queue") return areaQueueScreen();
     if(tab==="expenses_view") return expensesScreen(false);
+    if(tab==="usage") return vehicleUsageScreen();
     if(tab==="reports") return reportsScreen();
     if(tab==="routes") return routesViewScreen();
   }
@@ -332,7 +335,45 @@ async function routeView(){
     if(tab==="audit") return auditScreen();
     if(tab==="reports") return reportsScreen();
   }
+  if(role==="bookings"){
+    if(tab==="usage") return vehicleUsageScreen();
+  }
   return "<div class='empty'>Nothing here.</div>";
+}
+
+// ================= VEHICLE USAGE (Site Supervisor, Area Supervisor, Bookings Department) =================
+// A lighter-weight editor than the full Assignments screen - these three
+// roles can flip a vehicle's Usage (Fixed / Client on demand / Booking)
+// without touching site/driver/client assignment, which stays restricted
+// to Operations Manager, Data Team and (PIN-gated) Owner.
+const USAGE_LABELS = {fixed_route:"Fixed Route", client_on_demand:"Client on demand", booking:"Booking"};
+function vehicleUsageScreen(){
+  const rows = vehicles.map(v=>`
+    <tr>
+      <td><b>${v.reg}</b></td>
+      <td>${v.route || siteName(v.siteId)}</td>
+      <td>${v.clientId? clientName(v.clientId) : '-'}</td>
+      <td>${driverName(v.driverId)}</td>
+      <td>
+        <select onchange="setVehicleUsage('${v.id}', this.value)">
+          ${Object.entries(USAGE_LABELS).map(([val,label])=>`<option value="${val}" ${v.usage===val?'selected':''}>${label}</option>`).join("")}
+        </select>
+      </td>
+    </tr>`).join("");
+  return `
+  <h1 class="page-title">Vehicle Usage</h1>
+  <div class="banner">Set whether each vehicle runs a Fixed route, is used Client on demand, or is a Booking. Other vehicle/route/assignment details are managed by Operations Manager.</div>
+  <div class="card">
+    <table><tr><th>Vehicle</th><th>Route/Site</th><th>Client</th><th>Driver</th><th>Usage</th></tr>
+    ${rows || "<tr><td colspan='5' class='empty'>No vehicles visible to you yet.</td></tr>"}
+    </table>
+  </div>`;
+}
+async function setVehicleUsage(vehicleId, usage){
+  try{
+    const v = await api(`/vehicles/${vehicleId}/usage`, {method:"PATCH", body: JSON.stringify({usage})});
+    const idx = vehicles.findIndex(x=>x.id===vehicleId); if(idx>-1) vehicles[idx] = v;
+  }catch(e){ alert(e.message); await renderMain(); }
 }
 
 // ================= SITE SUPERVISOR =================
@@ -934,7 +975,53 @@ async function setLeave(id, status){
 }
 
 // ================= ASSIGNMENTS (ops_manager, data_team, owner) =================
+// Ops Manager and Data Team always get the full editable table. The Owner
+// gets a read-only summary by default (see ownerAssignmentsReadOnlyHtml)
+// and must re-confirm their PIN to switch to this editable view for the
+// rest of the current visit to the tab.
 async function assignmentsScreen(){
+  if(currentUser.role==="owner" && !ownerAssignUnlocked){
+    return ownerAssignmentsReadOnlyHtml();
+  }
+  return assignmentsEditorHtml();
+}
+function areaSupervisorNameForVehicle(v){
+  const site = v.siteId ? meta.sites.find(s=>s.id===v.siteId) : null;
+  return site && site.areaSupervisorId ? userName(site.areaSupervisorId) : "-";
+}
+function driverPhone(id){ const d = meta.drivers.find(x=>x.id===id); return d ? (d.phone||"-") : "-"; }
+function ownerAssignmentsReadOnlyHtml(){
+  const rows = vehicles.map(v=>`
+    <tr>
+      <td><b>${v.reg}</b></td>
+      <td>${v.clientId? clientName(v.clientId) : 'Internal / Fixed Route'}</td>
+      <td>${areaSupervisorNameForVehicle(v)}</td>
+      <td>${v.supervisorId? userName(v.supervisorId) : '-'}</td>
+      <td>${v.driverId? driverName(v.driverId) : '-'}</td>
+      <td>${v.driverId? driverPhone(v.driverId) : '-'}</td>
+      <td>${v.route || siteName(v.siteId)}</td>
+    </tr>`).join("");
+  return `
+  <h1 class="page-title">Assignments - Vehicles running today</h1>
+  <div class="banner">View only. Vehicle, route and supervisor details are managed by Operations Manager - re-enter your PIN below if you need to make a change yourself (this guards against accidental taps).</div>
+  <div class="card">
+    <table><tr><th>Vehicle</th><th>Company</th><th>Area Supervisor</th><th>Site Supervisor</th><th>Driver</th><th>Driver Mobile</th><th>Route</th></tr>
+    ${rows || "<tr><td colspan='7' class='empty'>No vehicles yet.</td></tr>"}
+    </table>
+    <button class="btn small secondary" style="margin-top:10px;" onclick="unlockOwnerAssignmentEditing()">Unlock editing (PIN required)</button>
+  </div>`;
+}
+async function unlockOwnerAssignmentEditing(){
+  const pin = prompt("Re-enter your PIN to edit Assignments:");
+  if(pin===null) return;
+  try{
+    const result = await api("/verify-pin", {method:"POST", body: JSON.stringify({pin})});
+    if(!result.ok){ alert(result.error || "Incorrect PIN."); return; }
+    ownerAssignUnlocked = true;
+    await renderMain();
+  }catch(e){ alert(e.message || "Incorrect PIN."); }
+}
+async function assignmentsEditorHtml(){
   const rows = vehicles.map(v=>`
     <tr>
       <td><b>${v.reg}</b></td>
@@ -957,7 +1044,7 @@ async function assignmentsScreen(){
       </select></td>
       <td><input type="date" value="${v.driverAssignedDate||''}" title="Date this driver was assigned to this vehicle" onchange="assignField('${v.id}','driverAssignedDate', this.value||null)" /></td>
       <td><select onchange="assignField('${v.id}','usage', this.value)">
-        <option value="fixed_route" ${v.usage==='fixed_route'?'selected':''}>Fixed</option>
+        <option value="fixed_route" ${v.usage==='fixed_route'?'selected':''}>Fixed Route</option>
         <option value="client_on_demand" ${v.usage==='client_on_demand'?'selected':''}>Client on demand</option>
         <option value="booking" ${v.usage==='booking'?'selected':''}>Booking</option>
       </select></td>
@@ -992,7 +1079,7 @@ async function assignmentsScreen(){
       </div>
       <div class="f"><label>Usage *</label>
         <select id="newVehicleUsage" required>
-          <option value="fixed_route">Fixed</option>
+          <option value="fixed_route">Fixed Route</option>
           <option value="client_on_demand">Client on demand</option>
           <option value="booking">Booking</option>
         </select>
@@ -1367,9 +1454,14 @@ async function addDriver(evt){
 let editingUserId = null;
 let editingVehicleId = null;
 let editingClientRoutesId = null;
+// The Owner's Assignments tab opens read-only (accidental taps shouldn't be
+// able to change a vehicle/route/supervisor) - this flips true only after
+// the Owner re-confirms their own PIN, and is reset whenever they navigate
+// away so the next visit is read-only again.
+let ownerAssignUnlocked = false;
 const ROLE_OPTIONS = [
   ["site_supervisor","Site Supervisor"],["area_supervisor","Area Supervisor"],["ops_manager","Operations Manager"],
-  ["data_team","Data Team"],["hr","HR"],["owner","Owner"],
+  ["data_team","Data Team"],["hr","HR"],["owner","Owner"],["bookings","Bookings Department"],
 ];
 // Mirrors the server's rule in server.js (canManageUserRole): Owner can
 // manage anyone; Ops Manager and HR can manage everyone except Owner/Ops
@@ -1494,7 +1586,7 @@ async function correctionsScreen(){
   <h1 class="page-title">Data Team - Corrections</h1>
   <div class="banner">Corrections are logged with a before/after value in the audit trail - nothing is silently overwritten.</div>
   <div class="card"><table><tr><th>Vehicle</th><th>Odometer</th><th>Mileage</th><th>Status</th><th></th></tr>${rows}</table></div>
-  <div class="card"><h2 class="section-title">Recent Audit Log</h2>${await auditTableHtml(15)}</div>
+  <div class="card"><h2 class="section-title">Today's Audit Log</h2>${await auditTableHtml({limit: 15})}</div>
   `;
 }
 async function correctOdometer(vehicleId, date){
@@ -1546,13 +1638,38 @@ async function hrAttendanceScreen(){
 async function setAttDate(v){ view.attDate = v; await renderMain(); }
 
 // ================= AUDIT =================
-async function auditTableHtml(limit){
+// opts: {limit, date, sinceMinutes} - date defaults to today server-side
+// when omitted; sinceMinutes (used by the dashboard) overrides date entirely.
+async function auditTableHtml(opts){
+  opts = opts || {};
+  const params = new URLSearchParams();
+  params.set("limit", opts.limit || 200);
+  if(opts.sinceMinutes) params.set("sinceMinutes", opts.sinceMinutes);
+  else if(opts.date) params.set("date", opts.date);
   let rows = [];
-  try{ rows = await api(`/audit?limit=${limit}`); }catch(e){ return "<div class='empty'>Audit log not available for your role.</div>"; }
-  return `<table><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr>${rows.map(a=>`<tr><td>${new Date(a.ts).toLocaleString()}</td><td>${a.userName}</td><td>${a.action}</td><td>${a.detail}</td></tr>`).join("")}</table>`;
+  try{ rows = await api(`/audit?${params.toString()}`); }catch(e){ return "<div class='empty'>Audit log not available for your role.</div>"; }
+  return `<table><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr>${rows.map(a=>`<tr><td>${new Date(a.ts).toLocaleString()}</td><td>${a.userName}</td><td>${a.action}</td><td>${a.detail}</td></tr>`).join("") || "<tr><td colspan='4' class='empty'>Nothing logged in this window.</td></tr>"}</table>`;
 }
+// Audit Log defaults to today only - pick a different date to look back
+// further, one day at a time.
+let auditSelectedDate = todayStr();
 async function auditScreen(){
-  return `<h1 class="page-title">Audit Log</h1><div class="card">${await auditTableHtml(200)}</div>`;
+  return `
+  <h1 class="page-title">Audit Log</h1>
+  <div class="card">
+    <div class="check-row">
+      <div class="label">Date</div>
+      <div class="controls">
+        <input type="date" id="auditDateInput" value="${auditSelectedDate}" onchange="setAuditDate(this.value)" />
+        <button class="btn small secondary" onclick="setAuditDate('${todayStr()}')">Today</button>
+      </div>
+    </div>
+    ${await auditTableHtml({date: auditSelectedDate, limit: 500})}
+  </div>`;
+}
+async function setAuditDate(date){
+  auditSelectedDate = date || todayStr();
+  await renderMain();
 }
 
 // ================= REPORTS (Owner, Operations Manager, Area Supervisor) =================
@@ -1801,7 +1918,7 @@ async function ownerDashboardScreen(){
     <table><tr><th>Client</th><th>Vehicles</th></tr>${Object.entries(byClient).map(([c,n])=>`<tr><td>${c}</td><td>${n}</td></tr>`).join("")}</table>
   </div>
 
-  <div class="card"><h2 class="section-title">Full audit trail</h2>${await auditTableHtml(25)}</div>
+  <div class="card"><h2 class="section-title">Recent activity (last 1 hour)</h2><p class="muted">The full audit trail lives on the Audit Log tab, filterable by date - this is just a quick pulse of what's happening right now.</p>${await auditTableHtml({sinceMinutes: 60, limit: 100})}</div>
   ${await backupsCardHtml()}
   `;
 }
@@ -1932,6 +2049,7 @@ Object.assign(window, {
   startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, saveOdometer, restoreBackup, downloadReport,
   toggleVehicleDetails, saveVehicleDetails, saveVehicleDoc, onNewVehicleTypeChange, onVdVehicleTypeChange, onPermitStateToggle,
   toggleClientRoutes, saveRouteCap, addRoute, saveRouteEdit, deleteRoute,
+  setVehicleUsage, unlockOwnerAssignmentEditing, setAuditDate,
 });
 
 boot();
