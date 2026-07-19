@@ -249,8 +249,8 @@ async function doLogin(){
 
 // ---------- shell ----------
 function tabsFor(role){
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["routes","Routes"]];
-  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["reports","Reports"],["routes","Routes"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Assignments"],["routes","Routes"]];
+  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Assignments"],["reports","Reports"],["routes","Routes"]];
   if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Assignments"],["people","People"],["reports","Reports"],["backup","Backup"]];
   if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Assignments"],["people","People"],["audit","Audit Log"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"]];
@@ -299,12 +299,14 @@ async function routeView(){
     if(tab==="my_attendance") return myAttendanceScreen();
     if(tab==="my_expenses") return myExpensesScreen();
     if(tab==="usage") return vehicleUsageScreen();
+    if(tab==="assignments") return supervisorAssignmentsScreen();
     if(tab==="routes") return routesViewScreen();
   }
   if(role==="area_supervisor"){
     if(tab==="queue") return areaQueueScreen();
     if(tab==="expenses_view") return expensesScreen(false);
     if(tab==="usage") return vehicleUsageScreen();
+    if(tab==="assignments") return supervisorAssignmentsScreen();
     if(tab==="reports") return reportsScreen();
     if(tab==="routes") return routesViewScreen();
   }
@@ -349,6 +351,10 @@ async function routeView(){
 // without touching site/driver/client assignment, which stays restricted
 // to Operations Manager, Data Team and (PIN-gated) Owner.
 const USAGE_LABELS = {fixed_route:"Fixed Route", client_on_demand:"Client on demand", booking:"Booking"};
+// Recorded whenever fuel is filled, so the day's total spend can be broken
+// out by station brand and by how it was paid for.
+const FUEL_STATIONS = ["IOCL","BPCL","HPCL","Other"];
+const FUEL_PAYMENT_MODES = ["Cash","UPI","Card","Other"];
 function vehicleUsageScreen(){
   const rows = vehicles.map(v=>`
     <tr>
@@ -424,7 +430,7 @@ function ensureDraft(vehicleId){
       driver:"", status:"present", uniform:"compliant",
       tempDriver: {arranged:false, name:"", phone:"", upiId:"", amount:""},
     }, (existing && existing.attendance) || {}),
-    fuel: {odometer:"", fuelPrice:"", litres:"", fillLevel:"full"},
+    fuel: {odometer:"", fuelPrice:"", litres:"", fillLevel:"full", station:"", paymentMode:""},
   };
   return draft;
 }
@@ -585,6 +591,19 @@ function vehicleChecklistScreen(vehicleId){
     <div class="check-row"><div class="label">Current odometer (km)</div><div class="controls"><input type="number" value="${d.fuel.odometer}" style="width:100px" onchange="draftSet('fuel.odometer', this.value)" /></div></div>
     <div class="check-row"><div class="label">Fuel price (₹/litre)</div><div class="controls"><input type="number" step="0.1" value="${d.fuel.fuelPrice}" style="width:90px" onchange="draftSet('fuel.fuelPrice', this.value)" /></div></div>
     <div class="check-row"><div class="label">Litres filled</div><div class="controls"><input type="number" step="0.1" value="${d.fuel.litres}" style="width:80px" onchange="draftSet('fuel.litres', this.value)" /></div></div>
+    ${Number(d.fuel.litres)>0 ? `
+    <div class="check-row"><div class="label">Fuel station</div><div class="controls">
+      <select onchange="draftSet('fuel.station', this.value)">
+        <option value="">- select -</option>
+        ${FUEL_STATIONS.map(s=>`<option value="${s}" ${d.fuel.station===s?'selected':''}>${s}</option>`).join("")}
+      </select>
+    </div></div>
+    <div class="check-row"><div class="label">Payment mode</div><div class="controls">
+      <select onchange="draftSet('fuel.paymentMode', this.value)">
+        <option value="">- select -</option>
+        ${FUEL_PAYMENT_MODES.map(p=>`<option value="${p}" ${d.fuel.paymentMode===p?'selected':''}>${p}</option>`).join("")}
+      </select>
+    </div></div>` : ""}
     <div class="check-row"><div class="label">Tank filled to</div><div class="controls">
       <select onchange="draftSet('fuel.fillLevel', this.value)">
         <option value="full" ${d.fuel.fillLevel==='full'?'selected':''}>Full tank</option>
@@ -1050,14 +1069,69 @@ async function assignmentsDateViewCardHtml(){
     </table>
   </div>`;
 }
+// ---- Fuel filling overview - every vehicle fuelled on the selected date,
+// plus that day's spend broken out by fuel station brand and by payment
+// mode. Shares the same date as the date-view card above so both stay in
+// sync when the date is changed. Visible to Site Supervisor, Area
+// Supervisor, Operations Manager and Owner.
+async function fetchFuelOverview(date){
+  try{ return await api("/fuel-overview?date="+date); }catch(e){ return null; }
+}
+async function fuelOverviewCardHtml(){
+  const date = assignmentsViewDate;
+  const data = await fetchFuelOverview(date);
+  if(!data) return "";
+  const breakdownCards = (byMap) => Object.entries(byMap).map(([label,amt])=>
+    `<div class="kpi" style="min-width:110px;"><div class="num">₹${amt}</div><div class="label">${label}</div></div>`
+  ).join("");
+  const rows = data.rows.map(r=>`
+    <tr>
+      <td><b>${r.reg}</b></td>
+      <td>${r.mileage} km/l</td>
+      <td>${r.standardMileage!=null? r.standardMileage+' km/l':'-'}</td>
+      <td>${r.belowStandard? '<span class="badge low">BELOW STANDARD</span>':'<span class="badge ok">OK</span>'}</td>
+      <td>${r.litres} L</td>
+      <td>₹${r.totalCost}</td>
+      <td>${r.station}</td>
+      <td>${r.paymentMode}</td>
+    </tr>`).join("");
+  return `
+  <div class="card">
+    <h2 class="section-title">Fuel filling overview - ${date}${date===todayStr()?' (today)':''}</h2>
+    <p class="muted">${data.fillCount} vehicle${data.fillCount===1?'':'s'} fuelled, ${data.totalLitres} L total, ₹${data.totalCost} total spend.</p>
+    <div class="muted" style="margin-top:8px;margin-bottom:2px;font-weight:600;">By fuel station</div>
+    <div class="grid cols-4" style="margin-bottom:10px;">
+      ${breakdownCards(data.byStation) || "<div class='empty'>No fuel filled on this date.</div>"}
+    </div>
+    <div class="muted" style="margin-top:4px;margin-bottom:2px;font-weight:600;">By payment mode</div>
+    <div class="grid cols-4" style="margin-bottom:14px;">
+      ${breakdownCards(data.byPaymentMode) || "<div class='empty'>No fuel filled on this date.</div>"}
+    </div>
+    <table><tr><th>Vehicle</th><th>Mileage</th><th>Standard</th><th>Status</th><th>Litres</th><th>Cost</th><th>Station</th><th>Payment</th></tr>
+    ${rows || "<tr><td colspan='8' class='empty'>No vehicles fuelled on this date.</td></tr>"}
+    </table>
+  </div>`;
+}
 async function ownerAssignmentsReadOnlyHtml(){
   return `
   <h1 class="page-title">Assignments - Vehicles running today</h1>
   <div class="banner">View only. Pick a date below to look back at a past day. Vehicle, route and supervisor details are managed by Operations Manager - re-enter your PIN below if you need to make a change yourself (this guards against accidental taps).</div>
   ${await assignmentsDateViewCardHtml()}
+  ${await fuelOverviewCardHtml()}
   <div class="card">
     <button class="btn small secondary" onclick="unlockOwnerAssignmentEditing()">Unlock editing (PIN required)</button>
   </div>`;
+}
+// Read-only Assignments view for Site Supervisor and Area Supervisor -
+// same date-scoped vehicle/driver view and fuel overview as Owner/Ops
+// Manager get, automatically scoped to their own visible vehicles
+// server-side, with no edit controls at all.
+async function supervisorAssignmentsScreen(){
+  return `
+  <h1 class="page-title">Assignments</h1>
+  <div class="banner">View only. Pick a date below to look back at a past day.</div>
+  ${await assignmentsDateViewCardHtml()}
+  ${await fuelOverviewCardHtml()}`;
 }
 async function unlockOwnerAssignmentEditing(){
   const pin = prompt("Re-enter your PIN to edit Assignments:");
@@ -1145,6 +1219,7 @@ async function assignmentsEditorHtml(){
   </div>
 
   ${(currentUser.role==="ops_manager" || currentUser.role==="owner") ? await assignmentsDateViewCardHtml() : ""}
+  ${(currentUser.role==="ops_manager" || currentUser.role==="owner") ? await fuelOverviewCardHtml() : ""}
 
   <div class="grid cols-3">
     <div class="card">

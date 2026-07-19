@@ -888,6 +888,49 @@ app.get("/api/records", requireAuth, (req, res) => {
   res.json(out);
 });
 
+// Every vehicle fuelled on a given day, plus that day's total fuel spend
+// broken out by station brand (IOCL/BPCL/HPCL/Other) and by payment mode
+// (Cash/UPI/Card/Other) - Site Supervisor, Area Supervisor, Operations
+// Manager and Owner all use this to get a one-glance picture of the day's
+// fuel filling, scoped to whichever vehicles they can already see elsewhere.
+const FUEL_OVERVIEW_ROLES = ["site_supervisor", "area_supervisor", "ops_manager", "owner"];
+app.get("/api/fuel-overview", requireAuth, requireRole(...FUEL_OVERVIEW_ROLES), (req, res) => {
+  const date = req.query.date || todayStr();
+  const visibleIds = new Set(visibleVehiclesFor(req.user).map((v) => v.id));
+  const rows = [];
+  const byStation = {};
+  const byPaymentMode = {};
+  let totalLitres = 0;
+  let totalCost = 0;
+
+  Object.values(db.records).forEach((r) => {
+    if (r.date !== date || !visibleIds.has(r.vehicleId)) return;
+    if (!r.fuel || !(r.fuel.litres > 0)) return;
+    const vehicle = db.vehicles.find((v) => v.id === r.vehicleId);
+    const station = r.fuel.station || "Unspecified";
+    const paymentMode = r.fuel.paymentMode || "Unspecified";
+    rows.push({
+      vehicleId: r.vehicleId,
+      reg: vehicle ? vehicle.reg : r.vehicleId,
+      mileage: r.fuel.mileage,
+      standardMileage: vehicle ? vehicle.standardMileage : null,
+      belowStandard: r.fuel.belowStandard,
+      litres: r.fuel.litres,
+      distance: r.fuel.distance,
+      totalCost: r.fuel.totalCost,
+      station,
+      paymentMode,
+    });
+    byStation[station] = (byStation[station] || 0) + r.fuel.totalCost;
+    byPaymentMode[paymentMode] = (byPaymentMode[paymentMode] || 0) + r.fuel.totalCost;
+    totalLitres += r.fuel.litres;
+    totalCost += r.fuel.totalCost;
+  });
+
+  rows.sort((a, b) => a.mileage - b.mileage);
+  res.json({ date, rows, byStation, byPaymentMode, totalLitres: Math.round(totalLitres * 10) / 10, totalCost, fillCount: rows.length });
+});
+
 app.post(
   "/api/records",
   requireAuth,
@@ -1004,6 +1047,8 @@ app.post(
         fuelPrice,
         litres,
         fillLevel: f.fillLevel || "other",
+        station: litres > 0 ? f.station || "" : "",
+        paymentMode: litres > 0 ? f.paymentMode || "" : "",
         distance,
         mileage,
         totalCost: Math.round(litres * fuelPrice),
