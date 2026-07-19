@@ -322,7 +322,7 @@ async function routeView(){
     if(tab==="people") return peopleScreen();
   }
   if(role==="owner"){
-    if(tab==="dashboard") return ownerDashboardScreen();
+    if(tab==="dashboard") return view.name==="dashboard_detail" ? dashboardDetailScreen(view.metric) : ownerDashboardScreen();
     if(tab==="expenses") return expensesScreen(true);
     if(tab==="assignments") return assignmentsScreen();
     if(tab==="people") return peopleScreen();
@@ -1300,26 +1300,117 @@ async function downloadReport(dataset, format){
 }
 
 // ================= OWNER DASHBOARD =================
+// Turns a vehicle (+ today's record, if any) into the row shape every
+// dashboard drill-down table shares - vehicle, site, client, supervisor,
+// driver - so clicking any KPI lands on a consistent, actionable list.
+function dashboardRowFor(v, r){
+  return {
+    vehicleId: v.id, reg: v.reg,
+    site: siteName(v.siteId),
+    client: v.clientId ? clientName(v.clientId) : "Internal / Fixed Route",
+    supervisor: userName(v.supervisorId),
+    driver: (r && r.attendance && r.attendance.driver) || driverName(v.driverId),
+    record: r || null,
+  };
+}
+function dashboardMetricRows(metric){
+  if(metric==="compliant") return vehicles.filter(v=>records[v.id]&&records[v.id].verification.status==='approved').map(v=>dashboardRowFor(v, records[v.id]));
+  if(metric==="pending") return vehicles.filter(v=>records[v.id]&&records[v.id].verification.status==='pending').map(v=>dashboardRowFor(v, records[v.id]));
+  if(metric==="not_submitted") return vehicles.filter(v=>!records[v.id]).map(v=>dashboardRowFor(v, null));
+  if(metric==="breath_fail") return vehicles.filter(v=>records[v.id]&&records[v.id].breathalyzer&&records[v.id].breathalyzer.result==='fail').map(v=>dashboardRowFor(v, records[v.id]));
+  if(metric==="absent") return vehicles.filter(v=>records[v.id]&&records[v.id].attendance&&records[v.id].attendance.status==='absent').map(v=>dashboardRowFor(v, records[v.id]));
+  if(metric==="uniform") return vehicles.filter(v=>records[v.id]&&records[v.id].attendance&&records[v.id].attendance.uniform==='non_compliant').map(v=>dashboardRowFor(v, records[v.id]));
+  if(metric==="below_mileage") return vehicles.filter(v=>records[v.id]&&records[v.id].fuel&&records[v.id].fuel.belowStandard).map(v=>dashboardRowFor(v, records[v.id]));
+  if(metric==="expiring_docs"){
+    const rows = [];
+    vehicles.forEach(v=>{
+      Object.entries(v.docs||{}).forEach(([k,doc])=>{
+        if(!doc.expiry) return;
+        const dleft = daysUntil(doc.expiry);
+        if(dleft<15) rows.push(Object.assign(dashboardRowFor(v, records[v.id]), {docType:k, daysLeft:dleft, expiry:doc.expiry}));
+      });
+    });
+    return rows;
+  }
+  if(metric==="leaves_pending") return leaves.filter(l=>l.status==='pending');
+  return [];
+}
+const DASHBOARD_METRIC_META = {
+  compliant: {title:"Fully compliant vehicles today", empty:"No approved vehicles yet today."},
+  pending: {title:"Pending verification", empty:"Nothing pending."},
+  not_submitted: {title:"Not submitted yet today", empty:"Every vehicle has submitted today."},
+  breath_fail: {title:"Breathalyzer failures today", empty:"No breathalyzer failures today."},
+  absent: {title:"Drivers absent today", empty:"No absences today."},
+  uniform: {title:"Uniform non-compliance today", empty:"Everyone is compliant today."},
+  below_mileage: {title:"Below-standard mileage today", empty:"No low-mileage vehicles today."},
+  expiring_docs: {title:"Documents expiring within 15 days", empty:"Nothing expiring soon."},
+  leaves_pending: {title:"Pending leave requests", empty:"No pending leave requests."},
+};
+function dashboardDetailScreen(metric){
+  const meta_ = DASHBOARD_METRIC_META[metric] || {title:"Details", empty:"Nothing to show."};
+  const rows = dashboardMetricRows(metric);
+  let tableHtml;
+
+  if(metric==="leaves_pending"){
+    tableHtml = `<table><tr><th>Driver</th><th>Type</th><th>Start</th><th>End</th><th>Action</th></tr>
+      ${rows.map(l=>`<tr><td>${l.driver}</td><td>${l.type}</td><td>${l.start}</td><td>${l.end}</td>
+        <td><button class="btn small" onclick="setLeave('${l.id}','approved')">Approve</button>
+        <button class="btn small danger" onclick="setLeave('${l.id}','rejected')">Reject</button></td></tr>`).join("")
+        || `<tr><td colspan="5" class="empty">${meta_.empty}</td></tr>`}
+      </table>`;
+  } else if(metric==="expiring_docs"){
+    tableHtml = `<table><tr><th>Vehicle</th><th>Document</th><th>Expiry</th><th>Status</th><th>Site</th><th>Client</th><th>Supervisor</th></tr>
+      ${rows.map(d=>`<tr><td><b>${d.reg}</b></td><td>${d.docType}</td><td>${d.expiry}</td><td><span class="badge low">${d.daysLeft<0?'EXPIRED':d.daysLeft+' days left'}</span></td><td>${d.site}</td><td>${d.client}</td><td>${d.supervisor}</td></tr>`).join("")
+        || `<tr><td colspan="7" class="empty">${meta_.empty}</td></tr>`}
+      </table>`;
+  } else if(metric==="not_submitted"){
+    tableHtml = `<table><tr><th>Vehicle</th><th>Site</th><th>Client</th><th>Supervisor</th><th>Driver</th></tr>
+      ${rows.map(r=>`<tr><td><b>${r.reg}</b></td><td>${r.site}</td><td>${r.client}</td><td>${r.supervisor}</td><td>${r.driver}</td></tr>`).join("")
+        || `<tr><td colspan="5" class="empty">${meta_.empty}</td></tr>`}
+      </table>`;
+  } else {
+    // compliant, pending, breath_fail, absent, uniform, below_mileage - all
+    // vehicle+record rows. "pending" gets Approve/Reject like the
+    // verification queue; the others get a status badge plus a Reject/Flag
+    // action, so the owner can act on the supervisor and driver directly
+    // from here instead of just seeing a number.
+    const showReading = metric==="breath_fail";
+    const showApprove = metric==="pending";
+    const showFlag = ["breath_fail","absent","uniform","below_mileage"].includes(metric);
+    tableHtml = `<table><tr><th>Vehicle</th><th>Site</th><th>Client</th><th>Supervisor</th><th>Driver</th>${showReading?'<th>Reading</th>':''}${(showApprove||showFlag)?'<th>Status</th><th>Action</th>':''}</tr>
+      ${rows.map(r=>`<tr>
+        <td><b>${r.reg}</b></td><td>${r.site}</td><td>${r.client}</td><td>${r.supervisor}</td><td>${r.driver}</td>
+        ${showReading? `<td>${r.record.breathalyzer.reading} mg/L</td>` : ''}
+        ${(showApprove||showFlag)? `<td><span class="badge ${r.record.verification.status}">${r.record.verification.status.toUpperCase()}</span></td><td>
+          ${showApprove? `<button class="btn small" onclick="verify('${r.vehicleId}','${r.record.date}','approved')">Approve</button>` : ''}
+          <button class="btn small danger" onclick="verify('${r.vehicleId}','${r.record.date}','rejected')">${showApprove?'Reject':'Reject / Flag'}</button>
+        </td>` : ''}
+      </tr>`).join("") || `<tr><td colspan="8" class="empty">${meta_.empty}</td></tr>`}
+      </table>`;
+  }
+
+  return `
+  <button class="btn secondary small" onclick="goto('home')">&larr; Back to Dashboard</button>
+  <h1 class="page-title">${meta_.title}</h1>
+  <div class="card">${tableHtml}</div>`;
+}
+
 async function ownerDashboardScreen(){
   const recs = vehicles.map(v=>records[v.id]).filter(Boolean);
   const total = vehicles.length;
   const submitted = recs.length;
-  const approved = recs.filter(r=>r.verification.status==='approved').length;
-  const pending = recs.filter(r=>r.verification.status==='pending').length;
+  const compliantList = dashboardMetricRows("compliant");
+  const pendingList = dashboardMetricRows("pending");
+  const notSubmittedList = dashboardMetricRows("not_submitted");
+  const breathFailList = dashboardMetricRows("breath_fail");
+  const absentList = dashboardMetricRows("absent");
+  const uniformList = dashboardMetricRows("uniform");
+  const expiringDocs = dashboardMetricRows("expiring_docs");
+  const leavesPendingList = dashboardMetricRows("leaves_pending");
+  const approved = compliantList.length;
+  const pending = pendingList.length;
   const rejected = recs.filter(r=>r.verification.status==='rejected').length;
   const compliantPct = submitted? Math.round((approved/submitted)*100) : 0;
-  const breathFails = recs.filter(r=>r.breathalyzer && r.breathalyzer.result==='fail').length;
-  const belowMileage = recs.filter(r=>r.fuel && r.fuel.belowStandard).length;
-  const absentToday = recs.filter(r=>r.attendance && r.attendance.status==='absent').length;
-  const nonCompliantUniform = recs.filter(r=>r.attendance && r.attendance.uniform==='non_compliant').length;
-  const expiringDocs = [];
-  vehicles.forEach(v=>{
-    Object.entries(v.docs||{}).forEach(([k,doc])=>{
-      if(!doc.expiry) return;
-      const dleft = daysUntil(doc.expiry);
-      if(dleft < 15) expiringDocs.push({vehicle:v.reg, doc:k, dleft});
-    });
-  });
   const byClient = {};
   vehicles.forEach(v=>{ const c = v.clientId? clientName(v.clientId) : "Internal / Fixed Route"; byClient[c] = (byClient[c]||0)+1; });
 
@@ -1334,22 +1425,26 @@ async function ownerDashboardScreen(){
 
   const tempDriverExpenses = expenses.filter(e=>e.category==="Temporary Driver");
 
-  setTimeout(()=>drawCharts(approved,pending,rejected, breathFails, submitted-breathFails), 0);
+  setTimeout(()=>drawCharts(approved,pending,rejected, breathFailList.length, submitted-breathFailList.length), 0);
+
+  const kpi = (cls, num, label, metric) => `<div class="kpi ${cls}" style="cursor:pointer" onclick="goto('dashboard_detail',{metric:'${metric}'})" title="Click for the full list">
+    <div class="num">${num}</div><div class="label">${label} &rsaquo;</div></div>`;
 
   return `
   <h1 class="page-title">Owner Dashboard - Fleet Overview</h1>
+  <p class="muted" style="margin-top:-8px;">Click any number below to see the full list and take action.</p>
 
   ${await priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpenses)}
 
   <div class="grid cols-4">
-    <div class="kpi good"><div class="num">${compliantPct}%</div><div class="label">Submitted vehicles fully compliant today</div></div>
-    <div class="kpi warn"><div class="num">${pending}</div><div class="label">Pending verification</div></div>
-    <div class="kpi ${total-submitted>0?'bad':'good'}"><div class="num">${total-submitted}</div><div class="label">Not submitted yet today</div></div>
-    <div class="kpi bad"><div class="num">${expiringDocs.length}</div><div class="label">Documents expiring &lt;15 days</div></div>
-    <div class="kpi bad"><div class="num">${breathFails}</div><div class="label">Breathalyzer failures today</div></div>
-    <div class="kpi ${absentToday?'bad':'good'}"><div class="num">${absentToday}</div><div class="label">Drivers absent today</div></div>
-    <div class="kpi ${nonCompliantUniform?'warn':'good'}"><div class="num">${nonCompliantUniform}</div><div class="label">Uniform non-compliance</div></div>
-    <div class="kpi"><div class="num">${leaves.filter(l=>l.status==='pending').length}</div><div class="label">Leave requests pending</div></div>
+    ${kpi('good', compliantPct+'%', 'Submitted vehicles fully compliant today', 'compliant')}
+    ${kpi('warn', pending, 'Pending verification', 'pending')}
+    ${kpi(total-submitted>0?'bad':'good', total-submitted, 'Not submitted yet today', 'not_submitted')}
+    ${kpi('bad', expiringDocs.length, 'Documents expiring &lt;15 days', 'expiring_docs')}
+    ${kpi('bad', breathFailList.length, 'Breathalyzer failures today', 'breath_fail')}
+    ${kpi(absentList.length?'bad':'good', absentList.length, 'Drivers absent today', 'absent')}
+    ${kpi(uniformList.length?'warn':'good', uniformList.length, 'Uniform non-compliance', 'uniform')}
+    ${kpi('', leavesPendingList.length, 'Leave requests pending', 'leaves_pending')}
   </div>
 
   <div class="charts-grid" style="margin-top:18px;">
