@@ -83,6 +83,8 @@ function backfillDefaults() {
   if (!db.odometerLogs) db.odometerLogs = {};
   if (!Array.isArray(db.backupDownloads)) db.backupDownloads = [];
   if (!Array.isArray(db.attendanceBackupDownloads)) db.attendanceBackupDownloads = [];
+  if (!db.payrollProfiles) db.payrollProfiles = {};
+  if (!Array.isArray(db.payrollAdhocEntries)) db.payrollAdhocEntries = [];
   (db.vehicles || []).forEach((v) => {
     if (v.driverAssignedDate === undefined) v.driverAssignedDate = null;
     if (v.make === undefined) v.make = "";
@@ -1794,6 +1796,278 @@ app.get(
     res.json((db.attendanceBackupDownloads || []).slice(0, 100));
   }
 );
+
+// ---------- PAYROLL ----------
+// Two pieces per person (a "user" = any staff role, or a "driver"):
+//   1. A recurring profile (base salary + components like ESI/PF/Gratuity,
+//      percent-of-base or a fixed amount, each toggleable) - set up ONCE by
+//      HR and from then on applies automatically to every month's payslip
+//      with no re-entry needed.
+//   2. Ad-hoc entries tied to a specific month (traffic challans, fuel
+//      theft deductions, vehicle cleanliness penalties, other penalties,
+//      or a one-off bonus) - added by HR as they happen.
+// A payslip for a given month is always computed fresh from these two
+// pieces, never hand-entered or manually "generated" - that's what makes
+// it automatic going forward.
+function payrollKey(personType, personId) {
+  return `${personType}:${personId}`;
+}
+function personExists(personType, personId) {
+  if (personType === "user") return db.users.some((u) => u.id === personId);
+  if (personType === "driver") return db.drivers.some((d) => d.id === personId);
+  return false;
+}
+function personLabel(personType, personId) {
+  if (personType === "user") {
+    const u = db.users.find((x) => x.id === personId);
+    return u ? { name: u.name, subLabel: roleLabelServer(u.role) } : { name: personId, subLabel: "" };
+  }
+  const d = db.drivers.find((x) => x.id === personId);
+  return d ? { name: d.name, subLabel: "Driver" } : { name: personId, subLabel: "" };
+}
+function getPayrollProfile(personType, personId) {
+  return db.payrollProfiles[payrollKey(personType, personId)] || null;
+}
+// Drivers a Site Supervisor can see payroll for - whichever vehicle(s) are
+// currently assigned to them, same scoping rule used everywhere else
+// (visibleVehiclesFor), narrowed down to just the driver on each one.
+function visibleDriverIdsFor(user) {
+  if (user.role === "site_supervisor") {
+    return new Set(visibleVehiclesFor(user).map((v) => v.driverId).filter(Boolean));
+  }
+  return new Set(db.drivers.map((d) => d.id));
+}
+const PAYROLL_EDIT_ROLES = ["hr"];
+const PAYROLL_VIEW_ALL_ROLES = ["hr", "owner"]; // full staff + driver visibility
+const PAYROLL_VIEW_ALL_DRIVERS_ROLES = ["hr", "owner", "ops_manager"]; // every driver, no staff
+const PAYROLL_VIEW_OWN_DRIVERS_ROLES = ["hr", "owner", "ops_manager", "site_supervisor"]; // site_supervisor narrowed further below
+function canViewPayroll(user, personType, personId) {
+  if (personType === "user" && personId === user.id) return true; // always allowed to see your own
+  if (PAYROLL_VIEW_ALL_ROLES.includes(user.role)) return true;
+  if (personType !== "driver") return false; // nobody else gets another staff member's payroll
+  if (PAYROLL_VIEW_ALL_DRIVERS_ROLES.includes(user.role)) return true;
+  if (user.role === "site_supervisor") return visibleDriverIdsFor(user).has(personId);
+  return false;
+}
+function canEditPayroll(user) {
+  return PAYROLL_EDIT_ROLES.includes(user.role);
+}
+// Computes a month's payslip purely from the recurring profile + whichever
+// ad-hoc entries were logged for that exact month - nothing is stored per
+// month, so changing the profile automatically reshapes every future
+// month without anyone having to re-run or regenerate anything.
+function computePayslip(personType, personId, month) {
+  const profile = getPayrollProfile(personType, personId);
+  const base = profile ? Number(profile.baseSalary) || 0 : 0;
+  const earnings = [{ label: "Base Salary", amount: base }];
+  const deductions = [];
+  (profile && Array.isArray(profile.components) ? profile.components : []).forEach((c) => {
+    if (!c.enabled) return;
+    const amt = c.mode === "percent" ? Math.round(base * (Number(c.value) || 0)) / 100 : Number(c.value) || 0;
+    const rounded = Math.round(amt);
+    if (c.type === "earning") earnings.push({ label: c.label, amount: rounded });
+    else deductions.push({ label: c.label, amount: rounded, source: "recurring" });
+  });
+  db.payrollAdhocEntries
+    .filter((e) => e.personType === personType && e.personId === personId && e.month === month)
+    .forEach((e) => {
+      if (e.type === "earning") earnings.push({ label: e.label, amount: e.amount, id: e.id, category: e.category });
+      else deductions.push({ label: e.label, amount: e.amount, source: "adhoc", id: e.id, category: e.category });
+    });
+  const grossPay = earnings.reduce((s, x) => s + x.amount, 0);
+  const totalDeductions = deductions.reduce((s, x) => s + x.amount, 0);
+  const netPay = grossPay - totalDeductions;
+  return { personType, personId, month, hasProfile: !!profile, earnings, deductions, grossPay, totalDeductions, netPay };
+}
+
+// People this role is allowed to browse payroll for, beyond their own -
+// used to populate the management/view list. Empty for roles that only
+// ever see their own payslip (Area Supervisor, Data Team, Bookings).
+app.get("/api/payroll/people", requireAuth, (req, res) => {
+  const user = req.user;
+  const people = [];
+  if (PAYROLL_VIEW_ALL_ROLES.includes(user.role)) {
+    db.users.forEach((u) => people.push({ personType: "user", personId: u.id, name: u.name, subLabel: roleLabelServer(u.role) }));
+    db.drivers.forEach((d) => people.push({ personType: "driver", personId: d.id, name: d.name, subLabel: "Driver" }));
+  } else if (PAYROLL_VIEW_ALL_DRIVERS_ROLES.includes(user.role)) {
+    db.drivers.forEach((d) => people.push({ personType: "driver", personId: d.id, name: d.name, subLabel: "Driver" }));
+  } else if (user.role === "site_supervisor") {
+    const ids = visibleDriverIdsFor(user);
+    db.drivers.filter((d) => ids.has(d.id)).forEach((d) => people.push({ personType: "driver", personId: d.id, name: d.name, subLabel: "Driver" }));
+  }
+  res.json(people);
+});
+
+app.get("/api/payroll/profile/:personType/:personId", requireAuth, (req, res) => {
+  const { personType, personId } = req.params;
+  if (!["user", "driver"].includes(personType) || !personExists(personType, personId)) {
+    return res.status(404).json({ error: "Person not found." });
+  }
+  if (!canViewPayroll(req.user, personType, personId)) {
+    return res.status(403).json({ error: "You don't have access to this person's payroll." });
+  }
+  res.json(getPayrollProfile(personType, personId));
+});
+
+app.patch(
+  "/api/payroll/profile/:personType/:personId",
+  requireAuth,
+  requireRole(...PAYROLL_EDIT_ROLES),
+  h(async (req, res) => {
+    const { personType, personId } = req.params;
+    if (!["user", "driver"].includes(personType) || !personExists(personType, personId)) {
+      return res.status(404).json({ error: "Person not found." });
+    }
+    const { baseSalary, components } = req.body || {};
+    const base = Number(baseSalary);
+    if (!Number.isFinite(base) || base < 0) return res.status(400).json({ error: "Base salary must be a non-negative number." });
+    if (!Array.isArray(components)) return res.status(400).json({ error: "components must be an array." });
+    for (const c of components) {
+      if (!c.label || !String(c.label).trim()) return res.status(400).json({ error: "Every component needs a label." });
+      if (!["earning", "deduction"].includes(c.type)) return res.status(400).json({ error: "Component type must be earning or deduction." });
+      if (!["percent", "fixed"].includes(c.mode)) return res.status(400).json({ error: "Component mode must be percent or fixed." });
+      if (!Number.isFinite(Number(c.value)) || Number(c.value) < 0) return res.status(400).json({ error: `Component "${c.label}" needs a non-negative value.` });
+    }
+    const key = payrollKey(personType, personId);
+    db.payrollProfiles[key] = {
+      personType,
+      personId,
+      baseSalary: base,
+      components: components.map((c) => ({
+        label: String(c.label).trim(),
+        type: c.type,
+        mode: c.mode,
+        value: Number(c.value),
+        enabled: c.enabled !== false,
+      })),
+      updatedBy: req.user.id,
+      updatedAt: nowIso(),
+    };
+    const { name } = personLabel(personType, personId);
+    await audit(req.user, "set_payroll_profile", `${req.user.name} set the payroll formula for ${name} (base ₹${base}, ${components.length} component(s))`);
+    res.json(db.payrollProfiles[key]);
+  })
+);
+
+const PAYROLL_ADHOC_CATEGORIES = [
+  { key: "traffic_challan", label: "Traffic Challan", type: "deduction" },
+  { key: "fuel_theft", label: "Fuel Deduction (Theft)", type: "deduction" },
+  { key: "cleanliness_penalty", label: "Vehicle Cleanliness Penalty", type: "deduction" },
+  { key: "other_penalty", label: "Other Penalty", type: "deduction" },
+  { key: "bonus", label: "Bonus / Incentive", type: "earning" },
+  { key: "other_earning", label: "Other Earning", type: "earning" },
+];
+app.post(
+  "/api/payroll/adhoc",
+  requireAuth,
+  requireRole(...PAYROLL_EDIT_ROLES),
+  h(async (req, res) => {
+    const { personType, personId, month, category, amount, note } = req.body || {};
+    if (!["user", "driver"].includes(personType) || !personExists(personType, personId)) {
+      return res.status(404).json({ error: "Person not found." });
+    }
+    if (!/^\d{4}-\d{2}$/.test(month || "")) return res.status(400).json({ error: "month must be in YYYY-MM format." });
+    const cat = PAYROLL_ADHOC_CATEGORIES.find((c) => c.key === category);
+    if (!cat) return res.status(400).json({ error: `category must be one of: ${PAYROLL_ADHOC_CATEGORIES.map((c) => c.key).join(", ")}.` });
+    const amt = Number(amount);
+    if (!Number.isFinite(amt) || amt <= 0) return res.status(400).json({ error: "amount must be a positive number." });
+    const entry = {
+      id: uid("payadh"),
+      personType,
+      personId,
+      month,
+      category: cat.key,
+      label: note && String(note).trim() ? `${cat.label} - ${String(note).trim()}` : cat.label,
+      type: cat.type,
+      amount: Math.round(amt),
+      addedBy: req.user.id,
+      addedByName: req.user.name,
+      addedAt: nowIso(),
+    };
+    db.payrollAdhocEntries.unshift(entry);
+    const { name } = personLabel(personType, personId);
+    await audit(req.user, "add_payroll_adhoc", `${req.user.name} added ${cat.label} of ₹${entry.amount} for ${name} (${month})`);
+    res.json(entry);
+  })
+);
+
+app.delete(
+  "/api/payroll/adhoc/:id",
+  requireAuth,
+  requireRole(...PAYROLL_EDIT_ROLES),
+  h(async (req, res) => {
+    const idx = db.payrollAdhocEntries.findIndex((e) => e.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: "Entry not found." });
+    const [removed] = db.payrollAdhocEntries.splice(idx, 1);
+    const { name } = personLabel(removed.personType, removed.personId);
+    await audit(req.user, "remove_payroll_adhoc", `${req.user.name} removed ${removed.label} of ₹${removed.amount} for ${name} (${removed.month})`);
+    res.json({ ok: true });
+  })
+);
+
+app.get("/api/payroll/payslip/:personType/:personId", requireAuth, (req, res) => {
+  const { personType, personId } = req.params;
+  if (!["user", "driver"].includes(personType) || !personExists(personType, personId)) {
+    return res.status(404).json({ error: "Person not found." });
+  }
+  if (!canViewPayroll(req.user, personType, personId)) {
+    return res.status(403).json({ error: "You don't have access to this person's payroll." });
+  }
+  const month = /^\d{4}-\d{2}$/.test(req.query.month || "") ? req.query.month : nowIso().slice(0, 7);
+  const payslip = computePayslip(personType, personId, month);
+  const { name, subLabel } = personLabel(personType, personId);
+  res.json(Object.assign({ name, subLabel }, payslip));
+});
+
+// Payroll register for a month - every person this role can see, with
+// their computed net pay, so HR/Owner/Ops Manager/Site Supervisor get an
+// at-a-glance table instead of opening each person one at a time.
+app.get("/api/payroll/summary", requireAuth, (req, res) => {
+  const user = req.user;
+  const month = /^\d{4}-\d{2}$/.test(req.query.month || "") ? req.query.month : nowIso().slice(0, 7);
+  let people = [];
+  if (PAYROLL_VIEW_ALL_ROLES.includes(user.role)) {
+    people = [
+      ...db.users.map((u) => ({ personType: "user", personId: u.id })),
+      ...db.drivers.map((d) => ({ personType: "driver", personId: d.id })),
+    ];
+  } else if (PAYROLL_VIEW_ALL_DRIVERS_ROLES.includes(user.role)) {
+    people = db.drivers.map((d) => ({ personType: "driver", personId: d.id }));
+  } else if (user.role === "site_supervisor") {
+    const ids = visibleDriverIdsFor(user);
+    people = db.drivers.filter((d) => ids.has(d.id)).map((d) => ({ personType: "driver", personId: d.id }));
+  }
+  const rows = people.map(({ personType, personId }) => {
+    const payslip = computePayslip(personType, personId, month);
+    const { name, subLabel } = personLabel(personType, personId);
+    return { personType, personId, name, subLabel, hasProfile: payslip.hasProfile, grossPay: payslip.grossPay, totalDeductions: payslip.totalDeductions, netPay: payslip.netPay };
+  });
+  res.json({ month, rows });
+});
+
+app.get("/api/payroll/payslip/:personType/:personId/download", requireAuth, (req, res) => {
+  const { personType, personId } = req.params;
+  if (!["user", "driver"].includes(personType) || !personExists(personType, personId)) {
+    return res.status(404).json({ error: "Person not found." });
+  }
+  if (!canViewPayroll(req.user, personType, personId)) {
+    return res.status(403).json({ error: "You don't have access to this person's payroll." });
+  }
+  const month = /^\d{4}-\d{2}$/.test(req.query.month || "") ? req.query.month : nowIso().slice(0, 7);
+  const payslip = computePayslip(personType, personId, month);
+  const { name } = personLabel(personType, personId);
+  const rows = [
+    ...payslip.earnings.map((e) => ({ item: e.label, type: "Earning", amount: e.amount })),
+    ...payslip.deductions.map((d) => ({ item: d.label, type: "Deduction", amount: -d.amount })),
+    { item: "NET PAY", type: "", amount: payslip.netPay },
+  ];
+  const columns = [
+    { label: "Item", key: "item" },
+    { label: "Type", key: "type" },
+    { label: "Amount (₹)", key: "amount" },
+  ];
+  sendDownload(res, rows, columns, `payslip_${name.replace(/\s+/g, "_")}_${month}`, req.query.format);
+});
 
 // ---------- OWNER DASHBOARD - fleet average mileage ----------
 // Computed from every daily record ever submitted (not just today's), since

@@ -345,13 +345,13 @@ async function submitVoluntaryPasswordChange(){
 
 // ---------- shell ----------
 function tabsFor(role){
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"]];
-  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"]];
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["people","People"],["reports","Reports"],["backup","Backup"]];
-  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["people","People"],["audit","Audit Log"]];
-  if(role==="hr") return [["attendance","Attendance"],["people","People"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Overview"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"]];
-  if(role==="bookings") return [["usage","Vehicle Usage"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["payroll","Payroll"]];
+  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["payroll","Payroll"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["people","People"],["audit","Audit Log"],["payroll","Payroll"]];
+  if(role==="hr") return [["attendance","Attendance"],["people","People"],["payroll","Payroll"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Overview"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="bookings") return [["usage","Vehicle Usage"],["payroll","Payroll"]];
   return [];
 }
 
@@ -392,6 +392,7 @@ async function routeView(){
   const role = currentUser.role;
   const tab = view.tab;
   if(view.name==="change_password") return changePasswordScreen();
+  if(tab==="payroll") return payrollScreen();
   if(role==="site_supervisor"){
     if(tab==="my_vehicles") return view.name==="vehicle_detail" ? vehicleChecklistScreen(view.vehicleId) : supervisorHome();
     if(tab==="my_attendance") return myAttendanceScreen();
@@ -2790,6 +2791,244 @@ function drawCharts(approved,pending,rejected,fails,passes){
   b._chart = new Chart(b, {type:"doughnut", data:{labels:["Pass","Fail"], datasets:[{data:[passes,fails], backgroundColor:["#1e8e3e","#c0392b"]}]}});
 }
 
+// ================= PAYROLL =================
+// Two pieces per person, mirroring the server: a recurring profile (base
+// salary + components like ESI/PF/Gratuity - set up once by HR, applies
+// automatically every month with no re-entry) and ad-hoc entries tied to
+// a specific month (traffic challans, fuel theft, cleanliness penalties,
+// other penalties, or a bonus). Every payslip is computed fresh from the
+// two, never hand-typed. Everyone can always see/download their own; HR
+// can see and edit everyone's; Owner sees everyone's but can't edit;
+// Operations Manager and Site Supervisor can see drivers only (Site
+// Supervisor limited to their own supervised drivers).
+const PAYROLL_ADHOC_CATEGORIES = [
+  {key:"traffic_challan", label:"Traffic Challan"},
+  {key:"fuel_theft", label:"Fuel Deduction (Theft)"},
+  {key:"cleanliness_penalty", label:"Vehicle Cleanliness Penalty"},
+  {key:"other_penalty", label:"Other Penalty"},
+  {key:"bonus", label:"Bonus / Incentive"},
+  {key:"other_earning", label:"Other Earning"},
+];
+let payrollMonth = todayStr().slice(0,7);
+let editingPayrollKey = null; // `${personType}:${personId}` currently expanded in the management table
+function money(n){ return "₹" + Number(n||0).toLocaleString("en-IN"); }
+function canEditPayrollFrontend(){ return currentUser.role==="hr"; }
+async function setPayrollMonth(v){ payrollMonth = v || todayStr().slice(0,7); await renderMain(); }
+async function fetchPayslip(personType, personId, month){
+  try{ return await api(`/payroll/payslip/${personType}/${personId}?month=${month}`); }catch(e){ return null; }
+}
+async function fetchPayrollProfile(personType, personId){
+  try{ return await api(`/payroll/profile/${personType}/${personId}`); }catch(e){ return null; }
+}
+async function fetchPayrollSummary(month){
+  try{ return await api(`/payroll/summary?month=${month}`); }catch(e){ return null; }
+}
+function payslipTableHtml(payslip){
+  if(!payslip) return `<div class="empty">Could not load payslip.</div>`;
+  const canEdit = canEditPayrollFrontend();
+  const rows = [
+    ...payslip.earnings.map(e=>`<tr><td>${e.label}</td><td>Earning</td><td>${money(e.amount)}</td><td></td></tr>`),
+    ...payslip.deductions.map(d=>`<tr><td>${d.label}</td><td>Deduction</td><td>-${money(d.amount)}</td><td>${d.source==='adhoc' && canEdit ? `<button class="btn small danger" onclick="deletePayrollAdhoc('${d.id}')">Remove</button>` : ''}</td></tr>`),
+  ].join("");
+  return `
+  <table><tr><th>Item</th><th>Type</th><th>Amount</th><th></th></tr>${rows}</table>
+  <div class="muted" style="margin-top:8px;">Gross: ${money(payslip.grossPay)} &nbsp;|&nbsp; Deductions: ${money(payslip.totalDeductions)} &nbsp;|&nbsp; <b>Net Pay: ${money(payslip.netPay)}</b></div>
+  ${!payslip.hasProfile ? `<div class="muted">No payroll formula has been set up for this person yet.</div>` : ''}`;
+}
+async function myPayslipCardHtml(){
+  const payslip = await fetchPayslip("user", currentUser.id, payrollMonth);
+  return `
+  <div class="card">
+    <h2 class="section-title">My Payslip - ${payrollMonth}</h2>
+    ${payslipTableHtml(payslip)}
+    <div class="controls" style="margin-top:10px;">
+      <button class="btn small secondary" onclick="downloadPayslip('user','${currentUser.id}','csv')">Download CSV</button>
+      <button class="btn small secondary" onclick="downloadPayslip('user','${currentUser.id}','xlsx')">Download Excel</button>
+    </div>
+  </div>`;
+}
+async function downloadPayslip(personType, personId, format){
+  try{
+    const headers = {};
+    if(authToken) headers["Authorization"] = "Bearer " + authToken;
+    const res = await fetch(`${API}/payroll/payslip/${personType}/${personId}/download?month=${payrollMonth}&format=${format}`, {headers});
+    if(!res.ok){
+      const data = await res.json().catch(()=>({}));
+      throw new Error(data.error || `Download failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `payslip_${personId}_${payrollMonth}.${format==='xlsx'?'xlsx':'csv'}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){ alert(e.message); }
+}
+function togglePayrollDetail(personType, personId){
+  const key = `${personType}:${personId}`;
+  editingPayrollKey = editingPayrollKey===key ? null : key;
+  renderMain();
+}
+async function payrollManagementHtml(){
+  const summary = await fetchPayrollSummary(payrollMonth);
+  if(!summary || !summary.rows.length) return "";
+  const canEdit = canEditPayrollFrontend();
+  const staffRows = summary.rows.filter(r=>r.personType==="user");
+  const driverRows = summary.rows.filter(r=>r.personType==="driver");
+  const rowHtml = async (r) => {
+    const key = `${r.personType}:${r.personId}`;
+    const detail = editingPayrollKey===key ? await payrollDetailHtml(r.personType, r.personId) : "";
+    return `<tr>
+      <td><b>${r.name}</b></td>
+      <td>${r.subLabel}</td>
+      <td>${r.hasProfile ? money(r.grossPay) : '<span class="muted">No formula set</span>'}</td>
+      <td>${r.hasProfile ? money(r.totalDeductions) : '-'}</td>
+      <td>${r.hasProfile ? `<b>${money(r.netPay)}</b>` : '-'}</td>
+      <td>
+        <button class="btn small secondary" onclick="togglePayrollDetail('${r.personType}','${r.personId}')">${editingPayrollKey===key?'Close':(canEdit?'Manage':'View')}</button>
+        <button class="btn small secondary" onclick="downloadPayslip('${r.personType}','${r.personId}','csv')">CSV</button>
+        <button class="btn small secondary" onclick="downloadPayslip('${r.personType}','${r.personId}','xlsx')">Excel</button>
+      </td>
+    </tr>
+    ${detail ? `<tr><td colspan="6">${detail}</td></tr>` : ''}`;
+  };
+  let staffHtml = "";
+  for(const r of staffRows) staffHtml += await rowHtml(r);
+  let driverHtml = "";
+  for(const r of driverRows) driverHtml += await rowHtml(r);
+
+  return `
+  ${staffRows.length ? `
+  <div class="card">
+    <h2 class="section-title">Staff Payroll</h2>
+    <table><tr><th>Name</th><th>Role</th><th>Gross</th><th>Deductions</th><th>Net Pay</th><th></th></tr>${staffHtml}</table>
+  </div>` : ''}
+  ${driverRows.length ? `
+  <div class="card">
+    <h2 class="section-title">Driver Payroll</h2>
+    <table><tr><th>Name</th><th>Role</th><th>Gross</th><th>Deductions</th><th>Net Pay</th><th></th></tr>${driverHtml}</table>
+  </div>` : ''}`;
+}
+function payrollComponentRowHtml(c){
+  c = c || {label:"", type:"deduction", mode:"percent", value:0, enabled:true};
+  return `<div class="f pf-component-row" style="border:1px solid #ddd;padding:6px;margin:4px 0;border-radius:6px;">
+    <input type="text" placeholder="Label (e.g. ESI)" class="pfc_label" value="${c.label}" style="width:110px" />
+    <select class="pfc_type" style="width:100px">
+      <option value="deduction" ${c.type==='deduction'?'selected':''}>Deduction</option>
+      <option value="earning" ${c.type==='earning'?'selected':''}>Earning</option>
+    </select>
+    <select class="pfc_mode" style="width:90px">
+      <option value="percent" ${c.mode==='percent'?'selected':''}>% of base</option>
+      <option value="fixed" ${c.mode==='fixed'?'selected':''}>Fixed ₹</option>
+    </select>
+    <input type="number" min="0" step="0.01" placeholder="Value" class="pfc_value" value="${c.value}" style="width:80px" />
+    <label style="font-weight:normal;"><input type="checkbox" class="pfc_enabled" ${c.enabled?'checked':''} /> Enabled</label>
+    <button type="button" class="btn small danger" onclick="this.closest('.pf-component-row').remove()">Remove</button>
+  </div>`;
+}
+function addPayrollComponentRow(personType, personId){
+  const container = document.getElementById(`pf_components_${personType}_${personId}`);
+  if(!container) return;
+  const wrap = document.createElement("div");
+  wrap.innerHTML = payrollComponentRowHtml(null);
+  container.appendChild(wrap.firstElementChild);
+}
+async function savePayrollProfile(evt, personType, personId){
+  evt.preventDefault();
+  const base = document.getElementById(`pf_base_${personType}_${personId}`).value;
+  const container = document.getElementById(`pf_components_${personType}_${personId}`);
+  const rows = Array.from(container.querySelectorAll(".pf-component-row"));
+  const components = rows.map(row=>({
+    label: row.querySelector(".pfc_label").value,
+    type: row.querySelector(".pfc_type").value,
+    mode: row.querySelector(".pfc_mode").value,
+    value: Number(row.querySelector(".pfc_value").value),
+    enabled: row.querySelector(".pfc_enabled").checked,
+  })).filter(c=>c.label && String(c.label).trim());
+  try{
+    await api(`/payroll/profile/${personType}/${personId}`, {method:"PATCH", body: JSON.stringify({baseSalary: Number(base), components})});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function addPayrollAdhoc(evt, personType, personId){
+  evt.preventDefault();
+  const category = document.getElementById(`adhoc_cat_${personType}_${personId}`).value;
+  const amount = document.getElementById(`adhoc_amt_${personType}_${personId}`).value;
+  const note = document.getElementById(`adhoc_note_${personType}_${personId}`).value;
+  try{
+    await api("/payroll/adhoc", {method:"POST", body: JSON.stringify({personType, personId, month: payrollMonth, category, amount: Number(amount), note})});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function deletePayrollAdhoc(id){
+  if(!confirm("Remove this entry?")) return;
+  try{
+    await api(`/payroll/adhoc/${id}`, {method:"DELETE"});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function payrollDetailHtml(personType, personId){
+  const [profile, payslip] = await Promise.all([
+    fetchPayrollProfile(personType, personId),
+    fetchPayslip(personType, personId, payrollMonth),
+  ]);
+  const canEdit = canEditPayrollFrontend();
+  const components = profile ? profile.components : [];
+  return `
+  <div class="card" style="margin:8px 0; background:#fafafa;">
+    <h3 style="margin-top:0;">${payslip ? payslip.name : personId} - Payroll Formula</h3>
+    ${canEdit ? `
+    <form onsubmit="return savePayrollProfile(event,'${personType}','${personId}')">
+      <div class="f"><label>Base Salary</label><input type="number" min="0" id="pf_base_${personType}_${personId}" value="${profile? profile.baseSalary : ''}" required style="width:120px" /></div>
+      <div id="pf_components_${personType}_${personId}">
+        ${components.map(c=>payrollComponentRowHtml(c)).join("")}
+      </div>
+      <button type="button" class="btn small secondary" onclick="addPayrollComponentRow('${personType}','${personId}')">+ Add component</button>
+      <div style="margin-top:10px;">
+        <button class="btn small" type="submit">Save Formula</button>
+      </div>
+    </form>
+    ` : `
+    <table><tr><th>Base Salary</th><td>${profile? money(profile.baseSalary) : '-'}</td></tr></table>
+    <table><tr><th>Component</th><th>Type</th><th>Mode</th><th>Value</th><th>Enabled</th></tr>
+    ${components.map(c=>`<tr><td>${c.label}</td><td>${c.type}</td><td>${c.mode}</td><td>${c.mode==='percent'?c.value+'%':money(c.value)}</td><td>${c.enabled?'Yes':'No'}</td></tr>`).join("") || "<tr><td colspan='5' class='empty'>No components set.</td></tr>"}
+    </table>
+    `}
+    <h3>This Month's Payslip (${payrollMonth})</h3>
+    ${payslipTableHtml(payslip)}
+    ${canEdit ? `
+    <h3>Add One-Time Entry (this month)</h3>
+    <form class="inline-form" onsubmit="return addPayrollAdhoc(event,'${personType}','${personId}')">
+      <div class="f"><label>Category</label><select id="adhoc_cat_${personType}_${personId}">
+        ${PAYROLL_ADHOC_CATEGORIES.map(c=>`<option value="${c.key}">${c.label}</option>`).join("")}
+      </select></div>
+      <div class="f"><label>Amount</label><input type="number" min="1" id="adhoc_amt_${personType}_${personId}" required style="width:100px" /></div>
+      <div class="f"><label>Note (optional)</label><input type="text" id="adhoc_note_${personType}_${personId}" style="width:160px" /></div>
+      <button class="btn small" type="submit">+ Add</button>
+    </form>
+    ` : ''}
+  </div>`;
+}
+async function payrollScreen(){
+  return `
+  <h1 class="page-title">Payroll</h1>
+  <div class="card">
+    <div class="check-row">
+      <div class="label">Month</div>
+      <div class="controls">
+        <input type="month" value="${payrollMonth}" max="${todayStr().slice(0,7)}" onchange="setPayrollMonth(this.value)" />
+      </div>
+    </div>
+  </div>
+  ${await myPayslipCardHtml()}
+  ${await payrollManagementHtml()}`;
+}
+
 // ---------- expose for inline handlers ----------
 Object.assign(window, {
   doLogin, doLogout, switchTab, goto, draftSet, updateBreathalyzer, startPhotoCapture,
@@ -2803,6 +3042,8 @@ Object.assign(window, {
   downloadVehiclesRunning, downloadFuelOverview,
   toggleDriverDetails, saveDriverDetails, saveDriverCertificate, addDriverFull,
   setAttRange, downloadAttendanceSupervisors, downloadAttendanceDrivers, downloadAttendanceBackup,
+  setPayrollMonth, downloadPayslip, togglePayrollDetail, addPayrollComponentRow, savePayrollProfile,
+  addPayrollAdhoc, deletePayrollAdhoc,
 });
 
 boot();
