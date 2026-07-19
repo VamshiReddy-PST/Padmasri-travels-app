@@ -1318,8 +1318,8 @@ app.get("/api/dashboard/mileage-summary", requireAuth, requireRole("owner", "ops
 });
 
 // ---------- AUDIT ----------
-// The Audit Log tab shows one day at a time (today by default, or whichever
-// date the caller picks) rather than the whole history at once - and the
+// The Audit Log tab shows a date range (today only by default, or whichever
+// from/to the caller picks) rather than the whole history at once - and the
 // Dashboard's "recent activity" feed asks for the last hour specifically
 // via sinceMinutes, independent of day boundaries.
 app.get("/api/audit", requireAuth, requireRole("owner", "data_team", "hr", "ops_manager"), (req, res) => {
@@ -1328,6 +1328,13 @@ app.get("/api/audit", requireAuth, requireRole("owner", "data_team", "hr", "ops_
   if (req.query.sinceMinutes) {
     const cutoff = Date.now() - Number(req.query.sinceMinutes) * 60000;
     rows = rows.filter((a) => new Date(a.ts).getTime() >= cutoff);
+  } else if (req.query.from || req.query.to) {
+    const from = req.query.from || req.query.to;
+    const to = req.query.to || req.query.from;
+    rows = rows.filter((a) => {
+      const d = (a.ts || "").slice(0, 10);
+      return d >= from && d <= to;
+    });
   } else {
     const date = req.query.date || todayStr();
     rows = rows.filter((a) => (a.ts || "").slice(0, 10) === date);

@@ -1638,37 +1638,46 @@ async function hrAttendanceScreen(){
 async function setAttDate(v){ view.attDate = v; await renderMain(); }
 
 // ================= AUDIT =================
-// opts: {limit, date, sinceMinutes} - date defaults to today server-side
-// when omitted; sinceMinutes (used by the dashboard) overrides date entirely.
+// opts: {limit, date, from, to, sinceMinutes} - defaults to today server-side
+// when nothing is given; sinceMinutes (used by the dashboard) overrides
+// date/from/to entirely.
 async function auditTableHtml(opts){
   opts = opts || {};
   const params = new URLSearchParams();
   params.set("limit", opts.limit || 200);
   if(opts.sinceMinutes) params.set("sinceMinutes", opts.sinceMinutes);
-  else if(opts.date) params.set("date", opts.date);
+  else if(opts.from || opts.to){
+    params.set("from", opts.from || opts.to);
+    params.set("to", opts.to || opts.from);
+  } else if(opts.date) params.set("date", opts.date);
   let rows = [];
   try{ rows = await api(`/audit?${params.toString()}`); }catch(e){ return "<div class='empty'>Audit log not available for your role.</div>"; }
   return `<table><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr>${rows.map(a=>`<tr><td>${new Date(a.ts).toLocaleString()}</td><td>${a.userName}</td><td>${a.action}</td><td>${a.detail}</td></tr>`).join("") || "<tr><td colspan='4' class='empty'>Nothing logged in this window.</td></tr>"}</table>`;
 }
 // Audit Log defaults to today only - pick a different date to look back
 // further, one day at a time.
-let auditSelectedDate = todayStr();
+// Defaults to today only (from===to===today) - widen either end to look
+// back over a range instead of one day at a time.
+let auditFrom = todayStr();
+let auditTo = todayStr();
 async function auditScreen(){
   return `
   <h1 class="page-title">Audit Log</h1>
   <div class="card">
     <div class="check-row">
-      <div class="label">Date</div>
+      <div class="label">Date range</div>
       <div class="controls">
-        <input type="date" id="auditDateInput" value="${auditSelectedDate}" onchange="setAuditDate(this.value)" />
-        <button class="btn small secondary" onclick="setAuditDate('${todayStr()}')">Today</button>
+        <input type="date" id="auditFromInput" value="${auditFrom}" onchange="setAuditRange(this.value, auditTo)" /> to
+        <input type="date" id="auditToInput" value="${auditTo}" onchange="setAuditRange(auditFrom, this.value)" />
+        <button class="btn small secondary" onclick="setAuditRange('${todayStr()}','${todayStr()}')">Today only</button>
       </div>
     </div>
-    ${await auditTableHtml({date: auditSelectedDate, limit: 500})}
+    ${await auditTableHtml({from: auditFrom, to: auditTo, limit: 1000})}
   </div>`;
 }
-async function setAuditDate(date){
-  auditSelectedDate = date || todayStr();
+async function setAuditRange(from, to){
+  auditFrom = from || todayStr();
+  auditTo = to || todayStr();
   await renderMain();
 }
 
@@ -1988,7 +1997,7 @@ async function priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpen
   <div class="card">
     <h2 class="section-title">Document expiry alerts (&lt;15 days)</h2>
     <table><tr><th>Vehicle</th><th>Document</th><th>Status</th></tr>
-    ${expiringDocs.map(d=>`<tr><td>${d.vehicle}</td><td>${d.doc}</td><td><span class="badge low">${d.dleft<0? 'EXPIRED': d.dleft+' days left'}</span></td></tr>`).join("") || "<tr><td colspan='3' class='empty'>None</td></tr>"}
+    ${expiringDocs.map(d=>`<tr><td>${d.reg}</td><td>${d.docType}</td><td><span class="badge low">${d.daysLeft<0? 'EXPIRED': d.daysLeft+' days left'}</span></td></tr>`).join("") || "<tr><td colspan='3' class='empty'>None</td></tr>"}
     </table>
   </div>
 
@@ -2049,7 +2058,7 @@ Object.assign(window, {
   startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, saveOdometer, restoreBackup, downloadReport,
   toggleVehicleDetails, saveVehicleDetails, saveVehicleDoc, onNewVehicleTypeChange, onVdVehicleTypeChange, onPermitStateToggle,
   toggleClientRoutes, saveRouteCap, addRoute, saveRouteEdit, deleteRoute,
-  setVehicleUsage, unlockOwnerAssignmentEditing, setAuditDate,
+  setVehicleUsage, unlockOwnerAssignmentEditing, setAuditRange,
 });
 
 boot();
