@@ -250,11 +250,11 @@ async function doLogin(){
 // ---------- shell ----------
 function tabsFor(role){
   if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["my_attendance","My Attendance"],["my_expenses","My Expenses"]];
-  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"]];
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Assignments"],["people","People"]];
+  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["reports","Reports"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Assignments"],["people","People"],["reports","Reports"]];
   if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Assignments"],["people","People"],["audit","Audit Log"]];
-  if(role==="hr") return [["attendance","Attendance"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Assignments"],["people","People"],["attendance","Attendance"],["audit","Audit Log"]];
+  if(role==="hr") return [["attendance","Attendance"],["people","People"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Assignments"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"]];
   return [];
 }
 
@@ -301,12 +301,14 @@ async function routeView(){
   if(role==="area_supervisor"){
     if(tab==="queue") return areaQueueScreen();
     if(tab==="expenses_view") return expensesScreen(false);
+    if(tab==="reports") return reportsScreen();
   }
   if(role==="ops_manager"){
     if(tab==="operations") return operationsScreen();
     if(tab==="expenses") return expensesScreen(true);
     if(tab==="assignments") return assignmentsScreen();
     if(tab==="people") return peopleScreen();
+    if(tab==="reports") return reportsScreen();
   }
   if(role==="data_team"){
     if(tab==="corrections") return correctionsScreen();
@@ -315,7 +317,10 @@ async function routeView(){
     if(tab==="people") return peopleScreen();
     if(tab==="audit") return auditScreen();
   }
-  if(role==="hr" && tab==="attendance") return hrAttendanceScreen();
+  if(role==="hr"){
+    if(tab==="attendance") return hrAttendanceScreen();
+    if(tab==="people") return peopleScreen();
+  }
   if(role==="owner"){
     if(tab==="dashboard") return ownerDashboardScreen();
     if(tab==="expenses") return expensesScreen(true);
@@ -323,6 +328,7 @@ async function routeView(){
     if(tab==="people") return peopleScreen();
     if(tab==="attendance") return hrAttendanceScreen();
     if(tab==="audit") return auditScreen();
+    if(tab==="reports") return reportsScreen();
   }
   return "<div class='empty'>Nothing here.</div>";
 }
@@ -1044,24 +1050,41 @@ const ROLE_OPTIONS = [
   ["site_supervisor","Site Supervisor"],["area_supervisor","Area Supervisor"],["ops_manager","Operations Manager"],
   ["data_team","Data Team"],["hr","HR"],["owner","Owner"],
 ];
-function roleOptionsHtml(selected){
-  return ROLE_OPTIONS.map(([v,l])=>`<option value="${v}" ${selected===v?'selected':''}>${l}</option>`).join("");
+// Mirrors the server's rule in server.js (canManageUserRole): Owner can
+// manage anyone; Ops Manager and HR can manage everyone except Owner/Ops
+// Manager/HR; nobody else can manage people at all. This is purely a UI
+// convenience (hide buttons/options that would just get a 403 back) - the
+// server enforces the real rule regardless of what the UI shows.
+const LOCKED_ROLES_FOR_NON_OWNER = ["owner","ops_manager","hr"];
+function canManageRole(actorRole, targetRole){
+  if(actorRole==="owner") return true;
+  if(actorRole==="ops_manager" || actorRole==="hr") return !LOCKED_ROLES_FOR_NON_OWNER.includes(targetRole);
+  return false;
+}
+function roleOptionsHtml(selected, actorRole){
+  const opts = ROLE_OPTIONS.filter(([v])=> canManageRole(actorRole, v) || v===selected);
+  return opts.map(([v,l])=>`<option value="${v}" ${selected===v?'selected':''}>${l}</option>`).join("");
 }
 function siteOptionsHtml(selected){
   return `<option value="">-</option>` + meta.sites.map(s=>`<option value="${s.id}" ${selected===s.id?'selected':''}>${s.name}</option>`).join("");
 }
 async function peopleScreen(){
+  const myRole = currentUser.role;
+  const canEditAtAll = myRole==="owner" || myRole==="ops_manager" || myRole==="hr";
   const rows = meta.users.map(u=>{
     const inactive = u.active===false;
+    const canEditThisOne = canEditAtAll && canManageRole(myRole, u.role);
     return `<tr style="${inactive?'opacity:.5':''}">
       <td>${u.name}${inactive? ' <span class="badge low">INACTIVE</span>' : ''}</td>
       <td>${roleLabel(u.role)}</td>
       <td>${u.siteId? siteName(u.siteId): (u.supervises&&u.supervises.length? u.supervises.map(userName).join(", ") : "-")}</td>
       <td>
-        <button class="btn small secondary" onclick="startEditPerson('${u.id}')">Edit</button>
-        ${inactive
-          ? `<button class="btn small" onclick="setPersonActive('${u.id}', true)">Reactivate</button>`
-          : `<button class="btn small danger" onclick="setPersonActive('${u.id}', false)">Deactivate</button>`}
+        ${canEditThisOne ? `
+          <button class="btn small secondary" onclick="startEditPerson('${u.id}')">Edit</button>
+          ${inactive
+            ? `<button class="btn small" onclick="setPersonActive('${u.id}', true)">Reactivate</button>`
+            : `<button class="btn small danger" onclick="setPersonActive('${u.id}', false)">Deactivate</button>`}
+        ` : `<span class="muted">${canEditAtAll ? 'Only the Owner can edit this' : ''}</span>`}
       </td>
     </tr>`;
   }).join("");
@@ -1074,15 +1097,18 @@ async function peopleScreen(){
     <h2 class="section-title">Everyone with a login (${meta.users.length})</h2>
     <table><tr><th>Name</th><th>Role</th><th>Site / Supervises</th><th></th></tr>${rows}</table>
 
+    ${canEditAtAll ? `
     <form class="inline-form" onsubmit="return ${editing ? 'saveEditPerson(event)' : 'addPerson(event)'}">
       <div class="f"><label>Name</label><input type="text" id="newPersonName" value="${editing? editing.name : ''}" required /></div>
-      <div class="f"><label>Role</label><select id="newPersonRole">${roleOptionsHtml(editing? editing.role : 'site_supervisor')}</select></div>
+      <div class="f"><label>Role</label><select id="newPersonRole">${roleOptionsHtml(editing? editing.role : 'site_supervisor', myRole)}</select></div>
       <div class="f"><label>Site (if Site Supervisor)</label><select id="newPersonSite">${siteOptionsHtml(editing? editing.siteId : null)}</select></div>
       <div class="f"><label>${editing? 'New PIN (leave blank to keep current)' : 'PIN (4+ digits)'}</label><input type="text" inputmode="numeric" id="newPersonPin" ${editing? '' : 'required'} placeholder="${editing? 'unchanged':''}" /></div>
       <button class="btn small" type="submit">${editing? 'Save changes' : '+ Add person'}</button>
       ${editing? `<button type="button" class="btn small secondary" onclick="cancelEditPerson()">Cancel</button>` : ''}
     </form>
     <div class="muted" style="margin-top:6px;">${editing? `Editing ${editing.name} - changing PIN here immediately changes their login.` : "Give each person their PIN privately - this is what they'll use to sign in."}</div>
+    ${myRole!=="owner" ? `<div class="muted">Only the Owner can create or edit Owner, Operations Manager, or HR accounts.</div>` : ""}
+    ` : `<div class="muted" style="margin-top:6px;">You have view-only access to People - only the Owner, Operations Manager, and HR can make changes here.</div>`}
   </div>`;
 }
 async function addPerson(evt){
@@ -1208,6 +1234,71 @@ async function auditScreen(){
   return `<h1 class="page-title">Audit Log</h1><div class="card">${await auditTableHtml(200)}</div>`;
 }
 
+// ================= REPORTS (Owner, Operations Manager, Area Supervisor) =================
+// Every dataset here is scoped server-side to what this role can already
+// see elsewhere in the app - this screen just gives a way to pull it out as
+// a file instead of reading it on screen.
+const REPORT_DATASETS = [
+  {key:"records", label:"Daily Records", desc:"Checklist, breathalyzer, attendance and fuel/mileage for every vehicle, one row per day.", dateRange:true},
+  {key:"expenses", label:"Expenses", desc:"Every expense request (including temporary driver payments) with status and decision notes.", dateRange:true},
+  {key:"attendance", label:"Attendance", desc:"Supervisor clock-in/clock-out history with location and geofence status.", dateRange:true},
+  {key:"vehicles", label:"Vehicles", desc:"Current assignment, driver, client and mileage standard for every vehicle.", dateRange:false},
+  {key:"leaves", label:"Leave Requests", desc:"Driver leave requests and their approval status.", dateRange:true},
+  {key:"audit", label:"Audit Log", desc:"Every action taken in the app, who did it, and when.", dateRange:true, roles:["owner","ops_manager"]},
+];
+function reportsScreen(){
+  const myRole = currentUser.role;
+  const cards = REPORT_DATASETS.filter(d => !d.roles || d.roles.includes(myRole)).map(d => `
+    <div class="card">
+      <h2 class="section-title">${d.label}</h2>
+      <p class="muted">${d.desc}</p>
+      ${d.dateRange ? `
+      <div class="check-row">
+        <div class="label">Date range (optional)</div>
+        <div class="controls">
+          <input type="date" id="rep_from_${d.key}" style="width:140px" /> to
+          <input type="date" id="rep_to_${d.key}" style="width:140px" />
+        </div>
+      </div>` : ""}
+      <div class="flex-between" style="margin-top:8px;">
+        <span class="muted">Leave the dates blank to download everything.</span>
+        <div>
+          <button class="btn small secondary" onclick="downloadReport('${d.key}','csv')">Download CSV</button>
+          <button class="btn small" onclick="downloadReport('${d.key}','xlsx')">Download Excel</button>
+        </div>
+      </div>
+    </div>`).join("");
+  return `
+  <h1 class="page-title">Reports</h1>
+  <div class="banner">Download the data behind this app to analyze however you like - each file only includes what you're already able to see in the app.</div>
+  ${cards}`;
+}
+async function downloadReport(dataset, format){
+  const fromEl = document.getElementById(`rep_from_${dataset}`);
+  const toEl = document.getElementById(`rep_to_${dataset}`);
+  const params = new URLSearchParams({format});
+  if(fromEl && fromEl.value) params.set("from", fromEl.value);
+  if(toEl && toEl.value) params.set("to", toEl.value);
+  try{
+    const headers = {};
+    if(authToken) headers["Authorization"] = "Bearer " + authToken;
+    const res = await fetch(`${API}/reports/${dataset}?${params.toString()}`, {headers});
+    if(!res.ok){
+      const data = await res.json().catch(()=>({}));
+      throw new Error(data.error || `Download failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${dataset}_${todayStr()}.${format==='xlsx'?'xlsx':'csv'}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){ alert(e.message); }
+}
+
 // ================= OWNER DASHBOARD =================
 async function ownerDashboardScreen(){
   const recs = vehicles.map(v=>records[v.id]).filter(Boolean);
@@ -1232,10 +1323,24 @@ async function ownerDashboardScreen(){
   const byClient = {};
   vehicles.forEach(v=>{ const c = v.clientId? clientName(v.clientId) : "Internal / Fixed Route"; byClient[c] = (byClient[c]||0)+1; });
 
+  // Idle = hasn't moved today: either no record submitted at all yet, or a
+  // record was submitted but zero distance was logged.
+  const idleVehicles = vehicles.map(v=>{
+    const r = records[v.id];
+    if(!r) return {vehicle:v, reason:"Not submitted today"};
+    if(r.fuel && r.fuel.distance===0) return {vehicle:v, reason:"Zero distance logged today"};
+    return null;
+  }).filter(Boolean);
+
+  const tempDriverExpenses = expenses.filter(e=>e.category==="Temporary Driver");
+
   setTimeout(()=>drawCharts(approved,pending,rejected, breathFails, submitted-breathFails), 0);
 
   return `
   <h1 class="page-title">Owner Dashboard - Fleet Overview</h1>
+
+  ${await priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpenses)}
+
   <div class="grid cols-4">
     <div class="kpi good"><div class="num">${compliantPct}%</div><div class="label">Submitted vehicles fully compliant today</div></div>
     <div class="kpi warn"><div class="num">${pending}</div><div class="label">Pending verification</div></div>
@@ -1257,6 +1362,59 @@ async function ownerDashboardScreen(){
     <table><tr><th>Client</th><th>Vehicles</th></tr>${Object.entries(byClient).map(([c,n])=>`<tr><td>${c}</td><td>${n}</td></tr>`).join("")}</table>
   </div>
 
+  <div class="card"><h2 class="section-title">Full audit trail</h2>${await auditTableHtml(25)}</div>
+  ${await backupsCardHtml()}
+  `;
+}
+// The four things the owner asked to see first, above everything else on
+// the dashboard: fleet average mileage, document expiries, idle vehicles,
+// and temporary driver usage (who, for whom, which vehicle/company).
+async function priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpenses){
+  let mileage = {fleetAverage:0, perVehicle:[]};
+  try{ mileage = await api("/dashboard/mileage-summary"); }catch(e){}
+
+  const mileageRows = mileage.perVehicle.map(m=>`
+    <tr>
+      <td>${m.reg}</td>
+      <td>${m.avgMileage} km/l</td>
+      <td>${m.standardMileage!=null? m.standardMileage+' km/l' : '-'}</td>
+      <td>${m.belowStandard? '<span class="badge low">BELOW STANDARD</span>' : '<span class="badge ok">OK</span>'}</td>
+      <td>${m.fillCount}</td>
+    </tr>`).join("");
+
+  const idleRows = idleVehicles.map(({vehicle,reason})=>`
+    <tr>
+      <td>${vehicle.reg}</td>
+      <td>${vehicle.route || siteName(vehicle.siteId)}</td>
+      <td>${userName(vehicle.supervisorId)}</td>
+      <td>${reason}</td>
+    </tr>`).join("");
+
+  const tempRows = tempDriverExpenses.map(e=>{
+    const v = e.vehicleId ? vehicles.find(x=>x.id===e.vehicleId) : null;
+    return `<tr>
+      <td>${new Date(e.submittedAt).toLocaleDateString()}</td>
+      <td>${(e.tempDriver&&e.tempDriver.name) || '-'}</td>
+      <td>${(e.tempDriver&&e.tempDriver.phone) || '-'}</td>
+      <td>${(e.tempDriver&&e.tempDriver.upiId) || '-'}</td>
+      <td>₹${e.amount}</td>
+      <td>${v? v.reg : '-'}</td>
+      <td>${v? (v.route || siteName(v.siteId)) : '-'}</td>
+      <td>${v && v.clientId? clientName(v.clientId) : 'Internal / Fixed Route'}</td>
+      <td>${e.coveredForDriverName || '-'}</td>
+      <td><span class="badge ${e.status}">${e.status.toUpperCase()}</span></td>
+    </tr>`;
+  }).join("");
+
+  return `
+  <div class="card">
+    <h2 class="section-title">Fleet average mileage</h2>
+    <div class="kpi ${mileage.fleetAverage>0?'good':''}" style="max-width:220px;margin-bottom:10px;"><div class="num">${mileage.fleetAverage} km/l</div><div class="label">Fleet average (all-time, fuel fills only)</div></div>
+    <table><tr><th>Vehicle</th><th>Avg Mileage</th><th>Standard</th><th>Status</th><th>Fuel Fills</th></tr>
+    ${mileageRows || "<tr><td colspan='5' class='empty'>No fuel entries recorded yet.</td></tr>"}
+    </table>
+  </div>
+
   <div class="card">
     <h2 class="section-title">Document expiry alerts (&lt;15 days)</h2>
     <table><tr><th>Vehicle</th><th>Document</th><th>Status</th></tr>
@@ -1264,9 +1422,20 @@ async function ownerDashboardScreen(){
     </table>
   </div>
 
-  <div class="card"><h2 class="section-title">Full audit trail</h2>${await auditTableHtml(25)}</div>
-  ${await backupsCardHtml()}
-  `;
+  <div class="card">
+    <h2 class="section-title">Idle vehicles today (${idleVehicles.length})</h2>
+    <table><tr><th>Vehicle</th><th>Route/Site</th><th>Supervisor</th><th>Reason</th></tr>
+    ${idleRows || "<tr><td colspan='4' class='empty'>Every vehicle has moved today.</td></tr>"}
+    </table>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Temporary driver usage</h2>
+    <p class="muted">Every time a temporary driver was arranged and paid for an absent driver - who, how much, and which vehicle/company they covered.</p>
+    <table><tr><th>Date</th><th>Temp Driver</th><th>Phone</th><th>UPI</th><th>Amount</th><th>Vehicle</th><th>Route</th><th>Company</th><th>Covered For</th><th>Status</th></tr>
+    ${tempRows || "<tr><td colspan='10' class='empty'>No temporary drivers recorded yet.</td></tr>"}
+    </table>
+  </div>`;
 }
 async function backupsCardHtml(){
   let list = [];
@@ -1307,7 +1476,7 @@ Object.assign(window, {
   selectLoginUser, doLogin, doLogout, switchTab, goto, draftSet, updateBreathalyzer, startPhotoCapture,
   updateDoc, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, addDriver, addPerson, correctOdometer, setAttDate, captureBillPhoto, submitExpense, decideExpense,
-  startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, saveOdometer, restoreBackup,
+  startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, saveOdometer, restoreBackup, downloadReport,
 });
 
 boot();

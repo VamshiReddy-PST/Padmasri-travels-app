@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "express": "^4.19.2",
-    "mongodb": "^6.9.0"
+    "mongodb": "^6.9.0",
+    "xlsx": "^0.18.5"
   }
 }

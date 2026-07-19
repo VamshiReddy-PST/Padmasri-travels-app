@@ -23,6 +23,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { MongoClient } = require("mongodb");
+const XLSX = require("xlsx");
 
 const DATA_DIR = path.join(__dirname, "data");
 const DATA_FILE = path.join(DATA_DIR, "data.json");
@@ -137,6 +138,18 @@ function nowIso() {
 }
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
+}
+function roleLabelServer(role) {
+  return (
+    {
+      site_supervisor: "Site Supervisor",
+      area_supervisor: "Area Supervisor",
+      ops_manager: "Operations Manager",
+      data_team: "Data Team",
+      owner: "Owner",
+      hr: "HR",
+    }[role] || role
+  );
 }
 
 async function audit(user, action, detail) {
@@ -296,14 +309,34 @@ app.get("/api/meta", requireAuth, (req, res) => {
 const ADMIN_ROLES = ["ops_manager", "owner", "data_team"];
 const VALID_ROLES = ["site_supervisor", "area_supervisor", "ops_manager", "data_team", "owner", "hr"];
 
+// People-management permission tiers:
+// - Owner can create/edit anyone, including other Owner/Ops Manager/HR accounts.
+// - Ops Manager and HR can create/edit everyone EXCEPT Owner, Ops Manager, and
+//   HR accounts (so they can't touch their own tier or promote themselves).
+// - Data Team can view the People screen (needed for corrections/audit
+//   context) but cannot create or edit anyone - enforced by simply not being
+//   in PEOPLE_EDITOR_ROLES below.
+// - Site/Area Supervisors have no People access at all (no route, no tab).
+const PEOPLE_EDITOR_ROLES = ["ops_manager", "owner", "hr"];
+const PEOPLE_VIEWER_ROLES = ["ops_manager", "owner", "hr", "data_team"];
+const LOCKED_ROLES_FOR_NON_OWNER = ["owner", "ops_manager", "hr"];
+function canManageUserRole(actorRole, targetRole) {
+  if (actorRole === "owner") return true;
+  if (actorRole === "ops_manager" || actorRole === "hr") return !LOCKED_ROLES_FOR_NON_OWNER.includes(targetRole);
+  return false;
+}
+
 app.post(
   "/api/users",
   requireAuth,
-  requireRole(...ADMIN_ROLES),
+  requireRole(...PEOPLE_EDITOR_ROLES),
   h(async (req, res) => {
     const { name, role, pin, siteId, supervises } = req.body || {};
     if (!name || !VALID_ROLES.includes(role) || !pin) {
       return res.status(400).json({ error: "name, role and pin are required." });
+    }
+    if (!canManageUserRole(req.user.role, role)) {
+      return res.status(403).json({ error: `Only the Owner can create ${roleLabelServer(role)} accounts.` });
     }
     const user = {
       id: uid("u"),
@@ -323,10 +356,13 @@ app.post(
 app.patch(
   "/api/users/:id",
   requireAuth,
-  requireRole(...ADMIN_ROLES),
+  requireRole(...PEOPLE_EDITOR_ROLES),
   h(async (req, res) => {
     const user = db.users.find((u) => u.id === req.params.id);
     if (!user) return res.status(404).json({ error: "User not found." });
+    if (!canManageUserRole(req.user.role, user.role)) {
+      return res.status(403).json({ error: `Only the Owner can edit ${roleLabelServer(user.role)} accounts.` });
+    }
     const before = { name: user.name, role: user.role, siteId: user.siteId, supervises: user.supervises, active: user.active };
 
     // Whitelisted fields only - and PIN is left alone unless a new non-empty
@@ -336,6 +372,10 @@ app.patch(
     if (name !== undefined && String(name).trim()) user.name = String(name).trim();
     if (role !== undefined) {
       if (!VALID_ROLES.includes(role)) return res.status(400).json({ error: "Unknown role." });
+      // Prevent a non-Owner from promoting someone INTO a locked tier either.
+      if (!canManageUserRole(req.user.role, role)) {
+        return res.status(403).json({ error: `Only the Owner can set someone to ${roleLabelServer(role)}.` });
+      }
       user.role = role;
     }
     if (pin !== undefined && String(pin).trim()) user.pin = String(pin).trim();
@@ -878,11 +918,236 @@ app.get("/api/attendance/me", requireAuth, (req, res) => {
   res.json(db.supervisorAttendance.filter((r) => r.userId === req.user.id).slice(0, 60));
 });
 
+// ---------- OWNER DASHBOARD - fleet average mileage ----------
+// Computed from every daily record ever submitted (not just today's), since
+// a single day's fuel fills are too few to mean much - this is a proper
+// running average per vehicle, worst-performing first, plus a fleet-wide
+// figure. Records are never deleted, so this covers the vehicle's whole
+// history in the app.
+app.get("/api/dashboard/mileage-summary", requireAuth, requireRole("owner", "ops_manager"), (req, res) => {
+  const perVehicle = {};
+  Object.values(db.records).forEach((r) => {
+    if (!r.fuel || !(r.fuel.litres > 0) || !(r.fuel.mileage > 0)) return;
+    if (!perVehicle[r.vehicleId]) perVehicle[r.vehicleId] = { totalMileage: 0, fillCount: 0 };
+    perVehicle[r.vehicleId].totalMileage += r.fuel.mileage;
+    perVehicle[r.vehicleId].fillCount += 1;
+  });
+  const rows = Object.entries(perVehicle).map(([vehicleId, agg]) => {
+    const vehicle = db.vehicles.find((v) => v.id === vehicleId);
+    const avgMileage = Math.round((agg.totalMileage / agg.fillCount) * 10) / 10;
+    return {
+      vehicleId,
+      reg: vehicle ? vehicle.reg : vehicleId,
+      avgMileage,
+      standardMileage: vehicle ? vehicle.standardMileage : null,
+      fillCount: agg.fillCount,
+      belowStandard: vehicle ? avgMileage < vehicle.standardMileage : false,
+    };
+  });
+  rows.sort((a, b) => a.avgMileage - b.avgMileage);
+  const fleetAverage = rows.length ? Math.round((rows.reduce((s, r) => s + r.avgMileage, 0) / rows.length) * 10) / 10 : 0;
+  res.json({ fleetAverage, perVehicle: rows });
+});
+
 // ---------- AUDIT ----------
 app.get("/api/audit", requireAuth, requireRole("owner", "data_team", "hr", "ops_manager"), (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 100, 1000);
   res.json(db.auditLog.slice(0, limit));
 });
+
+// ---------- REPORTS (Owner, Operations Manager, Area Supervisor) ----------
+// Downloadable CSV/Excel exports so these three roles can pull the raw data
+// out and analyze it however they like, outside the app. Each dataset is
+// scoped to what that role can already see elsewhere in the app - an Area
+// Supervisor only gets their own team's rows, never the whole fleet's.
+function csvEscape(v) {
+  if (v === null || v === undefined) return "";
+  const s = String(v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function toCsv(rows, columns) {
+  const header = columns.map((c) => csvEscape(c.label)).join(",");
+  const lines = rows.map((r) => columns.map((c) => csvEscape(typeof c.key === "function" ? c.key(r) : r[c.key])).join(","));
+  return [header, ...lines].join("\r\n");
+}
+function toXlsxBuffer(rows, columns, sheetName) {
+  const data = rows.map((r) => {
+    const obj = {};
+    columns.forEach((c) => {
+      obj[c.label] = typeof c.key === "function" ? c.key(r) : r[c.key];
+    });
+    return obj;
+  });
+  const ws = XLSX.utils.json_to_sheet(data.length ? data : [{}]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, (sheetName || "Sheet1").slice(0, 31));
+  return XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+}
+function vehicleReg(id) {
+  const v = db.vehicles.find((x) => x.id === id);
+  return v ? v.reg : id || "";
+}
+function driverNameServer(id) {
+  const d = db.drivers.find((x) => x.id === id);
+  return d ? d.name : "";
+}
+function userNameServer(id) {
+  const u = db.users.find((x) => x.id === id);
+  return u ? u.name : "";
+}
+function clientNameServer(id) {
+  const c = db.clients.find((x) => x.id === id);
+  return c ? c.name : "";
+}
+function siteNameServer(id) {
+  const s = db.sites.find((x) => x.id === id);
+  return s ? s.name : "";
+}
+
+const REPORT_ROLES = ["owner", "ops_manager", "area_supervisor"];
+
+function buildReport(dataset, user, query) {
+  const from = query.from || null;
+  const to = query.to || null;
+  const inRange = (dateStr) => {
+    if (!dateStr) return true;
+    if (from && dateStr < from) return false;
+    if (to && dateStr > to) return false;
+    return true;
+  };
+
+  if (dataset === "records") {
+    const visibleIds = new Set(visibleVehiclesFor(user).map((v) => v.id));
+    const rows = Object.values(db.records).filter((r) => visibleIds.has(r.vehicleId) && inRange(r.date));
+    const columns = [
+      { label: "Date", key: "date" },
+      { label: "Vehicle", key: (r) => vehicleReg(r.vehicleId) },
+      { label: "Attendance", key: (r) => (r.attendance || {}).status || "" },
+      { label: "Uniform", key: (r) => (r.attendance || {}).uniform || "" },
+      { label: "Breathalyzer Result", key: (r) => (r.breathalyzer || {}).result || "" },
+      { label: "Breathalyzer Reading", key: (r) => (r.breathalyzer || {}).reading || "" },
+      { label: "Odometer", key: (r) => (r.fuel || {}).odometer ?? "" },
+      { label: "Distance (km)", key: (r) => (r.fuel || {}).distance ?? "" },
+      { label: "Litres Filled", key: (r) => (r.fuel || {}).litres ?? "" },
+      { label: "Mileage (km/l)", key: (r) => (r.fuel || {}).mileage ?? "" },
+      { label: "Below Standard Mileage", key: (r) => ((r.fuel || {}).belowStandard ? "YES" : "") },
+      { label: "Fuel Cost", key: (r) => (r.fuel || {}).totalCost ?? "" },
+      { label: "Verification Status", key: (r) => (r.verification || {}).status || "" },
+      { label: "Verification Comment", key: (r) => (r.verification || {}).comment || "" },
+      { label: "Submitted At", key: "submittedAt" },
+    ];
+    return { rows, columns };
+  }
+
+  if (dataset === "expenses") {
+    const rows = visibleExpensesFor(user).filter((e) => inRange((e.submittedAt || "").slice(0, 10)));
+    const columns = [
+      { label: "Date", key: (e) => (e.submittedAt || "").slice(0, 10) },
+      { label: "Supervisor", key: "userName" },
+      { label: "Category", key: "category" },
+      { label: "Amount", key: "amount" },
+      { label: "Description", key: "description" },
+      { label: "Vehicle", key: (e) => (e.vehicleId ? vehicleReg(e.vehicleId) : "") },
+      { label: "Status", key: "status" },
+      { label: "Decision Comment", key: "comment" },
+      { label: "Covered For Driver", key: (e) => e.coveredForDriverName || "" },
+    ];
+    return { rows, columns };
+  }
+
+  if (dataset === "attendance") {
+    let rows = db.supervisorAttendance.filter((a) => inRange(a.date));
+    if (user.role === "area_supervisor") {
+      const mine = new Set(user.supervises || []);
+      rows = rows.filter((a) => mine.has(a.userId));
+    }
+    const columns = [
+      { label: "Date", key: "date" },
+      { label: "Name", key: "userName" },
+      { label: "Role", key: "role" },
+      { label: "Type", key: (a) => (a.type === "clockin" ? "Clock In" : "Clock Out") },
+      { label: "Time", key: (a) => new Date(a.ts).toLocaleTimeString() },
+      { label: "Site", key: (a) => a.siteName || "" },
+      { label: "Distance From Site (m)", key: "distanceMeters" },
+      { label: "Within Geofence", key: (a) => (a.withinGeofence == null ? "n/a" : a.withinGeofence ? "Yes" : "No") },
+    ];
+    return { rows, columns };
+  }
+
+  if (dataset === "vehicles") {
+    const rows = visibleVehiclesFor(user);
+    const columns = [
+      { label: "Registration", key: "reg" },
+      { label: "Route", key: "route" },
+      { label: "Usage", key: "usage" },
+      { label: "Client", key: (v) => (v.clientId ? clientNameServer(v.clientId) : "") },
+      { label: "Site", key: (v) => (v.siteId ? siteNameServer(v.siteId) : "") },
+      { label: "Supervisor", key: (v) => (v.supervisorId ? userNameServer(v.supervisorId) : "") },
+      { label: "Driver", key: (v) => (v.driverId ? driverNameServer(v.driverId) : "") },
+      { label: "Driver Since", key: "driverAssignedDate" },
+      { label: "Standard Mileage", key: "standardMileage" },
+      { label: "Last Odometer", key: "lastOdometer" },
+    ];
+    return { rows, columns };
+  }
+
+  if (dataset === "leaves") {
+    const rows = db.leaves.filter((l) => inRange(l.start));
+    const columns = [
+      { label: "Driver", key: "driver" },
+      { label: "Type", key: "type" },
+      { label: "Start", key: "start" },
+      { label: "End", key: "end" },
+      { label: "Status", key: "status" },
+    ];
+    return { rows, columns };
+  }
+
+  if (dataset === "audit") {
+    if (!["owner", "ops_manager"].includes(user.role)) {
+      const err = new Error("Only the Owner and Operations Manager can download the audit log.");
+      err.status = 403;
+      throw err;
+    }
+    const rows = db.auditLog.filter((a) => inRange((a.ts || "").slice(0, 10)));
+    const columns = [
+      { label: "Time", key: "ts" },
+      { label: "User", key: "userName" },
+      { label: "Action", key: "action" },
+      { label: "Detail", key: "detail" },
+    ];
+    return { rows, columns };
+  }
+
+  const err = new Error("Unknown report.");
+  err.status = 400;
+  throw err;
+}
+
+app.get(
+  "/api/reports/:dataset",
+  requireAuth,
+  requireRole(...REPORT_ROLES),
+  h(async (req, res) => {
+    let result;
+    try {
+      result = buildReport(req.params.dataset, req.user, req.query);
+    } catch (err) {
+      return res.status(err.status || 400).json({ error: err.message });
+    }
+    const format = (req.query.format || "csv").toLowerCase() === "xlsx" ? "xlsx" : "csv";
+    const filename = `${req.params.dataset}_${todayStr()}.${format}`;
+    if (format === "xlsx") {
+      const buf = toXlsxBuffer(result.rows, result.columns, req.params.dataset);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      return res.send(buf);
+    }
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(toCsv(result.rows, result.columns));
+  })
+);
 
 // ---------- BACKUPS (Owner only) ----------
 // A rolling 30-day history of full-data snapshots, taken automatically once
