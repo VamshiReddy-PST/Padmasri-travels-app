@@ -1,6 +1,9 @@
 node_modules/
 data/data.json
+data/data.json.*
 uploads/
 .DS_Store
 backup/config.json
 backup/history/
+ui_test_*.js
+ui_test_*.unused.*

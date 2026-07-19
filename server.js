@@ -154,7 +154,18 @@ function backfillDefaults() {
     if (d.dateOfJoining === undefined) d.dateOfJoining = "";
     if (d.drivingLevel === undefined) d.drivingLevel = "";
     if (d.performanceScore === undefined) d.performanceScore = null;
+    // Driver login is deliberately dead simple - mobile number + a 4-digit
+    // PIN, defaulting to 1234 for everyone and never forced to change (per
+    // the Owner's explicit instruction - drivers aren't expected to know
+    // what a "strong password" even means). This is NOT the same security
+    // bar as staff's hashed/complex passwords - it's an intentional
+    // trade-off for a low-friction, low-literacy login.
+    if (d.pin === undefined) d.pin = "1234";
   });
+  if (!Array.isArray(db.driverShifts)) db.driverShifts = [];
+  if (!Array.isArray(db.trips)) db.trips = [];
+  if (!Array.isArray(db.driverLocationLogs)) db.driverLocationLogs = [];
+  if (!db.payrollApprovals) db.payrollApprovals = {};
 }
 
 // MongoDB Atlas's free (M0) tier doesn't include automatic cloud backups -
@@ -374,6 +385,14 @@ function publicUser(u) {
   const { passwordHash, passwordHistory, ...rest } = u;
   return rest;
 }
+// A driver's `pin` is a real login credential for the driver app now (not
+// just a cosmetic field), so it's stripped out of anything the staff app
+// shows - same idea as publicUser() hiding passwordHash above.
+function publicDriverForStaff(d) {
+  if (!d) return null;
+  const { pin, ...rest } = d;
+  return rest;
+}
 
 // A handful of routes stay reachable even while a user is mid-forced-
 // password-change (mustChangePassword=true) - just enough for the frontend
@@ -489,7 +508,7 @@ app.get("/api/meta", requireAuth, (req, res) => {
   res.json({
     clients: db.clients,
     sites: db.sites,
-    drivers: db.drivers,
+    drivers: db.drivers.map(publicDriverForStaff),
     users: db.users.map(publicUser),
     me: publicUser(req.user),
   });
@@ -792,10 +811,13 @@ app.post(
       dateOfJoining: dateOfJoining || "",
       drivingLevel: drivingLevel || "",
       performanceScore: null,
+      // Driver app login - mobile number + this PIN, defaulting to 1234
+      // and never forced to change (see backfillDefaults for why).
+      pin: "1234",
     };
     db.drivers.push(driver);
     await audit(req.user, "create_driver", `${req.user.name} added driver ${name}`);
-    res.json(driver);
+    res.json(publicDriverForStaff(driver));
   })
 );
 
@@ -840,7 +862,23 @@ app.patch(
     if (changed) {
       await audit(req.user, "update_driver", `${req.user.name} updated driver ${driver.name} (${driver.id})`);
     }
-    res.json(driver);
+    res.json(publicDriverForStaff(driver));
+  })
+);
+
+// Safety valve if a driver forgets their PIN or it's been fumbled -
+// resets it straight back to the default (1234), same as a brand new
+// driver. HR/Owner only.
+app.patch(
+  "/api/drivers/:id/reset-pin",
+  requireAuth,
+  requireRole("owner", "hr"),
+  h(async (req, res) => {
+    const driver = db.drivers.find((d) => d.id === req.params.id);
+    if (!driver) return res.status(404).json({ error: "Driver not found." });
+    driver.pin = "1234";
+    await audit(req.user, "reset_driver_pin", `${req.user.name} reset the app PIN for driver ${driver.name} (${driver.id}) back to the default`);
+    res.json(publicDriverForStaff(driver));
   })
 );
 
@@ -2068,6 +2106,418 @@ app.get("/api/payroll/payslip/:personType/:personId/download", requireAuth, (req
   ];
   sendDownload(res, rows, columns, `payslip_${name.replace(/\s+/g, "_")}_${month}`, req.query.format);
 });
+
+// HR "approves" a month's payslip for a person, which snapshots the
+// computed numbers at that moment. Drivers only ever see this approved
+// snapshot in the driver app (never the live-computed figures staff see
+// when viewing their own payslip), so a driver's downloadable payslip
+// can't change out from under them after HR has signed off on it.
+function payrollApprovalKey(personType, personId, month) {
+  return `${personType}:${personId}:${month}`;
+}
+app.post(
+  "/api/payroll/approve",
+  requireAuth,
+  requireRole("hr"),
+  h(async (req, res) => {
+    const { personType, personId, month } = req.body || {};
+    if (!["user", "driver"].includes(personType) || !personExists(personType, personId)) {
+      return res.status(400).json({ error: "Person not found." });
+    }
+    if (!/^\d{4}-\d{2}$/.test(month || "")) return res.status(400).json({ error: "A valid month (YYYY-MM) is required." });
+    const payslip = computePayslip(personType, personId, month);
+    const { name, subLabel } = personLabel(personType, personId);
+    const approval = {
+      ...payslip,
+      name,
+      subLabel,
+      approvedBy: req.user.id,
+      approvedByName: req.user.name,
+      approvedAt: nowIso(),
+    };
+    db.payrollApprovals[payrollApprovalKey(personType, personId, month)] = approval;
+    await audit(req.user, "approve_payslip", `${req.user.name} approved the ${month} payslip for ${name}`);
+    res.json(approval);
+  })
+);
+app.get("/api/payroll/approval/:personType/:personId", requireAuth, (req, res) => {
+  const { personType, personId } = req.params;
+  if (!["user", "driver"].includes(personType) || !personExists(personType, personId)) {
+    return res.status(404).json({ error: "Person not found." });
+  }
+  if (!canViewPayroll(req.user, personType, personId)) {
+    return res.status(403).json({ error: "You don't have access to this person's payroll." });
+  }
+  const month = /^\d{4}-\d{2}$/.test(req.query.month || "") ? req.query.month : nowIso().slice(0, 7);
+  res.json(db.payrollApprovals[payrollApprovalKey(personType, personId, month)] || null);
+});
+
+// ---------- TRIPS ----------
+// Trips are allocated to a driver by whichever Site Supervisor runs that
+// driver's vehicle (Owner can also allocate, as an administrative
+// override, same as Owner's override on vehicle Assignments elsewhere).
+const TRIP_ASSIGN_ROLES = ["site_supervisor", "owner"];
+function vehiclesForTripAssignment(user) {
+  // What vehicles (and therefore drivers) this user is allowed to allocate
+  // trips for - identical scoping rule to Assignments/visibleVehiclesFor.
+  return visibleVehiclesFor(user);
+}
+app.get(
+  "/api/trips",
+  requireAuth,
+  h(async (req, res) => {
+    let rows;
+    if (req.user.role === "site_supervisor") {
+      const vehicleIds = new Set(vehiclesForTripAssignment(req.user).map((v) => v.id));
+      rows = db.trips.filter((t) => vehicleIds.has(t.vehicleId));
+    } else if (["owner", "ops_manager", "hr", "area_supervisor"].includes(req.user.role)) {
+      rows = db.trips.slice();
+    } else {
+      rows = [];
+    }
+    rows = rows
+      .slice()
+      .sort((a, b) => (b.date + (b.scheduledTime || "")).localeCompare(a.date + (a.scheduledTime || "")));
+    res.json(rows);
+  })
+);
+app.post(
+  "/api/trips",
+  requireAuth,
+  requireRole(...TRIP_ASSIGN_ROLES),
+  h(async (req, res) => {
+    const { vehicleId, driverId, date, scheduledTime, description } = req.body || {};
+    const vehicle = db.vehicles.find((v) => v.id === vehicleId);
+    if (!vehicle) return res.status(400).json({ error: "Vehicle not found." });
+    if (req.user.role === "site_supervisor" && vehicle.supervisorId !== req.user.id) {
+      return res.status(403).json({ error: "You can only allocate trips for your own vehicles." });
+    }
+    const useDriverId = driverId || vehicle.driverId;
+    if (!useDriverId || !db.drivers.some((d) => d.id === useDriverId)) {
+      return res.status(400).json({ error: "This vehicle doesn't have a driver assigned to allocate a trip to." });
+    }
+    if (!date) return res.status(400).json({ error: "A trip date is required." });
+    const trip = {
+      id: uid("trip"),
+      vehicleId,
+      driverId: useDriverId,
+      date,
+      scheduledTime: scheduledTime || "",
+      description: description || "",
+      status: "upcoming",
+      createdBy: req.user.id,
+      createdByName: req.user.name,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+    db.trips.push(trip);
+    await audit(req.user, "create_trip", `${req.user.name} allocated a trip on ${date} to driver ${useDriverId} (${vehicle.reg})`);
+    res.json(trip);
+  })
+);
+app.patch(
+  "/api/trips/:id",
+  requireAuth,
+  requireRole(...TRIP_ASSIGN_ROLES),
+  h(async (req, res) => {
+    const trip = db.trips.find((t) => t.id === req.params.id);
+    if (!trip) return res.status(404).json({ error: "Trip not found." });
+    const vehicle = db.vehicles.find((v) => v.id === trip.vehicleId);
+    if (req.user.role === "site_supervisor" && (!vehicle || vehicle.supervisorId !== req.user.id)) {
+      return res.status(403).json({ error: "You can only manage trips for your own vehicles." });
+    }
+    const { date, scheduledTime, description, status } = req.body || {};
+    if (date !== undefined) trip.date = date;
+    if (scheduledTime !== undefined) trip.scheduledTime = scheduledTime;
+    if (description !== undefined) trip.description = description;
+    if (status !== undefined) {
+      if (!["upcoming", "in_progress", "completed", "cancelled"].includes(status)) {
+        return res.status(400).json({ error: "Invalid trip status." });
+      }
+      trip.status = status;
+    }
+    trip.updatedAt = nowIso();
+    await audit(req.user, "update_trip", `${req.user.name} updated trip ${trip.id}`);
+    res.json(trip);
+  })
+);
+app.delete(
+  "/api/trips/:id",
+  requireAuth,
+  requireRole(...TRIP_ASSIGN_ROLES),
+  h(async (req, res) => {
+    const trip = db.trips.find((t) => t.id === req.params.id);
+    if (!trip) return res.status(404).json({ error: "Trip not found." });
+    const vehicle = db.vehicles.find((v) => v.id === trip.vehicleId);
+    if (req.user.role === "site_supervisor" && (!vehicle || vehicle.supervisorId !== req.user.id)) {
+      return res.status(403).json({ error: "You can only manage trips for your own vehicles." });
+    }
+    db.trips = db.trips.filter((t) => t.id !== trip.id);
+    await audit(req.user, "delete_trip", `${req.user.name} removed trip ${trip.id}`);
+    res.json({ ok: true });
+  })
+);
+
+// ---------- DRIVER AUTH (mobile app) ----------
+// A completely separate, deliberately simple login for drivers - mobile
+// number + a 4-digit PIN (default 1234, never forced to change, see
+// backfillDefaults for why). This never touches the staff `sessions` map
+// or `db.users` at all; drivers get their own session map and their own
+// req.driver, parallel to (but independent from) requireAuth/req.user.
+const driverSessions = new Map(); // token -> driverId
+const DRIVER_ODOMETER_WINDOW_MS = 10 * 60 * 1000; // 10 minutes to enter the opening odometer reading or the shift auto-closes
+const DRIVER_LOCATION_LOG_CAP = 50000; // oldest pings drop off so this file doesn't grow forever
+
+function publicDriverAuth(d) {
+  if (!d) return null;
+  const { pin, ...rest } = d;
+  return rest;
+}
+// The most recent shift for this driver that hasn't been fully closed out -
+// i.e. what "currently logged in" means for a driver.
+function currentDriverShift(driverId) {
+  for (let i = db.driverShifts.length - 1; i >= 0; i--) {
+    const s = db.driverShifts[i];
+    if (s.driverId === driverId && s.status !== "closed") return s;
+  }
+  return null;
+}
+// Lazily expires a shift that's been sitting in "awaiting_odometer" for
+// more than 10 minutes - checked on every relevant request rather than via
+// a server-side timer, same pattern as the staff forced-password-change
+// gate elsewhere in this file.
+function expireStaleShift(shift) {
+  if (shift && shift.status === "awaiting_odometer") {
+    const ageMs = Date.now() - new Date(shift.loginAt).getTime();
+    if (ageMs > DRIVER_ODOMETER_WINDOW_MS) {
+      shift.status = "closed";
+      shift.autoClosedReason = "Logged out automatically - the opening odometer reading wasn't entered within 10 minutes of login.";
+      shift.closedAt = nowIso();
+      return true;
+    }
+  }
+  return false;
+}
+function driverAuth(req, res, next) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  const driverId = token && driverSessions.get(token);
+  const driver = driverId && db.drivers.find((d) => d.id === driverId && d.active !== false);
+  if (!driver) return res.status(401).json({ error: "Not signed in. Please log in again." });
+  req.driver = driver;
+  req.driverToken = token;
+  next();
+}
+
+app.post(
+  "/api/driver-auth/login",
+  h(async (req, res) => {
+    const { phone, pin, lat, lng } = req.body || {};
+    if (!phone || !pin) return res.status(400).json({ error: "Mobile number and PIN are required." });
+    const phoneNorm = String(phone).trim();
+    const driver = db.drivers.find((d) => d.active !== false && d.phone && d.phone === phoneNorm);
+    if (!driver || String(driver.pin || "1234") !== String(pin).trim()) {
+      return res.status(401).json({ error: "Incorrect mobile number or PIN." });
+    }
+    let shift = currentDriverShift(driver.id);
+    if (shift) expireStaleShift(shift);
+    if (!shift || shift.status === "closed") {
+      shift = {
+        id: uid("shift"),
+        driverId: driver.id,
+        loginAt: nowIso(),
+        loginLat: typeof lat === "number" ? lat : null,
+        loginLng: typeof lng === "number" ? lng : null,
+        status: "awaiting_odometer",
+        odometerOpen: null,
+        odometerOpenPhoto: null,
+        odometerOpenAt: null,
+        odometerClose: null,
+        odometerClosePhoto: null,
+        odometerCloseAt: null,
+        logoutAt: null,
+        logoutLat: null,
+        logoutLng: null,
+        autoClosedReason: null,
+      };
+      db.driverShifts.push(shift);
+    }
+    const token = uid("dtok");
+    driverSessions.set(token, driver.id);
+    await audit({ id: driver.id, name: driver.name }, "driver_login", `Driver ${driver.name} logged in via the driver app`);
+    res.json({ token, driver: publicDriverAuth(driver), shift });
+  })
+);
+
+app.get(
+  "/api/driver-auth/me",
+  driverAuth,
+  h(async (req, res) => {
+    let shift = currentDriverShift(req.driver.id);
+    const expired = expireStaleShift(shift);
+    if (expired) await save();
+    res.json({ driver: publicDriverAuth(req.driver), shift: shift && shift.status !== "closed" ? shift : null });
+  })
+);
+
+app.post(
+  "/api/driver-auth/odometer-open",
+  driverAuth,
+  h(async (req, res) => {
+    const shift = currentDriverShift(req.driver.id);
+    if (!shift) return res.status(400).json({ error: "No active login found. Please log in again." });
+    if (expireStaleShift(shift)) {
+      await save();
+      return res.status(400).json({ error: shift.autoClosedReason });
+    }
+    if (shift.status !== "awaiting_odometer") {
+      return res.status(400).json({ error: "The opening odometer reading has already been recorded for this shift." });
+    }
+    const { odometer, photo, lat, lng } = req.body || {};
+    if (odometer === undefined || odometer === null || isNaN(Number(odometer))) {
+      return res.status(400).json({ error: "Opening odometer reading is required." });
+    }
+    if (!photo) return res.status(400).json({ error: "A photo of the opening odometer reading is required." });
+    const photoUrl = await savePhoto(photo, "driver_odo_open_" + req.driver.id);
+    if (!photoUrl) return res.status(400).json({ error: "That photo couldn't be saved - please try again." });
+    shift.odometerOpen = Number(odometer);
+    shift.odometerOpenPhoto = photoUrl;
+    shift.odometerOpenAt = nowIso();
+    shift.odometerOpenLat = typeof lat === "number" ? lat : null;
+    shift.odometerOpenLng = typeof lng === "number" ? lng : null;
+    shift.status = "on_trip";
+    await audit({ id: req.driver.id, name: req.driver.name }, "driver_odometer_open", `Driver ${req.driver.name} recorded opening odometer ${shift.odometerOpen}`);
+    res.json(shift);
+  })
+);
+
+app.get(
+  "/api/driver-auth/trips",
+  driverAuth,
+  h(async (req, res) => {
+    const rows = db.trips
+      .filter((t) => t.driverId === req.driver.id && t.status !== "cancelled")
+      .sort((a, b) => (a.date + (a.scheduledTime || "")).localeCompare(b.date + (b.scheduledTime || "")));
+    res.json({
+      upcoming: rows.filter((t) => t.status === "upcoming" || t.status === "in_progress"),
+      completed: rows.filter((t) => t.status === "completed").slice(-10).reverse(),
+    });
+  })
+);
+
+app.post(
+  "/api/driver-auth/trips/:id/status",
+  driverAuth,
+  h(async (req, res) => {
+    const trip = db.trips.find((t) => t.id === req.params.id && t.driverId === req.driver.id);
+    if (!trip) return res.status(404).json({ error: "Trip not found." });
+    const { status } = req.body || {};
+    if (!["in_progress", "completed"].includes(status)) return res.status(400).json({ error: "Invalid trip status." });
+    trip.status = status;
+    trip.updatedAt = nowIso();
+    await audit({ id: req.driver.id, name: req.driver.name }, "driver_trip_status", `Driver ${req.driver.name} marked trip ${trip.id} as ${status}`);
+    res.json(trip);
+  })
+);
+
+app.post(
+  "/api/driver-auth/odometer-close",
+  driverAuth,
+  h(async (req, res) => {
+    const shift = currentDriverShift(req.driver.id);
+    if (!shift) return res.status(400).json({ error: "No active login found. Please log in again." });
+    if (shift.status !== "on_trip") {
+      return res.status(400).json({ error: "Nothing to close yet - make sure you've entered your opening odometer reading first." });
+    }
+    const { odometer, photo, lat, lng } = req.body || {};
+    if (odometer === undefined || odometer === null || isNaN(Number(odometer))) {
+      return res.status(400).json({ error: "Closing odometer reading is required." });
+    }
+    if (Number(odometer) < Number(shift.odometerOpen)) {
+      return res.status(400).json({ error: "Closing odometer reading can't be less than the opening reading." });
+    }
+    if (!photo) return res.status(400).json({ error: "A photo of the closing odometer reading is required." });
+    const photoUrl = await savePhoto(photo, "driver_odo_close_" + req.driver.id);
+    if (!photoUrl) return res.status(400).json({ error: "That photo couldn't be saved - please try again." });
+    shift.odometerClose = Number(odometer);
+    shift.odometerClosePhoto = photoUrl;
+    shift.odometerCloseAt = nowIso();
+    shift.odometerCloseLat = typeof lat === "number" ? lat : null;
+    shift.odometerCloseLng = typeof lng === "number" ? lng : null;
+    shift.status = "ready_to_logout";
+    await audit({ id: req.driver.id, name: req.driver.name }, "driver_odometer_close", `Driver ${req.driver.name} recorded closing odometer ${shift.odometerClose}`);
+    res.json(shift);
+  })
+);
+
+app.post(
+  "/api/driver-auth/logout",
+  driverAuth,
+  h(async (req, res) => {
+    const shift = currentDriverShift(req.driver.id);
+    if (!shift || shift.status !== "ready_to_logout") {
+      return res.status(400).json({ error: "You must enter your closing odometer reading (with a photo) before you can log out." });
+    }
+    const { lat, lng } = req.body || {};
+    shift.status = "closed";
+    shift.logoutAt = nowIso();
+    shift.logoutLat = typeof lat === "number" ? lat : null;
+    shift.logoutLng = typeof lng === "number" ? lng : null;
+    driverSessions.delete(req.driverToken);
+    await audit({ id: req.driver.id, name: req.driver.name }, "driver_logout", `Driver ${req.driver.name} logged out of the driver app`);
+    res.json({ ok: true });
+  })
+);
+
+app.post(
+  "/api/driver-auth/location-ping",
+  driverAuth,
+  h(async (req, res) => {
+    const shift = currentDriverShift(req.driver.id);
+    if (!shift || shift.status === "closed") return res.status(400).json({ error: "Not on an active shift." });
+    const { lat, lng } = req.body || {};
+    if (typeof lat !== "number" || typeof lng !== "number") return res.status(400).json({ error: "lat/lng are required." });
+    db.driverLocationLogs.push({ id: uid("loc"), driverId: req.driver.id, shiftId: shift.id, lat, lng, ts: nowIso() });
+    if (db.driverLocationLogs.length > DRIVER_LOCATION_LOG_CAP) {
+      db.driverLocationLogs.splice(0, db.driverLocationLogs.length - DRIVER_LOCATION_LOG_CAP);
+    }
+    await save();
+    res.json({ ok: true });
+  })
+);
+
+// Drivers only ever see the HR-approved snapshot for a month, never the
+// live-computed figures staff can see for themselves - so what they
+// download can't silently change after HR has signed off on it.
+app.get(
+  "/api/driver-auth/payslip",
+  driverAuth,
+  h(async (req, res) => {
+    const month = /^\d{4}-\d{2}$/.test(req.query.month || "") ? req.query.month : nowIso().slice(0, 7);
+    const approval = db.payrollApprovals[payrollApprovalKey("driver", req.driver.id, month)] || null;
+    res.json({ month, approved: !!approval, payslip: approval });
+  })
+);
+app.get(
+  "/api/driver-auth/payslip/download",
+  driverAuth,
+  h(async (req, res) => {
+    const month = /^\d{4}-\d{2}$/.test(req.query.month || "") ? req.query.month : nowIso().slice(0, 7);
+    const approval = db.payrollApprovals[payrollApprovalKey("driver", req.driver.id, month)];
+    if (!approval) return res.status(404).json({ error: "This month's payslip hasn't been approved by HR yet." });
+    const rows = [
+      ...approval.earnings.map((e) => ({ item: e.label, type: "Earning", amount: e.amount })),
+      ...approval.deductions.map((d) => ({ item: d.label, type: "Deduction", amount: -d.amount })),
+      { item: "NET PAY", type: "", amount: approval.netPay },
+    ];
+    const columns = [
+      { label: "Item", key: "item" },
+      { label: "Type", key: "type" },
+      { label: "Amount (₹)", key: "amount" },
+    ];
+    sendDownload(res, rows, columns, `payslip_${req.driver.name.replace(/\s+/g, "_")}_${month}`, req.query.format);
+  })
+);
 
 // ---------- OWNER DASHBOARD - fleet average mileage ----------
 // Computed from every daily record ever submitted (not just today's), since

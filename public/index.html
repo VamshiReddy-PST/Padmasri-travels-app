@@ -235,6 +235,7 @@ async function renderLogin(){
       </div>
       <button class="btn" style="width:100%" onclick="doLogin()" id="loginBtn">Sign in</button>
       <div class="muted" style="margin-top:10px;">Everyone gets their own login - this is what makes the audit trail (who changed what, when) meaningful. If you don't have an email on file, use your mobile number instead.</div>
+      <div class="muted" style="margin-top:14px;text-align:center;border-top:1px solid var(--border);padding-top:14px;">Are you a driver? <a href="/driver.html">Log in here</a></div>
     </div>
   </div>`;
 }
@@ -345,12 +346,12 @@ async function submitVoluntaryPasswordChange(){
 
 // ---------- shell ----------
 function tabsFor(role){
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["payroll","Payroll"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["payroll","Payroll"]];
   if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["payroll","Payroll"]];
   if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["people","People"],["audit","Audit Log"],["payroll","Payroll"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["payroll","Payroll"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Overview"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["payroll","Payroll"]];
   return [];
 }
@@ -400,6 +401,7 @@ async function routeView(){
     if(tab==="usage") return vehicleUsageScreen();
     if(tab==="assignments") return supervisorAssignmentsScreen();
     if(tab==="routes") return routesViewScreen();
+    if(tab==="trips") return tripsScreen();
   }
   if(role==="area_supervisor"){
     if(tab==="queue") return areaQueueScreen();
@@ -432,6 +434,7 @@ async function routeView(){
     if(tab==="dashboard") return view.name==="dashboard_detail" ? dashboardDetailScreen(view.metric) : ownerDashboardScreen();
     if(tab==="expenses") return expensesScreen(true);
     if(tab==="assignments") return assignmentsScreen();
+    if(tab==="trips") return tripsScreen();
     if(tab==="people") return peopleScreen();
     if(tab==="attendance") return hrAttendanceScreen();
     if(tab==="audit") return auditScreen();
@@ -2791,6 +2794,85 @@ function drawCharts(approved,pending,rejected,fails,passes){
   b._chart = new Chart(b, {type:"doughnut", data:{labels:["Pass","Fail"], datasets:[{data:[passes,fails], backgroundColor:["#1e8e3e","#c0392b"]}]}});
 }
 
+// ================= TRIPS =================
+// Site Supervisors (and Owner, as an admin override) allocate trips to the
+// driver on each of their vehicles. Drivers see these in their own app's
+// "My Trips" list and can mark them in progress/completed themselves.
+let trips = [];
+async function fetchTrips(){ try{ trips = await api("/trips"); }catch(e){ trips = []; } }
+function tripStatusBadge(s){
+  const label = {upcoming:"Upcoming", in_progress:"In Progress", completed:"Completed", cancelled:"Cancelled"}[s] || s;
+  const cls = s==="completed" ? "approved" : s==="cancelled" ? "rejected" : s==="in_progress" ? "pending" : "pending";
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+async function tripsScreen(){
+  await fetchTrips();
+  const assignableVehicles = vehicles.filter(v=>v.driverId);
+  const sorted = trips.slice().sort((a,b)=> (b.date+(b.scheduledTime||"")).localeCompare(a.date+(a.scheduledTime||"")));
+  return `
+  <h1 class="page-title">Trips</h1>
+  <div class="card">
+    <h2 class="section-title">Allocate a New Trip</h2>
+    ${assignableVehicles.length===0 ? `<div class="empty">No vehicles with a driver assigned yet.</div>` : `
+    <form class="inline-form" onsubmit="return createTrip(event)">
+      <div class="f">
+        <label>Vehicle / Driver</label>
+        <select id="tripVehicleId" required>
+          <option value="">Select...</option>
+          ${assignableVehicles.map(v=>`<option value="${v.id}">${v.reg} - ${driverName(v.driverId)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="f"><label>Date</label><input type="date" id="tripDate" value="${todayStr()}" required /></div>
+      <div class="f"><label>Time</label><input type="text" id="tripTime" placeholder="e.g. 09:00 AM" /></div>
+      <div class="f" style="flex:2;min-width:220px;"><label>Trip / Route Details</label><input type="text" id="tripDesc" placeholder="e.g. Airport pickup - Client X" /></div>
+      <button class="btn" type="submit">Allocate Trip</button>
+    </form>`}
+  </div>
+  <div class="card">
+    <h2 class="section-title">All Trips</h2>
+    ${sorted.length===0 ? `<div class="empty">No trips allocated yet.</div>` : `
+    <table>
+      <tr><th>Date</th><th>Vehicle</th><th>Driver</th><th>Details</th><th>Status</th><th></th></tr>
+      ${sorted.map(t=>{
+        const v = vehicles.find(x=>x.id===t.vehicleId);
+        return `<tr>
+          <td>${t.date}${t.scheduledTime? " "+t.scheduledTime : ""}</td>
+          <td>${v? v.reg : t.vehicleId}</td>
+          <td>${driverName(t.driverId)}</td>
+          <td>${t.description || "-"}</td>
+          <td>${tripStatusBadge(t.status)}</td>
+          <td>
+            ${t.status!=="cancelled" && t.status!=="completed" ? `<button class="btn small secondary" onclick="cancelTrip('${t.id}')">Cancel</button>` : ""}
+            <button class="btn small danger" onclick="deleteTrip('${t.id}')">Delete</button>
+          </td>
+        </tr>`;
+      }).join("")}
+    </table>`}
+  </div>`;
+}
+async function createTrip(evt){
+  evt.preventDefault();
+  const vehicleId = document.getElementById("tripVehicleId").value;
+  const date = document.getElementById("tripDate").value;
+  const scheduledTime = document.getElementById("tripTime").value;
+  const description = document.getElementById("tripDesc").value;
+  if(!vehicleId || !date){ alert("Select a vehicle and date."); return false; }
+  try{
+    await api("/trips", {method:"POST", body: JSON.stringify({vehicleId, date, scheduledTime, description})});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function cancelTrip(id){
+  try{ await api(`/trips/${id}`, {method:"PATCH", body: JSON.stringify({status:"cancelled"})}); await renderMain(); }
+  catch(e){ alert(e.message); }
+}
+async function deleteTrip(id){
+  if(!confirm("Remove this trip? This can't be undone.")) return;
+  try{ await api(`/trips/${id}`, {method:"DELETE"}); await renderMain(); }
+  catch(e){ alert(e.message); }
+}
+
 // ================= PAYROLL =================
 // Two pieces per person, mirroring the server: a recurring profile (base
 // salary + components like ESI/PF/Gratuity - set up once by HR, applies
@@ -2822,6 +2904,15 @@ async function fetchPayrollProfile(personType, personId){
 }
 async function fetchPayrollSummary(month){
   try{ return await api(`/payroll/summary?month=${month}`); }catch(e){ return null; }
+}
+async function fetchPayrollApproval(personType, personId, month){
+  try{ return await api(`/payroll/approval/${personType}/${personId}?month=${month}`); }catch(e){ return null; }
+}
+async function approvePayslip(personType, personId){
+  try{
+    await api("/payroll/approve", {method:"POST", body: JSON.stringify({personType, personId, month:payrollMonth})});
+    await renderMain();
+  }catch(e){ alert(e.message); }
 }
 function payslipTableHtml(payslip){
   if(!payslip) return `<div class="empty">Could not load payslip.</div>`;
@@ -2973,9 +3064,10 @@ async function deletePayrollAdhoc(id){
   }catch(e){ alert(e.message); }
 }
 async function payrollDetailHtml(personType, personId){
-  const [profile, payslip] = await Promise.all([
+  const [profile, payslip, approval] = await Promise.all([
     fetchPayrollProfile(personType, personId),
     fetchPayslip(personType, personId, payrollMonth),
+    fetchPayrollApproval(personType, personId, payrollMonth),
   ]);
   const canEdit = canEditPayrollFrontend();
   const components = profile ? profile.components : [];
@@ -3001,6 +3093,14 @@ async function payrollDetailHtml(personType, personId){
     `}
     <h3>This Month's Payslip (${payrollMonth})</h3>
     ${payslipTableHtml(payslip)}
+    ${canEdit && personType==="driver" ? `
+    <div class="banner ${approval? 'ok':''}" style="margin-top:10px;">
+      ${approval
+        ? `Approved by ${approval.approvedByName} on ${new Date(approval.approvedAt).toLocaleString("en-IN")} - the driver can now download this exact payslip in their app.`
+        : `Not approved yet - the driver won't see or be able to download this month's payslip in the driver app until you approve it.`}
+      <div style="margin-top:8px;"><button class="btn small" onclick="approvePayslip('${personType}','${personId}')">${approval? "Re-Approve With Latest Figures" : "Approve This Month's Payslip"}</button></div>
+    </div>
+    ` : ''}
     ${canEdit ? `
     <h3>Add One-Time Entry (this month)</h3>
     <form class="inline-form" onsubmit="return addPayrollAdhoc(event,'${personType}','${personId}')">
@@ -3043,7 +3143,8 @@ Object.assign(window, {
   toggleDriverDetails, saveDriverDetails, saveDriverCertificate, addDriverFull,
   setAttRange, downloadAttendanceSupervisors, downloadAttendanceDrivers, downloadAttendanceBackup,
   setPayrollMonth, downloadPayslip, togglePayrollDetail, addPayrollComponentRow, savePayrollProfile,
-  addPayrollAdhoc, deletePayrollAdhoc,
+  addPayrollAdhoc, deletePayrollAdhoc, approvePayslip,
+  createTrip, cancelTrip, deleteTrip,
 });
 
 boot();

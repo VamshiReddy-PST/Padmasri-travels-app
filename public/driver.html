@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>Padmasri Travels - Driver App</title>
+<meta name="theme-color" content="#1f3864" />
+<style>
+  :root{
+    --navy:#1f3864; --accent:#2e74b5; --accent-light:#eaf2fb; --green:#1e8e3e;
+    --amber:#b8860b; --red:#c0392b; --grey:#666; --bg:#f4f6f9; --card:#ffffff;
+    --border:#e1e6ec;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;-webkit-tap-highlight-color:transparent;}
+  #app{max-width:480px;margin:0 auto;min-height:100vh;background:var(--bg);padding-bottom:40px;}
+  header.topbar{background:var(--navy);color:#fff;padding:16px 18px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;}
+  header.topbar .brand{font-weight:700;font-size:17px;}
+  header.topbar .who{font-size:12.5px;opacity:.9;text-align:right;}
+  main{padding:16px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.03);}
+  h1.page-title{font-size:19px;margin:2px 0 16px;color:var(--navy);text-align:center;}
+  h2.section-title{font-size:15px;margin:0 0 12px;color:var(--navy);}
+  .muted{color:var(--grey);font-size:12.5px;}
+  .banner{background:#fff8e6;border:1px solid #f0dca0;color:#7a5a00;padding:12px 14px;border-radius:10px;font-size:13.5px;margin-bottom:16px;}
+  .banner.error{background:#fbe4e1;border-color:#eab3ab;color:#7a2115;}
+  .banner.ok{background:#e2f4e6;border-color:#a8d9b3;color:#155724;}
+  .field{margin-bottom:16px;}
+  .field label{display:block;font-size:13.5px;color:var(--navy);margin-bottom:6px;font-weight:600;}
+  .field input{width:100%;padding:14px 12px;border:1px solid #ccd3db;border-radius:10px;font-size:18px;text-align:center;letter-spacing:1px;}
+  .big-btn{width:100%;background:var(--accent);color:#fff;border:none;padding:16px;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;}
+  .big-btn:disabled{opacity:.45;cursor:not-allowed;}
+  .big-btn.secondary{background:#fff;color:var(--accent);border:2px solid var(--accent);}
+  .big-btn.danger{background:var(--red);}
+  .swipe-track{position:relative;width:100%;height:58px;background:var(--accent-light);border:1px solid var(--border);border-radius:29px;overflow:hidden;margin-top:6px;user-select:none;}
+  .swipe-track .swipe-label{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--navy);font-weight:700;font-size:14px;letter-spacing:.3px;pointer-events:none;}
+  .swipe-track.logout .swipe-label{color:#fff;}
+  .swipe-track.logout{background:#f6d9d4;}
+  .swipe-thumb{position:absolute;top:3px;left:3px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;cursor:grab;box-shadow:0 1px 4px rgba(0,0,0,.25);touch-action:none;}
+  .swipe-track.logout .swipe-thumb{background:var(--red);}
+  .countdown{font-size:34px;font-weight:800;color:var(--navy);text-align:center;margin:6px 0 14px;letter-spacing:1px;}
+  .countdown.warn{color:var(--red);}
+  .photo-box{border:2px dashed #aab6c5;border-radius:10px;padding:14px;text-align:center;background:#fbfcfe;margin-bottom:14px;}
+  .photo-box img{max-width:100%;max-height:180px;border-radius:8px;margin-top:10px;}
+  .trip-item{border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px;}
+  .trip-item .date{font-weight:700;color:var(--navy);font-size:14px;}
+  .trip-item .desc{font-size:13px;color:#333;margin-top:2px;}
+  .trip-item .meta{font-size:11.5px;color:var(--grey);margin-top:4px;}
+  .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;margin-top:6px;}
+  .badge.upcoming{background:#fff4d6;color:var(--amber);}
+  .badge.in_progress{background:#dce9fb;color:var(--accent);}
+  .badge.completed{background:#e2f4e6;color:var(--green);}
+  .trip-actions{margin-top:10px;display:flex;gap:8px;}
+  .trip-actions button{flex:1;padding:9px;border-radius:8px;border:1px solid var(--accent);background:#fff;color:var(--accent);font-size:12.5px;font-weight:600;cursor:pointer;}
+  .empty{text-align:center;color:var(--grey);padding:20px 10px;font-size:13px;}
+  .status-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--grey);}
+  .status-pill .dot{width:8px;height:8px;border-radius:50%;background:var(--green);}
+  .status-pill .dot.off{background:#c9c9c9;}
+  .footer-note{font-size:11px;color:#9aa4b2;text-align:center;padding:18px 10px 4px;}
+  .footer-note a{color:var(--accent);}
+  .month-picker{display:flex;align-items:center;gap:10px;margin-bottom:14px;}
+  .month-picker input{flex:1;padding:10px;border:1px solid #ccd3db;border-radius:8px;font-size:14px;}
+  .payslip-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f0f2f5;font-size:13.5px;}
+  .payslip-row.total{font-weight:700;color:var(--navy);border-top:2px solid var(--border);border-bottom:none;padding-top:10px;margin-top:4px;}
+  .dl-row{display:flex;gap:10px;margin-top:14px;}
+  .dl-row button{flex:1;}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<input type="file" id="odoOpenInput" accept="image/*" capture="environment" style="display:none" />
+<input type="file" id="odoCloseInput" accept="image/*" capture="environment" style="display:none" />
+<script>
+/* =========================================================================
+   PADMASRI TRAVELS - DRIVER APP
+   Deliberately separate from index.html and its login system: drivers sign
+   in with just their mobile number + a 4-digit PIN (default 1234, never
+   forced to change - see server.js backfillDefaults for why). Everything
+   here talks to /api/driver-auth/* and /api/driver-auth/trips, /payslip -
+   a completely different session (driverSessions on the server) from the
+   staff app's token.
+   ========================================================================= */
+
+const API = "/api";
+let driverToken = localStorage.getItem("driverAuthToken") || null;
+let driver = null;
+let shift = null;
+let trips = { upcoming: [], completed: [] };
+let lastError = "";
+let lastPos = { lat: null, lng: null };
+let locationOk = false;
+let pingTimer = null;
+let pollTimer = null;
+let capturedOpenPhoto = null;
+let capturedClosePhoto = null;
+let busy = false;
+let payslipMonth = new Date().toISOString().slice(0,7);
+let payslip = null;
+let payslipLoading = false;
+
+async function api(path, opts={}){
+  const headers = Object.assign({"Content-Type":"application/json"}, opts.headers||{});
+  if(driverToken) headers["Authorization"] = "Bearer " + driverToken;
+  const res = await fetch(API+path, Object.assign({}, opts, {headers}));
+  if(res.status === 401){
+    resetSession();
+    render();
+    throw new Error("Session expired - please log in again.");
+  }
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || ("Request failed ("+res.status+")"));
+  return data;
+}
+
+function resetSession(){
+  driverToken = null; driver = null; shift = null;
+  localStorage.removeItem("driverAuthToken");
+  stopLocationPings(); stopPolling();
+}
+
+// ---------- location ----------
+function getPosition(timeoutMs){
+  return new Promise((resolve)=>{
+    if(!navigator.geolocation){ resolve({lat:null,lng:null}); return; }
+    const timer = setTimeout(()=>resolve({lat:lastPos.lat,lng:lastPos.lng}), timeoutMs||8000);
+    navigator.geolocation.getCurrentPosition(
+      (pos)=>{
+        clearTimeout(timer);
+        const p = {lat: pos.coords.latitude, lng: pos.coords.longitude};
+        lastPos = p; locationOk = true;
+        resolve(p);
+      },
+      ()=>{ clearTimeout(timer); locationOk = false; resolve({lat:lastPos.lat,lng:lastPos.lng}); },
+      {enableHighAccuracy:true, timeout:(timeoutMs||8000)-500, maximumAge:5000}
+    );
+  });
+}
+function startLocationPings(){
+  stopLocationPings();
+  pingTimer = setInterval(async ()=>{
+    if(!driverToken || !shift || shift.status==="closed") return;
+    const p = await getPosition(6000);
+    if(typeof p.lat!=="number" || typeof p.lng!=="number") return;
+    api("/driver-auth/location-ping", {method:"POST", body: JSON.stringify(p)}).catch(()=>{});
+  }, 10000);
+}
+function stopLocationPings(){ if(pingTimer){ clearInterval(pingTimer); pingTimer=null; } }
+
+// ---------- polling (picks up server-side 10-min auto-expiry + keeps trip list fresh) ----------
+function startPolling(){
+  stopPolling();
+  pollTimer = setInterval(refreshMe, 15000);
+}
+function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
+async function refreshMe(){
+  if(!driverToken) return;
+  try{
+    const m = await api("/driver-auth/me");
+    driver = m.driver; shift = m.shift;
+    if(shift && (shift.status==="on_trip")) await loadTrips();
+    render();
+  }catch(e){ /* api() already resets session on 401 */ }
+}
+async function loadTrips(){
+  try{ trips = await api("/driver-auth/trips"); }catch(e){}
+}
+
+// ---------- boot ----------
+async function boot(){
+  if(!driverToken){ render(); return; }
+  try{
+    const m = await api("/driver-auth/me");
+    driver = m.driver; shift = m.shift;
+    if(shift && shift.status!=="closed"){
+      startLocationPings(); startPolling();
+      if(shift.status==="on_trip" || shift.status==="ready_to_logout") await loadTrips();
+    }
+    render();
+  }catch(e){
+    resetSession(); render();
+  }
+}
+
+// ---------- image capture (matches the supervisor app's downscale pattern) ----------
+function downscaleImage(file, maxW, quality, cb){
+  const reader = new FileReader();
+  reader.onload = (ev)=>{
+    const img = new Image();
+    img.onload = ()=>{
+      const scale = Math.min(1, maxW/img.width);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width*scale; canvas.height = img.height*scale;
+      canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);
+      cb(canvas.toDataURL("image/jpeg",quality));
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+function captureOpenPhoto(){ document.getElementById("odoOpenInput").click(); }
+function captureClosePhoto(){ document.getElementById("odoCloseInput").click(); }
+document.addEventListener("DOMContentLoaded", ()=>{
+  document.getElementById("odoOpenInput").addEventListener("change", (e)=>{
+    const f = e.target.files[0]; if(!f) return;
+    downscaleImage(f, 640, 0.7, (dataUrl)=>{ capturedOpenPhoto = dataUrl; render(); });
+    e.target.value = "";
+  });
+  document.getElementById("odoCloseInput").addEventListener("change", (e)=>{
+    const f = e.target.files[0]; if(!f) return;
+    downscaleImage(f, 640, 0.7, (dataUrl)=>{ capturedClosePhoto = dataUrl; render(); });
+    e.target.value = "";
+  });
+  boot();
+});
+
+// ---------- swipe-to-confirm control ----------
+// A simple slide-to-confirm gesture (pointer events, works for touch and
+// mouse) - deliberately the only way to log in/out, since a plain button
+// tap is too easy to fire by accident while the phone is being handled.
+function initSwipe(trackId, onConfirm){
+  const track = document.getElementById(trackId);
+  if(!track) return;
+  const thumb = track.querySelector(".swipe-thumb");
+  const maxX = track.clientWidth - thumb.clientWidth - 6;
+  let startX = 0, curX = 0, dragging = false;
+  function setX(x){ curX = Math.max(0, Math.min(maxX, x)); thumb.style.transform = `translateX(${curX}px)`; }
+  function onDown(e){
+    dragging = true;
+    startX = (e.touches? e.touches[0].clientX : e.clientX) - curX;
+    thumb.style.cursor = "grabbing";
+  }
+  function onMove(e){
+    if(!dragging) return;
+    const x = (e.touches? e.touches[0].clientX : e.clientX) - startX;
+    setX(x);
+  }
+  function onUp(){
+    if(!dragging) return;
+    dragging = false;
+    thumb.style.cursor = "grab";
+    if(curX >= maxX*0.82){
+      setX(maxX);
+      onConfirm();
+    } else {
+      setX(0);
+    }
+  }
+  thumb.addEventListener("mousedown", onDown);
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+  thumb.addEventListener("touchstart", onDown, {passive:true});
+  window.addEventListener("touchmove", onMove, {passive:true});
+  window.addEventListener("touchend", onUp);
+  setX(0);
+}
+
+// ---------- actions ----------
+async function doDriverLogin(){
+  if(busy) return;
+  lastError = "";
+  const phone = (document.getElementById("driverPhone")||{}).value || "";
+  const pin = (document.getElementById("driverPin")||{}).value || "";
+  if(!phone.trim() || !pin.trim()){ lastError = "Enter your mobile number and PIN."; render(); return; }
+  busy = true; render();
+  try{
+    const pos = await getPosition(6000);
+    const r = await api("/driver-auth/login", {method:"POST", body: JSON.stringify({phone: phone.trim(), pin: pin.trim(), lat: pos.lat, lng: pos.lng})});
+    driverToken = r.token; driver = r.driver; shift = r.shift;
+    localStorage.setItem("driverAuthToken", driverToken);
+    startLocationPings(); startPolling();
+    if(shift && (shift.status==="on_trip" || shift.status==="ready_to_logout")) await loadTrips();
+  }catch(e){
+    lastError = e.message;
+  }
+  busy = false; render();
+}
+async function submitOdometerOpen(){
+  if(busy) return;
+  lastError = "";
+  const odometer = (document.getElementById("odoOpenValue")||{}).value;
+  if(!odometer){ lastError = "Enter the opening odometer reading."; render(); return; }
+  if(!capturedOpenPhoto){ lastError = "Take a photo of the odometer reading first."; render(); return; }
+  busy = true; render();
+  try{
+    const pos = await getPosition(6000);
+    shift = await api("/driver-auth/odometer-open", {method:"POST", body: JSON.stringify({odometer:Number(odometer), photo:capturedOpenPhoto, lat:pos.lat, lng:pos.lng})});
+    capturedOpenPhoto = null;
+    await loadTrips();
+  }catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+async function markTripStatus(tripId, status){
+  if(busy) return;
+  busy = true; render();
+  try{
+    await api(`/driver-auth/trips/${tripId}/status`, {method:"POST", body: JSON.stringify({status})});
+    await loadTrips();
+  }catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+async function submitOdometerClose(){
+  if(busy) return;
+  lastError = "";
+  const odometer = (document.getElementById("odoCloseValue")||{}).value;
+  if(!odometer){ lastError = "Enter the closing odometer reading."; render(); return; }
+  if(!capturedClosePhoto){ lastError = "Take a photo of the odometer reading first."; render(); return; }
+  busy = true; render();
+  try{
+    shift = await api("/driver-auth/odometer-close", {method:"POST", body: JSON.stringify({odometer:Number(odometer), photo:capturedClosePhoto})});
+    capturedClosePhoto = null;
+  }catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+async function doDriverLogout(){
+  if(busy) return;
+  lastError = "";
+  busy = true; render();
+  try{
+    const pos = await getPosition(6000);
+    await api("/driver-auth/logout", {method:"POST", body: JSON.stringify(pos)});
+    resetSession();
+  }catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+async function setPayslipMonth(v){ payslipMonth = v; payslip = null; await fetchPayslip(); }
+async function fetchPayslip(){
+  payslipLoading = true; render();
+  try{ payslip = await api(`/driver-auth/payslip?month=${payslipMonth}`); }
+  catch(e){ payslip = null; }
+  payslipLoading = false; render();
+}
+async function downloadDriverPayslip(format){
+  try{
+    const headers = {};
+    if(driverToken) headers["Authorization"] = "Bearer " + driverToken;
+    const res = await fetch(`${API}/driver-auth/payslip/download?month=${payslipMonth}&format=${format}`, {headers});
+    if(!res.ok){ const d = await res.json().catch(()=>({})); throw new Error(d.error || "Download failed."); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `payslip_${payslipMonth}.${format==="xlsx"?"xlsx":"csv"}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){ alert(e.message); }
+}
+
+// ---------- rendering ----------
+function money(n){ return "₹" + Math.round(n||0).toLocaleString("en-IN"); }
+function fmtTime(iso){ if(!iso) return "-"; const d = new Date(iso); return d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"}); }
+function fmtDate(s){ if(!s) return "-"; const d = new Date(s+"T00:00:00"); return d.toLocaleDateString("en-IN",{day:"2-digit",month:"short"}); }
+
+function render(){
+  const app = document.getElementById("app");
+  app.innerHTML = topbarHtml() + `<main>${bodyHtml()}</main>` + footerHtml();
+  setTimeout(()=>{
+    if(!driverToken) initSwipe("loginSwipe", doDriverLogin);
+    if(shift && shift.status==="ready_to_logout") initSwipe("logoutSwipe", doDriverLogout);
+  }, 0);
+}
+
+function topbarHtml(){
+  const dot = locationOk ? "" : " off";
+  return `<header class="topbar">
+    <div class="brand">Padmasri Travels</div>
+    ${driver ? `<div class="who">${driver.name}<br/><span class="status-pill"><span class="dot${dot}"></span>${locationOk?"Location on":"Location off"}</span></div>` : `<div class="who">Driver App</div>`}
+  </header>`;
+}
+
+function footerHtml(){
+  return `<div class="footer-note">Staff member? <a href="/">Go to the Supervisor App</a></div>`;
+}
+
+function errorBannerHtml(){
+  return lastError ? `<div class="banner error">${lastError}</div>` : "";
+}
+
+function bodyHtml(){
+  if(!driverToken || !driver) return loginScreen();
+  if(!shift || shift.status==="closed") return loggedOutScreen();
+  if(shift.status==="awaiting_odometer") return odometerOpenScreen();
+  return activeShiftScreen();
+}
+
+function loginScreen(){
+  return `
+  <h1 class="page-title">Driver Login</h1>
+  ${errorBannerHtml()}
+  <div class="card">
+    <div class="field">
+      <label>Mobile Number</label>
+      <input type="tel" id="driverPhone" placeholder="10-digit mobile number" inputmode="numeric" maxlength="10" />
+    </div>
+    <div class="field">
+      <label>PIN</label>
+      <input type="password" id="driverPin" placeholder="4-digit PIN" inputmode="numeric" maxlength="4" />
+    </div>
+    <p class="muted" style="text-align:center;margin:4px 0 14px;">${busy? '<span class="spinner"></span>Logging in...' : "Slide the button all the way to log in"}</p>
+    <div class="swipe-track" id="loginSwipe">
+      <div class="swipe-label">Swipe to Login &rarr;</div>
+      <div class="swipe-thumb">&rarr;</div>
+    </div>
+  </div>`;
+}
+
+function loggedOutScreen(){
+  // Session closed (either the driver logged out cleanly, or the 10-minute
+  // odometer window expired and the shift was auto-closed) - back to login.
+  const reasonHtml = (shift && shift.autoClosedReason) ? `<div class="banner error">${shift.autoClosedReason}</div>` : "";
+  driverToken = null; localStorage.removeItem("driverAuthToken");
+  return reasonHtml + loginScreen();
+}
+
+function odometerOpenScreen(){
+  const loginAt = new Date(shift.loginAt).getTime();
+  const remainMs = Math.max(0, loginAt + 10*60*1000 - Date.now());
+  const mm = String(Math.floor(remainMs/60000)).padStart(2,"0");
+  const ss = String(Math.floor((remainMs%60000)/1000)).padStart(2,"0");
+  if(remainMs <= 0 && !window.__odoExpiryCheck){
+    window.__odoExpiryCheck = true;
+    setTimeout(()=>{ window.__odoExpiryCheck=false; refreshMe(); }, 1200);
+  }
+  return `
+  <h1 class="page-title">Welcome, ${driver.name}</h1>
+  ${errorBannerHtml()}
+  <div class="card">
+    <h2 class="section-title">Enter Opening Odometer Reading</h2>
+    <p class="muted">You must enter this within 10 minutes of logging in, or you'll be logged out automatically.</p>
+    <div class="countdown${remainMs<120000?" warn":""}">${mm}:${ss}</div>
+    <div class="field">
+      <label>Odometer Reading (km)</label>
+      <input type="number" id="odoOpenValue" placeholder="e.g. 45210" inputmode="numeric" />
+    </div>
+    <div class="photo-box">
+      ${capturedOpenPhoto ? `<img src="${capturedOpenPhoto}"/><br/>` : ""}
+      <button type="button" class="big-btn secondary" style="margin-top:${capturedOpenPhoto?'10px':'0'};" onclick="captureOpenPhoto()">${capturedOpenPhoto? "📷 Retake Photo" : "📷 Take Odometer Photo"}</button>
+    </div>
+    <button class="big-btn" ${busy?"disabled":""} onclick="submitOdometerOpen()">${busy?'<span class="spinner"></span>Starting...':"Start Trip"}</button>
+  </div>`;
+}
+
+function activeShiftScreen(){
+  const isReadyToLogout = shift.status === "ready_to_logout";
+  return `
+  <h1 class="page-title">Welcome, ${driver.name}</h1>
+  ${errorBannerHtml()}
+  ${tripsCardHtml()}
+  ${isReadyToLogout ? logoutCardHtml() : closingOdometerCardHtml()}
+  ${payslipCardHtml()}
+  `;
+}
+
+function tripsCardHtml(){
+  const up = trips.upcoming || [];
+  const done = trips.completed || [];
+  return `
+  <div class="card">
+    <h2 class="section-title">My Trips</h2>
+    ${up.length===0 ? `<div class="empty">No trips allocated yet. Check back or ask your Site Supervisor.</div>` : up.map(t=>`
+      <div class="trip-item">
+        <div class="date">${fmtDate(t.date)}${t.scheduledTime? " &middot; "+t.scheduledTime : ""}</div>
+        <div class="desc">${t.description || "Trip"}</div>
+        <span class="badge ${t.status}">${t.status==="in_progress"?"In Progress":"Upcoming"}</span>
+        <div class="trip-actions">
+          ${t.status==="upcoming" ? `<button onclick="markTripStatus('${t.id}','in_progress')">Start Trip</button>` : ""}
+          ${t.status==="in_progress" ? `<button onclick="markTripStatus('${t.id}','completed')">Mark Completed</button>` : ""}
+        </div>
+      </div>`).join("")}
+    ${done.length ? `<p class="muted" style="margin-top:10px;">Recently completed</p>` + done.map(t=>`
+      <div class="trip-item">
+        <div class="date">${fmtDate(t.date)}</div>
+        <div class="desc">${t.description || "Trip"}</div>
+        <span class="badge completed">Completed</span>
+      </div>`).join("") : ""}
+  </div>`;
+}
+
+function closingOdometerCardHtml(){
+  return `
+  <div class="card">
+    <h2 class="section-title">End Shift</h2>
+    <p class="muted">Opening reading: <strong>${shift.odometerOpen} km</strong> at ${fmtTime(shift.odometerOpenAt)}</p>
+    <p class="muted">Once your trip(s) are done, enter the closing odometer reading with a photo to finish your shift.</p>
+    <div class="field">
+      <label>Closing Odometer Reading (km)</label>
+      <input type="number" id="odoCloseValue" placeholder="e.g. 45340" inputmode="numeric" />
+    </div>
+    <div class="photo-box">
+      ${capturedClosePhoto ? `<img src="${capturedClosePhoto}"/><br/>` : ""}
+      <button type="button" class="big-btn secondary" style="margin-top:${capturedClosePhoto?'10px':'0'};" onclick="captureClosePhoto()">${capturedClosePhoto? "📷 Retake Photo" : "📷 Take Odometer Photo"}</button>
+    </div>
+    <button class="big-btn" ${busy?"disabled":""} onclick="submitOdometerClose()">${busy?'<span class="spinner"></span>Saving...':"Save Closing Reading"}</button>
+  </div>`;
+}
+
+function logoutCardHtml(){
+  return `
+  <div class="card">
+    <h2 class="section-title">Ready to Log Out</h2>
+    <p class="muted">Closing reading: <strong>${shift.odometerClose} km</strong> at ${fmtTime(shift.odometerCloseAt)}</p>
+    <p class="muted" style="text-align:center;margin:4px 0 14px;">${busy? '<span class="spinner"></span>Logging out...' : "Slide the button all the way to log out"}</p>
+    <div class="swipe-track logout" id="logoutSwipe">
+      <div class="swipe-label">Swipe to Log Out &rarr;</div>
+      <div class="swipe-thumb">&rarr;</div>
+    </div>
+  </div>`;
+}
+
+function payslipCardHtml(){
+  if(payslip===null && !payslipLoading){ setTimeout(fetchPayslip, 0); }
+  let inner;
+  if(payslipLoading) inner = `<div class="empty"><span class="spinner"></span>Loading...</div>`;
+  else if(!payslip || !payslip.approved) inner = `<div class="empty">Your payslip for this month hasn't been approved by HR yet.</div>`;
+  else {
+    const p = payslip.payslip;
+    inner = `
+      ${p.earnings.map(e=>`<div class="payslip-row"><span>${e.label}</span><span>${money(e.amount)}</span></div>`).join("")}
+      ${p.deductions.map(d=>`<div class="payslip-row"><span>${d.label}</span><span>-${money(d.amount)}</span></div>`).join("")}
+      <div class="payslip-row total"><span>Net Pay</span><span>${money(p.netPay)}</span></div>
+      <div class="dl-row">
+        <button class="big-btn secondary" onclick="downloadDriverPayslip('csv')">Download CSV</button>
+        <button class="big-btn secondary" onclick="downloadDriverPayslip('xlsx')">Download Excel</button>
+      </div>`;
+  }
+  return `
+  <div class="card">
+    <h2 class="section-title">My Payslip</h2>
+    <div class="month-picker">
+      <input type="month" value="${payslipMonth}" onchange="setPayslipMonth(this.value)" />
+    </div>
+    ${inner}
+  </div>`;
+}
+
+// tick the countdown once a second while waiting on the opening odometer reading
+setInterval(()=>{ if(shift && shift.status==="awaiting_odometer") render(); }, 1000);
+</script>
+</body>
+</html>
