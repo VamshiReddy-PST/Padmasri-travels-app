@@ -957,18 +957,27 @@ async function assignmentsScreen(){
         <option value="fixed_route" ${v.usage==='fixed_route'?'selected':''}>Fixed route</option>
         <option value="client_on_demand" ${v.usage==='client_on_demand'?'selected':''}>Client on-demand</option>
       </select></td>
+      <td><button class="btn small secondary" onclick="toggleVehicleDetails('${v.id}')">${editingVehicleId===v.id?'Close':'Vehicle Details'}</button></td>
     </tr>`).join("");
   return `
   <h1 class="page-title">Assignments</h1>
   <div class="banner">Assign each vehicle to a site, a site supervisor, and a driver here. Only Operations Manager, Data Team and Owner can make these changes - every change is logged.</div>
   <div class="card">
     <h2 class="section-title">Vehicles (${vehicles.length})</h2>
-    <table><tr><th>Vehicle</th><th>Client</th><th>Site</th><th>Site Supervisor</th><th>Driver</th><th>Driver since</th><th>Usage</th></tr>${rows}</table>
+    <table><tr><th>Vehicle</th><th>Client</th><th>Site</th><th>Site Supervisor</th><th>Driver</th><th>Driver since</th><th>Usage</th><th></th></tr>${rows}</table>
     <form class="inline-form" onsubmit="return addVehicle(event)">
       <div class="f"><label>New registration number</label><input type="text" id="newVehicleReg" placeholder="TS 09 XX 1234" required /></div>
       <div class="f"><label>Route (optional)</label><input type="text" id="newVehicleRoute" placeholder="Route name" /></div>
+      <div class="f"><label>Make</label><input type="text" id="newVehicleMake" placeholder="e.g. Tata" style="width:100px" /></div>
+      <div class="f"><label>Model</label><input type="text" id="newVehicleModel" placeholder="e.g. Winger" style="width:100px" /></div>
+      <div class="f"><label>Engine No.</label><input type="text" id="newVehicleEngineNo" style="width:110px" /></div>
+      <div class="f"><label>Chassis No.</label><input type="text" id="newVehicleChassisNo" style="width:110px" /></div>
+      <div class="f"><label>RC Date</label><input type="date" id="newVehicleRcDate" style="width:140px" /></div>
+      <div class="f"><label>Seating Capacity</label><input type="number" id="newVehicleSeating" style="width:80px" /></div>
       <button class="btn small" type="submit">+ Add vehicle</button>
     </form>
+    <div class="muted" style="margin-top:6px;">These onboarding details (and each vehicle's documents) can be edited later via "Vehicle Details" below.</div>
+    ${editingVehicleId ? await vehicleDetailsEditorHtml(editingVehicleId) : ""}
   </div>
 
   <div class="grid cols-3">
@@ -1010,14 +1019,100 @@ async function assignField(vehicleId, field, value){
 }
 async function addVehicle(evt){
   evt.preventDefault();
-  const reg = document.getElementById("newVehicleReg").value;
-  const route = document.getElementById("newVehicleRoute").value;
+  const body = {
+    reg: document.getElementById("newVehicleReg").value,
+    route: document.getElementById("newVehicleRoute").value,
+    make: document.getElementById("newVehicleMake").value,
+    model: document.getElementById("newVehicleModel").value,
+    engineNo: document.getElementById("newVehicleEngineNo").value,
+    chassisNo: document.getElementById("newVehicleChassisNo").value,
+    rcDate: document.getElementById("newVehicleRcDate").value,
+    seatingCapacity: document.getElementById("newVehicleSeating").value,
+  };
   try{
-    const v = await api("/vehicles", {method:"POST", body: JSON.stringify({reg, route})});
+    const v = await api("/vehicles", {method:"POST", body: JSON.stringify(body)});
     vehicles.push(v);
     await renderMain();
   }catch(e){ alert(e.message); }
   return false;
+}
+
+// ---- Vehicle Details: onboarding fields (Make/Model/Engine/Chassis/RC
+// Date/Seating) and per-document number/expiry, including Permit's district
+// details. Opened per-vehicle from the Assignments table.
+const DOC_TYPES = ["RC","Permit","Insurance","Fitness","Tax","PUC"];
+function toggleVehicleDetails(vehicleId){
+  editingVehicleId = editingVehicleId===vehicleId ? null : vehicleId;
+  renderMain();
+}
+async function vehicleDetailsEditorHtml(vehicleId){
+  const v = vehicles.find(x=>x.id===vehicleId);
+  if(!v) return "";
+  const docRows = DOC_TYPES.map(docType=>{
+    const doc = v.docs[docType] || {number:"",expiry:""};
+    return `
+    <div class="check-row">
+      <div class="label"><b>${docType}</b></div>
+      <div class="controls">
+        <input type="text" placeholder="Number" value="${doc.number||''}" style="width:130px" id="doc_${docType}_number_${v.id}" />
+        <input type="date" value="${doc.expiry||''}" id="doc_${docType}_expiry_${v.id}" />
+        ${docType==="Permit" ? `
+          <label style="margin-left:8px;"><input type="checkbox" id="doc_Permit_state_${v.id}" ${doc.isStatePermit?'checked':''} /> State Permit</label>
+          <input type="number" placeholder="# Districts" value="${doc.districtCount||0}" style="width:90px" id="doc_Permit_districtCount_${v.id}" />
+          <input type="text" placeholder="District names (comma separated)" value="${doc.districtNames||''}" style="width:220px" id="doc_Permit_districtNames_${v.id}" />
+        ` : ""}
+        <button class="btn small secondary" onclick="saveVehicleDoc('${v.id}','${docType}')">Save</button>
+      </div>
+    </div>`;
+  }).join("");
+
+  return `
+  <div class="card" style="margin-top:14px;background:var(--panel-alt,#f7f7f9);">
+    <h2 class="section-title">${v.reg} - Vehicle Details</h2>
+    <div class="check-row"><div class="label">Make</div><div class="controls"><input type="text" id="vd_make_${v.id}" value="${v.make||''}" /></div></div>
+    <div class="check-row"><div class="label">Model</div><div class="controls"><input type="text" id="vd_model_${v.id}" value="${v.model||''}" /></div></div>
+    <div class="check-row"><div class="label">Engine No.</div><div class="controls"><input type="text" id="vd_engineNo_${v.id}" value="${v.engineNo||''}" /></div></div>
+    <div class="check-row"><div class="label">Chassis No.</div><div class="controls"><input type="text" id="vd_chassisNo_${v.id}" value="${v.chassisNo||''}" /></div></div>
+    <div class="check-row"><div class="label">RC Date</div><div class="controls"><input type="date" id="vd_rcDate_${v.id}" value="${v.rcDate||''}" /></div></div>
+    <div class="check-row"><div class="label">Seating Capacity</div><div class="controls"><input type="number" id="vd_seating_${v.id}" value="${v.seatingCapacity!=null?v.seatingCapacity:''}" style="width:80px" /></div></div>
+    <button class="btn small" onclick="saveVehicleDetails('${v.id}')">Save onboarding details</button>
+
+    <h2 class="section-title" style="margin-top:16px;">Documents</h2>
+    ${docRows}
+  </div>`;
+}
+async function saveVehicleDetails(vehicleId){
+  const g = (id) => document.getElementById(id).value;
+  const body = {
+    make: g(`vd_make_${vehicleId}`),
+    model: g(`vd_model_${vehicleId}`),
+    engineNo: g(`vd_engineNo_${vehicleId}`),
+    chassisNo: g(`vd_chassisNo_${vehicleId}`),
+    rcDate: g(`vd_rcDate_${vehicleId}`),
+    seatingCapacity: g(`vd_seating_${vehicleId}`),
+  };
+  try{
+    const v = await api(`/vehicles/${vehicleId}/details`, {method:"PATCH", body: JSON.stringify(body)});
+    const idx = vehicles.findIndex(x=>x.id===vehicleId); vehicles[idx] = v;
+    alert("Onboarding details saved.");
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function saveVehicleDoc(vehicleId, docType){
+  const number = document.getElementById(`doc_${docType}_number_${vehicleId}`).value;
+  const expiry = document.getElementById(`doc_${docType}_expiry_${vehicleId}`).value;
+  const body = {docType, number, expiry};
+  if(docType==="Permit"){
+    body.isStatePermit = document.getElementById(`doc_Permit_state_${vehicleId}`).checked;
+    body.districtCount = document.getElementById(`doc_Permit_districtCount_${vehicleId}`).value;
+    body.districtNames = document.getElementById(`doc_Permit_districtNames_${vehicleId}`).value;
+  }
+  try{
+    const v = await api(`/vehicles/${vehicleId}/docs`, {method:"PATCH", body: JSON.stringify(body)});
+    const idx = vehicles.findIndex(x=>x.id===vehicleId); vehicles[idx] = v;
+    alert(`${docType} saved.`);
+    await renderMain();
+  }catch(e){ alert(e.message); }
 }
 async function addClient(evt){
   evt.preventDefault();
@@ -1046,6 +1141,7 @@ async function addDriver(evt){
 
 // ================= PEOPLE (ops_manager, data_team, owner) =================
 let editingUserId = null;
+let editingVehicleId = null;
 const ROLE_OPTIONS = [
   ["site_supervisor","Site Supervisor"],["area_supervisor","Area Supervisor"],["ops_manager","Operations Manager"],
   ["data_team","Data Team"],["hr","HR"],["owner","Owner"],
@@ -1244,6 +1340,11 @@ const REPORT_DATASETS = [
   {key:"attendance", label:"Attendance", desc:"Supervisor clock-in/clock-out history with location and geofence status.", dateRange:true},
   {key:"vehicles", label:"Vehicles", desc:"Current assignment, driver, client and mileage standard for every vehicle.", dateRange:false},
   {key:"leaves", label:"Leave Requests", desc:"Driver leave requests and their approval status.", dateRange:true},
+  {key:"temp_drivers", label:"Temporary Drivers", desc:"Every temporary driver arranged for an absent driver - name, phone, UPI, amount, vehicle/company, and who they covered for.", dateRange:true},
+  {key:"doc_expiry", label:"Vehicle Document Expiry", desc:"Every document (RC, Permit, Insurance, Fitness, Tax, PUC) for every vehicle, with numbers, expiry dates and days left - not just the ones expiring soon.", dateRange:false},
+  {key:"mileage", label:"Mileage Records", desc:"Every fuel fill: odometer, distance, litres, mileage vs standard, and cost, one row per fill-up.", dateRange:true},
+  {key:"odometer", label:"Odometer Readings", desc:"Day-start and day-close odometer readings logged by supervisors, per vehicle per day.", dateRange:true},
+  {key:"monthly", label:"Monthly Vehicle Summary", desc:"One row per vehicle per month - total distance, fuel cost, average mileage, and driver absent days.", dateRange:true},
   {key:"audit", label:"Audit Log", desc:"Every action taken in the app, who did it, and when.", dateRange:true, roles:["owner","ops_manager"]},
 ];
 function reportsScreen(){
@@ -1572,6 +1673,7 @@ Object.assign(window, {
   updateDoc, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, addDriver, addPerson, correctOdometer, setAttDate, captureBillPhoto, submitExpense, decideExpense,
   startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, saveOdometer, restoreBackup, downloadReport,
+  toggleVehicleDetails, saveVehicleDetails, saveVehicleDoc,
 });
 
 boot();

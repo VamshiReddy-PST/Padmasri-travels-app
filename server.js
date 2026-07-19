@@ -83,6 +83,17 @@ function backfillDefaults() {
   if (!db.odometerLogs) db.odometerLogs = {};
   (db.vehicles || []).forEach((v) => {
     if (v.driverAssignedDate === undefined) v.driverAssignedDate = null;
+    if (v.make === undefined) v.make = "";
+    if (v.model === undefined) v.model = "";
+    if (v.engineNo === undefined) v.engineNo = "";
+    if (v.chassisNo === undefined) v.chassisNo = "";
+    if (v.rcDate === undefined) v.rcDate = "";
+    if (v.seatingCapacity === undefined) v.seatingCapacity = null;
+    if (v.docs && v.docs.Permit) {
+      if (v.docs.Permit.isStatePermit === undefined) v.docs.Permit.isStatePermit = false;
+      if (v.docs.Permit.districtCount === undefined) v.docs.Permit.districtCount = 0;
+      if (v.docs.Permit.districtNames === undefined) v.docs.Permit.districtNames = "";
+    }
   });
 }
 
@@ -453,7 +464,7 @@ app.post(
   requireAuth,
   requireRole(...ADMIN_ROLES),
   h(async (req, res) => {
-    const { reg, route, usage, standardMileage } = req.body || {};
+    const { reg, route, usage, standardMileage, make, model, engineNo, chassisNo, rcDate, seatingCapacity } = req.body || {};
     if (!reg) return res.status(400).json({ error: "Registration number is required." });
     const vehicle = {
       id: uid("v"),
@@ -465,11 +476,17 @@ app.post(
       supervisorId: null,
       driverId: null,
       driverAssignedDate: null,
+      make: make || "",
+      model: model || "",
+      engineNo: engineNo || "",
+      chassisNo: chassisNo || "",
+      rcDate: rcDate || "",
+      seatingCapacity: seatingCapacity != null && seatingCapacity !== "" ? Number(seatingCapacity) : null,
       standardMileage: Number(standardMileage) || 4.0,
       lastOdometer: null,
       docs: {
         RC: { number: "", expiry: "" },
-        Permit: { number: "", expiry: "" },
+        Permit: { number: "", expiry: "", isStatePermit: false, districtCount: 0, districtNames: "" },
         Insurance: { number: "", expiry: "" },
         Fitness: { number: "", expiry: "" },
         Tax: { number: "", expiry: "" },
@@ -477,7 +494,32 @@ app.post(
       },
     };
     db.vehicles.push(vehicle);
-    await audit(req.user, "create_vehicle", `${req.user.name} added vehicle ${reg}`);
+    await audit(req.user, "create_vehicle", `${req.user.name} added vehicle ${reg}${make||model? ` (${make||''} ${model||''})`.trim() : ""}`);
+    res.json(vehicle);
+  })
+);
+
+// Onboarding details - Make/Model/Engine No/Chassis No/RC Date/Seating
+// Capacity. Separate from /assign (site/driver/client) and /docs (document
+// numbers & expiries) since it's a distinct step in bringing on a vehicle,
+// normally done by Data Team.
+app.patch(
+  "/api/vehicles/:id/details",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+    const before = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity };
+    const { make, model, engineNo, chassisNo, rcDate, seatingCapacity } = req.body || {};
+    if (make !== undefined) vehicle.make = make || "";
+    if (model !== undefined) vehicle.model = model || "";
+    if (engineNo !== undefined) vehicle.engineNo = engineNo || "";
+    if (chassisNo !== undefined) vehicle.chassisNo = chassisNo || "";
+    if (rcDate !== undefined) vehicle.rcDate = rcDate || "";
+    if (seatingCapacity !== undefined) vehicle.seatingCapacity = seatingCapacity !== "" && seatingCapacity != null ? Number(seatingCapacity) : null;
+    const after = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity };
+    await audit(req.user, "update_vehicle_details", `${req.user.name} updated onboarding details for ${vehicle.reg}: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
     res.json(vehicle);
   })
 );
@@ -528,9 +570,19 @@ app.patch(
     if (!isOwnerSupervisor && !ADMIN_ROLES.includes(req.user.role)) {
       return res.status(403).json({ error: "Not allowed to edit this vehicle's documents." });
     }
-    const { docType, number, expiry } = req.body || {};
+    const { docType, number, expiry, isStatePermit, districtCount, districtNames } = req.body || {};
     if (!vehicle.docs[docType]) return res.status(400).json({ error: "Unknown document type." });
-    vehicle.docs[docType] = { number: number ?? vehicle.docs[docType].number, expiry: expiry ?? vehicle.docs[docType].expiry };
+    // Merge onto the existing doc object rather than replacing it wholesale,
+    // so setting one field (e.g. just the expiry, from the daily checklist)
+    // never wipes out Permit's district details or vice versa.
+    const doc = vehicle.docs[docType];
+    if (number !== undefined) doc.number = number;
+    if (expiry !== undefined) doc.expiry = expiry;
+    if (docType === "Permit") {
+      if (isStatePermit !== undefined) doc.isStatePermit = !!isStatePermit;
+      if (districtCount !== undefined) doc.districtCount = Number(districtCount) || 0;
+      if (districtNames !== undefined) doc.districtNames = districtNames || "";
+    }
     await audit(req.user, "update_doc", `${req.user.name} updated ${docType} on ${vehicle.reg}`);
     res.json(vehicle);
   })
@@ -1115,6 +1167,121 @@ function buildReport(dataset, user, query) {
       { label: "User", key: "userName" },
       { label: "Action", key: "action" },
       { label: "Detail", key: "detail" },
+    ];
+    return { rows, columns };
+  }
+
+  if (dataset === "temp_drivers") {
+    const rows = visibleExpensesFor(user)
+      .filter((e) => e.category === "Temporary Driver")
+      .filter((e) => inRange((e.submittedAt || "").slice(0, 10)));
+    const columns = [
+      { label: "Date", key: (e) => (e.submittedAt || "").slice(0, 10) },
+      { label: "Temporary Driver", key: (e) => (e.tempDriver || {}).name || "" },
+      { label: "Phone", key: (e) => (e.tempDriver || {}).phone || "" },
+      { label: "UPI ID", key: (e) => (e.tempDriver || {}).upiId || "" },
+      { label: "Amount", key: "amount" },
+      { label: "Vehicle", key: (e) => (e.vehicleId ? vehicleReg(e.vehicleId) : "") },
+      { label: "Route", key: (e) => { const v = db.vehicles.find((x) => x.id === e.vehicleId); return v ? v.route : ""; } },
+      { label: "Company", key: (e) => { const v = db.vehicles.find((x) => x.id === e.vehicleId); return v && v.clientId ? clientNameServer(v.clientId) : "Internal / Fixed Route"; } },
+      { label: "Covered For Driver", key: (e) => e.coveredForDriverName || "" },
+      { label: "Requested By", key: "userName" },
+      { label: "Status", key: "status" },
+    ];
+    return { rows, columns };
+  }
+
+  if (dataset === "doc_expiry") {
+    const visibleIds = new Set(visibleVehiclesFor(user).map((v) => v.id));
+    const rows = [];
+    db.vehicles.filter((v) => visibleIds.has(v.id)).forEach((v) => {
+      Object.entries(v.docs || {}).forEach(([docType, doc]) => {
+        if (!doc.expiry && !doc.number) return;
+        rows.push({ vehicle: v, docType, doc });
+      });
+    });
+    const columns = [
+      { label: "Vehicle", key: (r) => r.vehicle.reg },
+      { label: "Document", key: "docType" },
+      { label: "Number", key: (r) => r.doc.number || "" },
+      { label: "Expiry Date", key: (r) => r.doc.expiry || "" },
+      { label: "Days Left", key: (r) => (r.doc.expiry ? Math.round((new Date(r.doc.expiry) - new Date(todayStr())) / 86400000) : "") },
+      { label: "State Permit", key: (r) => (r.docType === "Permit" ? (r.doc.isStatePermit ? "Yes" : "No") : "") },
+      { label: "Districts", key: (r) => (r.docType === "Permit" ? r.doc.districtCount || 0 : "") },
+      { label: "District Names", key: (r) => (r.docType === "Permit" ? r.doc.districtNames || "" : "") },
+      { label: "Site", key: (r) => (r.vehicle.siteId ? siteNameServer(r.vehicle.siteId) : "") },
+      { label: "Supervisor", key: (r) => (r.vehicle.supervisorId ? userNameServer(r.vehicle.supervisorId) : "") },
+    ];
+    return { rows, columns };
+  }
+
+  if (dataset === "mileage") {
+    const visibleIds = new Set(visibleVehiclesFor(user).map((v) => v.id));
+    const rows = Object.values(db.records).filter((r) => visibleIds.has(r.vehicleId) && r.fuel && r.fuel.litres > 0 && inRange(r.date));
+    const columns = [
+      { label: "Date", key: "date" },
+      { label: "Vehicle", key: (r) => vehicleReg(r.vehicleId) },
+      { label: "Previous Odometer", key: (r) => r.fuel.previousOdometer },
+      { label: "Odometer", key: (r) => r.fuel.odometer },
+      { label: "Distance (km)", key: (r) => r.fuel.distance },
+      { label: "Litres Filled", key: (r) => r.fuel.litres },
+      { label: "Mileage (km/l)", key: (r) => r.fuel.mileage },
+      { label: "Standard Mileage", key: (r) => { const v = db.vehicles.find((x) => x.id === r.vehicleId); return v ? v.standardMileage : ""; } },
+      { label: "Below Standard", key: (r) => (r.fuel.belowStandard ? "YES" : "") },
+      { label: "Fuel Cost", key: (r) => r.fuel.totalCost },
+    ];
+    return { rows, columns };
+  }
+
+  if (dataset === "odometer") {
+    const visibleIds = new Set(visibleVehiclesFor(user).map((v) => v.id));
+    const rows = Object.values(db.odometerLogs).filter((o) => visibleIds.has(o.vehicleId) && inRange(o.date));
+    const columns = [
+      { label: "Date", key: "date" },
+      { label: "Vehicle", key: (o) => vehicleReg(o.vehicleId) },
+      { label: "Day Start (km)", key: (o) => (o.dayStart ? o.dayStart.value : "") },
+      { label: "Day Start Time", key: (o) => (o.dayStart ? new Date(o.dayStart.ts).toLocaleTimeString() : "") },
+      { label: "Day Close (km)", key: (o) => (o.dayClose ? o.dayClose.value : "") },
+      { label: "Day Close Time", key: (o) => (o.dayClose ? new Date(o.dayClose.ts).toLocaleTimeString() : "") },
+      { label: "Distance (km)", key: (o) => (o.dayStart && o.dayClose ? o.dayClose.value - o.dayStart.value : "") },
+    ];
+    return { rows, columns };
+  }
+
+  if (dataset === "monthly") {
+    const visibleIds = new Set(visibleVehiclesFor(user).map((v) => v.id));
+    const byVehicleMonth = {};
+    Object.values(db.records).forEach((r) => {
+      if (!visibleIds.has(r.vehicleId)) return;
+      const month = (r.date || "").slice(0, 7); // YYYY-MM
+      if (!month || !inRange(r.date)) return;
+      const key = r.vehicleId + "_" + month;
+      if (!byVehicleMonth[key]) {
+        byVehicleMonth[key] = { vehicleId: r.vehicleId, month, daysSubmitted: 0, totalDistance: 0, totalLitres: 0, totalFuelCost: 0, totalMileage: 0, fillCount: 0, absentDays: 0 };
+      }
+      const agg = byVehicleMonth[key];
+      agg.daysSubmitted += 1;
+      if (r.fuel) {
+        agg.totalDistance += r.fuel.distance || 0;
+        agg.totalLitres += r.fuel.litres || 0;
+        agg.totalFuelCost += r.fuel.totalCost || 0;
+        if (r.fuel.litres > 0 && r.fuel.mileage > 0) {
+          agg.totalMileage += r.fuel.mileage;
+          agg.fillCount += 1;
+        }
+      }
+      if (r.attendance && r.attendance.status === "absent") agg.absentDays += 1;
+    });
+    const rows = Object.values(byVehicleMonth);
+    const columns = [
+      { label: "Month", key: "month" },
+      { label: "Vehicle", key: (a) => vehicleReg(a.vehicleId) },
+      { label: "Days Submitted", key: "daysSubmitted" },
+      { label: "Total Distance (km)", key: "totalDistance" },
+      { label: "Total Litres", key: "totalLitres" },
+      { label: "Total Fuel Cost", key: "totalFuelCost" },
+      { label: "Average Mileage (km/l)", key: (a) => (a.fillCount ? Math.round((a.totalMileage / a.fillCount) * 10) / 10 : "") },
+      { label: "Driver Absent Days", key: "absentDays" },
     ];
     return { rows, columns };
   }
