@@ -95,6 +95,11 @@ let pingTimer = null;
 let pollTimer = null;
 let capturedOpenPhoto = null;
 let capturedClosePhoto = null;
+// Whatever the driver has typed so far into the odometer fields, kept
+// outside the DOM so a re-render (the countdown ticking, a location poll,
+// a photo capture completing) never wipes out an in-progress reading.
+let odoOpenDraft = "";
+let odoCloseDraft = "";
 let busy = false;
 let payslipMonth = new Date().toISOString().slice(0,7);
 let payslip = null;
@@ -116,6 +121,7 @@ async function api(path, opts={}){
 
 function resetSession(){
   driverToken = null; driver = null; shift = null;
+  odoOpenDraft = ""; odoCloseDraft = "";
   localStorage.removeItem("driverAuthToken");
   stopLocationPings(); stopPolling();
 }
@@ -148,10 +154,17 @@ function startLocationPings(){
 }
 function stopLocationPings(){ if(pingTimer){ clearInterval(pingTimer); pingTimer=null; } }
 
-// ---------- polling (picks up server-side 10-min auto-expiry + keeps trip list fresh) ----------
+// ---------- polling (keeps the trip list fresh while on_trip) ----------
+// Skipped entirely while awaiting_odometer - the dedicated countdown
+// ticker below already handles that screen's one job (catching the
+// server's 10-minute auto-expiry) without the full re-render a poll
+// here would cause, which would otherwise interrupt the driver mid-type.
 function startPolling(){
   stopPolling();
-  pollTimer = setInterval(refreshMe, 15000);
+  pollTimer = setInterval(()=>{
+    if(shift && shift.status==="awaiting_odometer") return;
+    refreshMe();
+  }, 15000);
 }
 function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
 async function refreshMe(){
@@ -287,6 +300,7 @@ async function submitOdometerOpen(){
     const pos = await getPosition(6000);
     shift = await api("/driver-auth/odometer-open", {method:"POST", body: JSON.stringify({odometer:Number(odometer), photo:capturedOpenPhoto, lat:pos.lat, lng:pos.lng})});
     capturedOpenPhoto = null;
+    odoOpenDraft = "";
     await loadTrips();
   }catch(e){ lastError = e.message; }
   busy = false; render();
@@ -310,6 +324,7 @@ async function submitOdometerClose(){
   try{
     shift = await api("/driver-auth/odometer-close", {method:"POST", body: JSON.stringify({odometer:Number(odometer), photo:capturedClosePhoto})});
     capturedClosePhoto = null;
+    odoCloseDraft = "";
   }catch(e){ lastError = e.message; }
   busy = false; render();
 }
@@ -412,25 +427,25 @@ function loggedOutScreen(){
   return reasonHtml + loginScreen();
 }
 
-function odometerOpenScreen(){
+function odometerCountdownParts(){
   const loginAt = new Date(shift.loginAt).getTime();
   const remainMs = Math.max(0, loginAt + 10*60*1000 - Date.now());
   const mm = String(Math.floor(remainMs/60000)).padStart(2,"0");
   const ss = String(Math.floor((remainMs%60000)/1000)).padStart(2,"0");
-  if(remainMs <= 0 && !window.__odoExpiryCheck){
-    window.__odoExpiryCheck = true;
-    setTimeout(()=>{ window.__odoExpiryCheck=false; refreshMe(); }, 1200);
-  }
+  return { remainMs, text: `${mm}:${ss}` };
+}
+function odometerOpenScreen(){
+  const { remainMs, text } = odometerCountdownParts();
   return `
   <h1 class="page-title">Welcome, ${driver.name}</h1>
   ${errorBannerHtml()}
   <div class="card">
     <h2 class="section-title">Enter Opening Odometer Reading</h2>
     <p class="muted">You must enter this within 10 minutes of logging in, or you'll be logged out automatically.</p>
-    <div class="countdown${remainMs<120000?" warn":""}">${mm}:${ss}</div>
+    <div class="countdown${remainMs<120000?" warn":""}" id="odoCountdown">${text}</div>
     <div class="field">
       <label>Odometer Reading (km)</label>
-      <input type="number" id="odoOpenValue" placeholder="e.g. 45210" inputmode="numeric" />
+      <input type="text" id="odoOpenValue" value="${odoOpenDraft}" placeholder="e.g. 45210" inputmode="numeric" pattern="[0-9]*" maxlength="7" autocomplete="off" oninput="odoOpenDraft=this.value=this.value.replace(/[^0-9]/g,'');" />
     </div>
     <div class="photo-box">
       ${capturedOpenPhoto ? `<img src="${capturedOpenPhoto}"/><br/>` : ""}
@@ -484,7 +499,7 @@ function closingOdometerCardHtml(){
     <p class="muted">Once your trip(s) are done, enter the closing odometer reading with a photo to finish your shift.</p>
     <div class="field">
       <label>Closing Odometer Reading (km)</label>
-      <input type="number" id="odoCloseValue" placeholder="e.g. 45340" inputmode="numeric" />
+      <input type="text" id="odoCloseValue" value="${odoCloseDraft}" placeholder="e.g. 45340" inputmode="numeric" pattern="[0-9]*" maxlength="7" autocomplete="off" oninput="odoCloseDraft=this.value=this.value.replace(/[^0-9]/g,'');" />
     </div>
     <div class="photo-box">
       ${capturedClosePhoto ? `<img src="${capturedClosePhoto}"/><br/>` : ""}
@@ -533,8 +548,25 @@ function payslipCardHtml(){
   </div>`;
 }
 
-// tick the countdown once a second while waiting on the opening odometer reading
-setInterval(()=>{ if(shift && shift.status==="awaiting_odometer") render(); }, 1000);
+// Ticks the 10-minute countdown once a second WITHOUT a full re-render -
+// updating the app's whole innerHTML every second was wiping out the
+// odometer input as the driver typed into it (a fresh <input> with no
+// value every tick left about one second to type before it reset). This
+// only touches the countdown's own text/class, so the input (and its
+// value, cursor position, focus) are never disturbed by the clock.
+let odoExpiryHandled = false;
+setInterval(()=>{
+  if(!shift || shift.status!=="awaiting_odometer"){ odoExpiryHandled = false; return; }
+  const el = document.getElementById("odoCountdown");
+  if(!el) return; // this screen isn't the one currently on-screen right now
+  const { remainMs, text } = odometerCountdownParts();
+  el.textContent = text;
+  el.classList.toggle("warn", remainMs < 120000);
+  if(remainMs <= 0 && !odoExpiryHandled){
+    odoExpiryHandled = true;
+    refreshMe(); // picks up the server's auto-close and switches screens
+  }
+}, 1000);
 </script>
 </body>
 </html>
