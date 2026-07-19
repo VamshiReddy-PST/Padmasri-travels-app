@@ -95,6 +95,10 @@ function backfillDefaults() {
       if (v.docs.Permit.districtNames === undefined) v.docs.Permit.districtNames = "";
     }
   });
+  (db.clients || []).forEach((c) => {
+    if (c.routeCap === undefined) c.routeCap = 0;
+    if (!Array.isArray(c.routes)) c.routes = [];
+  });
 }
 
 // MongoDB Atlas's free (M0) tier doesn't include automatic cloud backups -
@@ -408,9 +412,87 @@ app.post(
   h(async (req, res) => {
     const { name } = req.body || {};
     if (!name) return res.status(400).json({ error: "name is required." });
-    const client = { id: uid("c"), name };
+    const client = { id: uid("c"), name, routeCap: 0, routes: [] };
     db.clients.push(client);
     await audit(req.user, "create_client", `${req.user.name} added client ${name}`);
+    res.json(client);
+  })
+);
+
+// Route cap - how many routes this client is allowed to have entered below.
+// Owner-only by design: Operations Manager fills in the actual routes, but
+// only the Owner controls how many they're allowed to add.
+app.patch(
+  "/api/clients/:id/route-cap",
+  requireAuth,
+  requireRole("owner"),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const { routeCap } = req.body || {};
+    const cap = Number(routeCap);
+    if (!Number.isFinite(cap) || cap < 0) return res.status(400).json({ error: "Route cap must be a non-negative number." });
+    const before = client.routeCap;
+    client.routeCap = cap;
+    await audit(req.user, "set_route_cap", `${req.user.name} set route cap for ${client.name}: ${before} -> ${cap}`);
+    res.json(client);
+  })
+);
+
+// Individual routes (starting point name + route number, e.g. "Alwal" / "6A")
+// - Owner and Operations Manager only, and never more than the client's
+// route cap. Data Team and Site/Area Supervisors can see this (it's already
+// in /api/meta) but have no route to write to it.
+const ROUTE_EDITOR_ROLES = ["owner", "ops_manager"];
+app.post(
+  "/api/clients/:id/routes",
+  requireAuth,
+  requireRole(...ROUTE_EDITOR_ROLES),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const { name, routeNumber } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "Route name (starting point) is required." });
+    if (client.routes.length >= client.routeCap) {
+      return res.status(400).json({
+        error: `${client.name} is already at its route cap (${client.routeCap}). Ask the Owner to raise it before adding another route.`,
+      });
+    }
+    const route = { id: uid("rt"), name: String(name).trim(), routeNumber: routeNumber || "" };
+    client.routes.push(route);
+    await audit(req.user, "add_route", `${req.user.name} added route "${route.name}" (${route.routeNumber || "no number"}) to ${client.name}`);
+    res.json(client);
+  })
+);
+
+app.patch(
+  "/api/clients/:id/routes/:routeId",
+  requireAuth,
+  requireRole(...ROUTE_EDITOR_ROLES),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const route = client.routes.find((r) => r.id === req.params.routeId);
+    if (!route) return res.status(404).json({ error: "Route not found." });
+    const { name, routeNumber } = req.body || {};
+    if (name !== undefined && String(name).trim()) route.name = String(name).trim();
+    if (routeNumber !== undefined) route.routeNumber = routeNumber;
+    await audit(req.user, "update_route", `${req.user.name} updated route "${route.name}" on ${client.name}`);
+    res.json(client);
+  })
+);
+
+app.delete(
+  "/api/clients/:id/routes/:routeId",
+  requireAuth,
+  requireRole(...ROUTE_EDITOR_ROLES),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const idx = client.routes.findIndex((r) => r.id === req.params.routeId);
+    if (idx === -1) return res.status(404).json({ error: "Route not found." });
+    const [removed] = client.routes.splice(idx, 1);
+    await audit(req.user, "remove_route", `${req.user.name} removed route "${removed.name}" from ${client.name}`);
     res.json(client);
   })
 );

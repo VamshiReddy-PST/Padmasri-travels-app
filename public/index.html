@@ -249,8 +249,8 @@ async function doLogin(){
 
 // ---------- shell ----------
 function tabsFor(role){
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["my_attendance","My Attendance"],["my_expenses","My Expenses"]];
-  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["reports","Reports"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["routes","Routes"]];
+  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["reports","Reports"],["routes","Routes"]];
   if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Assignments"],["people","People"],["reports","Reports"]];
   if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Assignments"],["people","People"],["audit","Audit Log"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"]];
@@ -297,11 +297,13 @@ async function routeView(){
     if(tab==="my_vehicles") return view.name==="vehicle_detail" ? vehicleChecklistScreen(view.vehicleId) : supervisorHome();
     if(tab==="my_attendance") return myAttendanceScreen();
     if(tab==="my_expenses") return myExpensesScreen();
+    if(tab==="routes") return routesViewScreen();
   }
   if(role==="area_supervisor"){
     if(tab==="queue") return areaQueueScreen();
     if(tab==="expenses_view") return expensesScreen(false);
     if(tab==="reports") return reportsScreen();
+    if(tab==="routes") return routesViewScreen();
   }
   if(role==="ops_manager"){
     if(tab==="operations") return operationsScreen();
@@ -954,8 +956,9 @@ async function assignmentsScreen(){
       </select></td>
       <td><input type="date" value="${v.driverAssignedDate||''}" title="Date this driver was assigned to this vehicle" onchange="assignField('${v.id}','driverAssignedDate', this.value||null)" /></td>
       <td><select onchange="assignField('${v.id}','usage', this.value)">
-        <option value="fixed_route" ${v.usage==='fixed_route'?'selected':''}>Fixed route</option>
-        <option value="client_on_demand" ${v.usage==='client_on_demand'?'selected':''}>Client on-demand</option>
+        <option value="fixed_route" ${v.usage==='fixed_route'?'selected':''}>Fixed</option>
+        <option value="client_on_demand" ${v.usage==='client_on_demand'?'selected':''}>Client on demand</option>
+        <option value="booking" ${v.usage==='booking'?'selected':''}>Booking</option>
       </select></td>
       <td><button class="btn small secondary" onclick="toggleVehicleDetails('${v.id}')">${editingVehicleId===v.id?'Close':'Vehicle Details'}</button></td>
     </tr>`).join("");
@@ -982,12 +985,18 @@ async function assignmentsScreen(){
 
   <div class="grid cols-3">
     <div class="card">
-      <h2 class="section-title">Clients</h2>
-      <table>${meta.clients.map(c=>`<tr><td>${c.name}</td></tr>`).join("")}</table>
+      <h2 class="section-title">Clients & Routes</h2>
+      <table><tr><th>Client</th><th>Routes</th><th></th></tr>${meta.clients.map(c=>`
+        <tr>
+          <td>${c.name}</td>
+          <td>${(c.routes||[]).length} / ${c.routeCap||0}</td>
+          <td><button class="btn small secondary" onclick="toggleClientRoutes('${c.id}')">${editingClientRoutesId===c.id?'Close':(canEditRoutes()?'Manage Routes':'View Routes')}</button></td>
+        </tr>`).join("")}</table>
       <form class="inline-form" onsubmit="return addClient(event)">
         <div class="f"><label>New client</label><input type="text" id="newClientName" required /></div>
         <button class="btn small" type="submit">+ Add</button>
       </form>
+      ${editingClientRoutesId ? clientRoutesEditorHtml(editingClientRoutesId) : ""}
     </div>
     <div class="card">
       <h2 class="section-title">Sites</h2>
@@ -1114,6 +1123,93 @@ async function saveVehicleDoc(vehicleId, docType){
     await renderMain();
   }catch(e){ alert(e.message); }
 }
+
+// ---- Client Routes: each client has a route cap (Owner-only) and a list of
+// routes - starting point name + route number (e.g. "Alwal" / "6A") - that
+// Owner and Operations Manager can add/edit/remove, capped at that number.
+// Everyone else (Data Team, Site/Area Supervisors) can see this via
+// meta.clients but has no controls to change it.
+function canSetRouteCap(){ return currentUser.role==="owner"; }
+function canEditRoutes(){ return currentUser.role==="owner" || currentUser.role==="ops_manager"; }
+function toggleClientRoutes(clientId){
+  editingClientRoutesId = editingClientRoutesId===clientId ? null : clientId;
+  renderMain();
+}
+function clientRoutesEditorHtml(clientId){
+  const c = meta.clients.find(x=>x.id===clientId);
+  if(!c) return "";
+  const canEdit = canEditRoutes();
+  const atCap = (c.routes||[]).length >= (c.routeCap||0);
+  const rows = (c.routes||[]).map(r=>`
+    <tr>
+      <td>${canEdit ? `<input type="text" value="${r.routeNumber||''}" style="width:70px" id="rt_num_${r.id}" />` : (r.routeNumber||'-')}</td>
+      <td>${canEdit ? `<input type="text" value="${r.name}" style="width:140px" id="rt_name_${r.id}" />` : r.name}</td>
+      <td>${canEdit ? `
+        <button class="btn small secondary" onclick="saveRouteEdit('${clientId}','${r.id}')">Save</button>
+        <button class="btn small danger" onclick="deleteRoute('${clientId}','${r.id}')">Remove</button>
+      ` : ""}</td>
+    </tr>`).join("");
+  return `
+  <div class="card" style="margin-top:12px;background:var(--panel-alt,#f7f7f9);">
+    <h2 class="section-title">${c.name} - Routes</h2>
+    <div class="check-row">
+      <div class="label">Route cap (max number of routes)</div>
+      <div class="controls">
+        ${canSetRouteCap()
+          ? `<input type="number" id="rt_cap_${clientId}" value="${c.routeCap||0}" style="width:80px" /> <button class="btn small secondary" onclick="saveRouteCap('${clientId}')">Save cap</button>`
+          : `<b>${c.routeCap||0}</b> <span class="muted">(only the Owner can change this)</span>`}
+      </div>
+    </div>
+    <table><tr><th>Route No.</th><th>Starting Point</th><th></th></tr>
+      ${rows || "<tr><td colspan='3' class='empty'>No routes added yet.</td></tr>"}
+    </table>
+    ${canEdit ? `
+      <form class="inline-form" onsubmit="return addRoute('${clientId}', event)">
+        <div class="f"><label>Route No.</label><input type="text" id="newRouteNumber_${clientId}" placeholder="e.g. 6A" style="width:70px" /></div>
+        <div class="f"><label>Starting Point</label><input type="text" id="newRouteName_${clientId}" placeholder="e.g. Alwal" required style="width:140px" /></div>
+        <button class="btn small" type="submit" ${atCap?'disabled':''}>+ Add route</button>
+      </form>
+      ${atCap ? `<div class="muted" style="margin-top:6px;">At the route cap (${c.routeCap}) - ask the Owner to raise it to add more.</div>` : ""}
+    ` : `<div class="muted" style="margin-top:6px;">View only - only the Owner and Operations Manager can edit routes.</div>`}
+  </div>`;
+}
+async function saveRouteCap(clientId){
+  const cap = document.getElementById(`rt_cap_${clientId}`).value;
+  try{
+    const c = await api(`/clients/${clientId}/route-cap`, {method:"PATCH", body: JSON.stringify({routeCap: cap})});
+    const idx = meta.clients.findIndex(x=>x.id===clientId); meta.clients[idx] = c;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function addRoute(clientId, evt){
+  evt.preventDefault();
+  const name = document.getElementById(`newRouteName_${clientId}`).value;
+  const routeNumber = document.getElementById(`newRouteNumber_${clientId}`).value;
+  try{
+    const c = await api(`/clients/${clientId}/routes`, {method:"POST", body: JSON.stringify({name, routeNumber})});
+    const idx = meta.clients.findIndex(x=>x.id===clientId); meta.clients[idx] = c;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function saveRouteEdit(clientId, routeId){
+  const name = document.getElementById(`rt_name_${routeId}`).value;
+  const routeNumber = document.getElementById(`rt_num_${routeId}`).value;
+  try{
+    const c = await api(`/clients/${clientId}/routes/${routeId}`, {method:"PATCH", body: JSON.stringify({name, routeNumber})});
+    const idx = meta.clients.findIndex(x=>x.id===clientId); meta.clients[idx] = c;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function deleteRoute(clientId, routeId){
+  if(!confirm("Remove this route?")) return;
+  try{
+    const c = await api(`/clients/${clientId}/routes/${routeId}`, {method:"DELETE"});
+    const idx = meta.clients.findIndex(x=>x.id===clientId); meta.clients[idx] = c;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+
 async function addClient(evt){
   evt.preventDefault();
   const name = document.getElementById("newClientName").value;
@@ -1142,6 +1238,7 @@ async function addDriver(evt){
 // ================= PEOPLE (ops_manager, data_team, owner) =================
 let editingUserId = null;
 let editingVehicleId = null;
+let editingClientRoutesId = null;
 const ROLE_OPTIONS = [
   ["site_supervisor","Site Supervisor"],["area_supervisor","Area Supervisor"],["ops_manager","Operations Manager"],
   ["data_team","Data Team"],["hr","HR"],["owner","Owner"],
@@ -1347,6 +1444,24 @@ const REPORT_DATASETS = [
   {key:"monthly", label:"Monthly Vehicle Summary", desc:"One row per vehicle per month - total distance, fuel cost, average mileage, and driver absent days.", dateRange:true},
   {key:"audit", label:"Audit Log", desc:"Every action taken in the app, who did it, and when.", dateRange:true, roles:["owner","ops_manager"]},
 ];
+// ================= ROUTES (read-only for Site/Area Supervisors) =================
+function routesViewScreen(){
+  const rows = meta.clients.filter(c=>(c.routes||[]).length).map(c=>`
+    <tr>
+      <td><b>${c.name}</b></td>
+      <td>${(c.routes||[]).length} / ${c.routeCap||0}</td>
+      <td>${(c.routes||[]).map(r=>`<span class="badge">${r.routeNumber?r.routeNumber+' - ':''}${r.name}</span>`).join(" ")}</td>
+    </tr>`).join("");
+  return `
+  <h1 class="page-title">Routes</h1>
+  <div class="banner">Reference only - route numbers and starting points are set by Operations Manager and the Owner.</div>
+  <div class="card">
+    <table><tr><th>Client</th><th>Routes</th><th>Route list</th></tr>
+    ${rows || "<tr><td colspan='3' class='empty'>No routes have been entered yet.</td></tr>"}
+    </table>
+  </div>`;
+}
+
 function reportsScreen(){
   const myRole = currentUser.role;
   const cards = REPORT_DATASETS.filter(d => !d.roles || d.roles.includes(myRole)).map(d => `
@@ -1674,6 +1789,7 @@ Object.assign(window, {
   addSite, addDriver, addPerson, correctOdometer, setAttDate, captureBillPhoto, submitExpense, decideExpense,
   startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, saveOdometer, restoreBackup, downloadReport,
   toggleVehicleDetails, saveVehicleDetails, saveVehicleDoc,
+  toggleClientRoutes, saveRouteCap, addRoute, saveRouteEdit, deleteRoute,
 });
 
 boot();
