@@ -163,6 +163,14 @@ async function boot(){
   try{
     const m = await api("/meta");
     meta = m; currentUser = m.me;
+    // First login (or right after an Owner password reset) - the account
+    // only has a temporary password, and the server blocks every other
+    // endpoint until a real one is set. Show that screen instead of the
+    // normal app until it's done.
+    if(currentUser.mustChangePassword){
+      renderForcedPasswordChange();
+      return;
+    }
     view.tab = defaultTab(currentUser.role);
     await loadCoreData();
     render();
@@ -193,49 +201,52 @@ function doLogout(silent){
 }
 
 // ---------- LOGIN ----------
-let loginUsers = [];
-let selectedLoginUser = null;
+// Everyone signs in with their email address (or, if they don't have one,
+// their mobile number) plus their own password - no more picking your name
+// off a shared list. Mirrors the server's passwordPolicyError() exactly so
+// the person sees the same rule in the same words, whether typing it here
+// or in the mandatory change-password screen after logging in.
+const PASSWORD_MIN_LENGTH = 9;
+function passwordPolicyError(password){
+  if(!password || password.length < PASSWORD_MIN_LENGTH) return `Password must be more than 8 characters (at least ${PASSWORD_MIN_LENGTH}).`;
+  if(!/[a-zA-Z]/.test(password)) return "Password must include at least one letter.";
+  if(!/[0-9]/.test(password)) return "Password must include at least one number.";
+  if(!/[^a-zA-Z0-9]/.test(password)) return "Password must include at least one symbol (e.g. ! @ # $ %).";
+  return null;
+}
+function passwordHintsHtml(){
+  return `<div class="muted" style="margin-top:4px;">Strong password: more than 8 characters, with letters, numbers and symbols - and different from any password you've used before.</div>`;
+}
 async function renderLogin(){
   const app = document.getElementById("app");
-  app.innerHTML = `<div class="login-wrap"><div class="logo">🧭 Padmasri Travels</div><div class="sub">Loading team list...</div></div>`;
-  try{
-    loginUsers = await api("/users/login-list");
-  }catch(e){ loginUsers = []; }
-  const cards = loginUsers.map(u => `
-    <label class="${selectedLoginUser===u.id?'sel':''}" onclick="selectLoginUser('${u.id}', event)">
-      <b>${u.name}</b>
-      <span class="small">${roleLabel(u.role)}</span>
-    </label>
-  `).join("");
   app.innerHTML = `
   <div class="login-wrap">
     <div class="logo">🧭 Padmasri Travels</div>
     <div class="sub">Sign in with your own login</div>
     <div class="card">
       ${lastError ? `<div class="banner error">${lastError}</div>` : ""}
-      <div class="role-pick">${cards || "<div class='empty'>Could not reach the server.</div>"}</div>
       <div class="field">
-        <label>PIN</label>
-        <input type="password" inputmode="numeric" id="pinInput" placeholder="Your PIN" />
+        <label>Email or Mobile Number</label>
+        <input type="text" id="loginIdentifier" placeholder="you@company.com or your mobile number" autocomplete="username" />
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="loginPassword" placeholder="Your password" autocomplete="current-password" />
       </div>
       <button class="btn" style="width:100%" onclick="doLogin()" id="loginBtn">Sign in</button>
-      <div class="muted" style="margin-top:10px;">Everyone gets their own login - this is what makes the audit trail (who changed what, when) meaningful.</div>
+      <div class="muted" style="margin-top:10px;">Everyone gets their own login - this is what makes the audit trail (who changed what, when) meaningful. If you don't have an email on file, use your mobile number instead.</div>
     </div>
   </div>`;
 }
-function selectLoginUser(id, evt){
-  selectedLoginUser = id;
-  document.querySelectorAll(".role-pick label").forEach(l=>l.classList.remove("sel"));
-  if(evt && evt.currentTarget) evt.currentTarget.classList.add("sel");
-}
 async function doLogin(){
   lastError = "";
-  if(!selectedLoginUser){ lastError = "Pick your name first."; renderLogin(); return; }
-  const pin = document.getElementById("pinInput").value;
+  const identifier = document.getElementById("loginIdentifier").value.trim();
+  const password = document.getElementById("loginPassword").value;
+  if(!identifier || !password){ lastError = "Enter your email/mobile number and password."; renderLogin(); return; }
   const btn = document.getElementById("loginBtn");
   btn.disabled = true; btn.textContent = "Signing in...";
   try{
-    const res = await fetch(API+"/login", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({id:selectedLoginUser, pin})});
+    const res = await fetch(API+"/login", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({identifier, password})});
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || "Login failed");
     authToken = data.token;
@@ -245,6 +256,91 @@ async function doLogin(){
     lastError = e.message;
     renderLogin();
   }
+}
+
+// ---------- FORCED / VOLUNTARY PASSWORD CHANGE ----------
+// Same form and validation used two ways: (1) mandatory, full-page, and
+// blocking (renderForcedPasswordChange - first login or right after an
+// Owner reset, server-enforced so there's no way to skip it), and (2)
+// voluntary, reached via the "Change Password" button in the header at
+// any time (changePasswordScreen, part of the normal tab-routed app).
+let pwChangeError = "";
+function changePasswordFormHtml(idPrefix){
+  return `
+    ${pwChangeError ? `<div class="banner error">${pwChangeError}</div>` : ""}
+    <div class="field">
+      <label>Current Password</label>
+      <input type="password" id="${idPrefix}Current" autocomplete="current-password" />
+    </div>
+    <div class="field">
+      <label>New Password</label>
+      <input type="password" id="${idPrefix}New" autocomplete="new-password" />
+    </div>
+    <div class="field">
+      <label>Confirm New Password</label>
+      <input type="password" id="${idPrefix}Confirm" autocomplete="new-password" />
+    </div>
+    ${passwordHintsHtml()}
+  `;
+}
+async function renderForcedPasswordChange(){
+  const app = document.getElementById("app");
+  app.innerHTML = `
+  <div class="login-wrap">
+    <div class="logo">🧭 Padmasri Travels</div>
+    <div class="sub">Set a new password to continue</div>
+    <div class="card">
+      <div class="banner">For security, you need to set your own password before you can use the app${currentUser && currentUser.name ? ", " + currentUser.name : ""}.</div>
+      ${changePasswordFormHtml("forced")}
+      <button class="btn" style="width:100%" onclick="submitForcedPasswordChange()" id="forcedPwBtn">Set New Password</button>
+      <button class="btn secondary" style="width:100%;margin-top:8px;" onclick="doLogout()">Log out instead</button>
+    </div>
+  </div>`;
+}
+async function submitForcedPasswordChange(){
+  pwChangeError = "";
+  const currentPassword = document.getElementById("forcedCurrent").value;
+  const newPassword = document.getElementById("forcedNew").value;
+  const confirm = document.getElementById("forcedConfirm").value;
+  if(newPassword !== confirm){ pwChangeError = "New password and confirmation don't match."; renderForcedPasswordChange(); return; }
+  const policyErr = passwordPolicyError(newPassword);
+  if(policyErr){ pwChangeError = policyErr; renderForcedPasswordChange(); return; }
+  const btn = document.getElementById("forcedPwBtn");
+  btn.disabled = true; btn.textContent = "Saving...";
+  try{
+    await api("/change-password", {method:"POST", body: JSON.stringify({currentPassword, newPassword})});
+    pwChangeError = "";
+    await boot();
+  }catch(e){
+    pwChangeError = e.message;
+    renderForcedPasswordChange();
+  }
+}
+// Voluntary version, reached from the header at any time - same form,
+// routed like any other tab screen (view.name==="change_password"),
+// returns to whatever tab they were on when they're done.
+async function changePasswordScreen(){
+  return `
+  <h1 class="page-title">Change Password</h1>
+  <div class="card" style="max-width:420px;">
+    ${changePasswordFormHtml("voluntary")}
+    <button class="btn" onclick="submitVoluntaryPasswordChange()">Save New Password</button>
+    <button class="btn secondary" onclick="goto('home')" style="margin-left:8px;">Cancel</button>
+  </div>`;
+}
+async function submitVoluntaryPasswordChange(){
+  pwChangeError = "";
+  const currentPassword = document.getElementById("voluntaryCurrent").value;
+  const newPassword = document.getElementById("voluntaryNew").value;
+  const confirm = document.getElementById("voluntaryConfirm").value;
+  if(newPassword !== confirm){ alert("New password and confirmation don't match."); return; }
+  const policyErr = passwordPolicyError(newPassword);
+  if(policyErr){ alert(policyErr); return; }
+  try{
+    await api("/change-password", {method:"POST", body: JSON.stringify({currentPassword, newPassword})});
+    alert("Password changed.");
+    await goto("home");
+  }catch(e){ alert(e.message); }
 }
 
 // ---------- shell ----------
@@ -268,6 +364,7 @@ async function render(){
       <div class="brand"><span class="dot"></span> Padmasri Travels</div>
       <div style="display:flex;align-items:center;">
         <div class="who">${u.name}<br><span style="opacity:.75">${roleLabel(u.role)}</span></div>
+        <button class="btn small secondary" style="margin-right:8px;" onclick="goto('change_password')">Change Password</button>
         <button class="logout" onclick="doLogout()">Log out</button>
       </div>
     </header>
@@ -294,6 +391,7 @@ async function renderMain(){
 async function routeView(){
   const role = currentUser.role;
   const tab = view.tab;
+  if(view.name==="change_password") return changePasswordScreen();
   if(role==="site_supervisor"){
     if(tab==="my_vehicles") return view.name==="vehicle_detail" ? vehicleChecklistScreen(view.vehicleId) : supervisorHome();
     if(tab==="my_attendance") return myAttendanceScreen();
@@ -349,7 +447,7 @@ async function routeView(){
 // A lighter-weight editor than the full Assignments screen - these three
 // roles can flip a vehicle's Usage (Fixed / Client on demand / Booking)
 // without touching site/driver/client assignment, which stays restricted
-// to Operations Manager, Data Team and (PIN-gated) Owner.
+// to Operations Manager, Data Team and (password-gated) Owner.
 const USAGE_LABELS = {fixed_route:"Fixed Route", client_on_demand:"Client on demand", booking:"Booking"};
 // Recorded whenever fuel is filled, so the day's total spend can be broken
 // out by station brand and by how it was paid for.
@@ -1166,11 +1264,11 @@ async function downloadFuelOverview(format){
 async function ownerAssignmentsReadOnlyHtml(){
   return `
   <h1 class="page-title">Overview - Vehicles running today</h1>
-  <div class="banner">View only. Pick a date below to look back at a past day. Vehicle, route and supervisor details are managed by Operations Manager - re-enter your PIN below if you need to make a change yourself (this guards against accidental taps).</div>
+  <div class="banner">View only. Pick a date below to look back at a past day. Vehicle, route and supervisor details are managed by Operations Manager - re-enter your password below if you need to make a change yourself (this guards against accidental taps).</div>
   ${await assignmentsDateViewCardHtml()}
   ${await fuelOverviewCardHtml()}
   <div class="card">
-    <button class="btn small secondary" onclick="unlockOwnerAssignmentEditing()">Unlock editing (PIN required)</button>
+    <button class="btn small secondary" onclick="unlockOwnerAssignmentEditing()">Unlock editing (password required)</button>
   </div>`;
 }
 // Read-only Assignments view for Site Supervisor and Area Supervisor -
@@ -1185,14 +1283,14 @@ async function supervisorAssignmentsScreen(){
   ${await fuelOverviewCardHtml()}`;
 }
 async function unlockOwnerAssignmentEditing(){
-  const pin = prompt("Re-enter your PIN to edit Assignments:");
-  if(pin===null) return;
+  const password = prompt("Re-enter your password to edit Assignments:");
+  if(password===null) return;
   try{
-    const result = await api("/verify-pin", {method:"POST", body: JSON.stringify({pin})});
-    if(!result.ok){ alert(result.error || "Incorrect PIN."); return; }
+    const result = await api("/verify-password", {method:"POST", body: JSON.stringify({password})});
+    if(!result.ok){ alert(result.error || "Incorrect password."); return; }
     ownerAssignUnlocked = true;
     await renderMain();
-  }catch(e){ alert(e.message || "Incorrect PIN."); }
+  }catch(e){ alert(e.message || "Incorrect password."); }
 }
 async function assignmentsEditorHtml(){
   const rows = vehicles.map(v=>`
@@ -1672,6 +1770,7 @@ async function peopleScreen(){
       <td>${u.name}${inactive? ' <span class="badge low">INACTIVE</span>' : ''}</td>
       <td>${roleLabel(u.role)}</td>
       <td>${u.siteId? siteName(u.siteId): (u.supervises&&u.supervises.length? u.supervises.map(userName).join(", ") : "-")}</td>
+      <td>${u.email || "-"}</td>
       <td>${u.phone || "-"}</td>
       <td>${u.dateOfJoining || "-"}</td>
       <td>
@@ -1681,6 +1780,7 @@ async function peopleScreen(){
             ? `<button class="btn small" onclick="setPersonActive('${u.id}', true)">Reactivate</button>`
             : `<button class="btn small danger" onclick="setPersonActive('${u.id}', false)">Deactivate</button>`}
         ` : `<span class="muted">${canEditAtAll ? 'Only the Owner can edit this' : ''}</span>`}
+        ${myRole==="owner" ? `<button class="btn small secondary" onclick="resetStaffPassword('${u.id}','${u.name.replace(/'/g,"\\'")}')">Reset Password</button>` : ''}
       </td>
     </tr>`;
   }).join("");
@@ -1691,20 +1791,22 @@ async function peopleScreen(){
   <h1 class="page-title">People</h1>
   <div class="card">
     <h2 class="section-title">Staff (${meta.users.length})</h2>
-    <table><tr><th>Name</th><th>Role</th><th>Site / Supervises</th><th>Mobile Number</th><th>Date of Joining</th><th></th></tr>${rows}</table>
+    <table><tr><th>Name</th><th>Role</th><th>Site / Supervises</th><th>Email</th><th>Mobile Number</th><th>Date of Joining</th><th></th></tr>${rows}</table>
 
     ${canEditAtAll ? `
     <form class="inline-form" onsubmit="return ${editing ? 'saveEditPerson(event)' : 'addPerson(event)'}">
       <div class="f"><label>Name</label><input type="text" id="newPersonName" value="${editing? editing.name : ''}" required /></div>
       <div class="f"><label>Role</label><select id="newPersonRole">${roleOptionsHtml(editing? editing.role : 'site_supervisor', myRole)}</select></div>
       <div class="f"><label>Site (if Site Supervisor)</label><select id="newPersonSite">${siteOptionsHtml(editing? editing.siteId : null)}</select></div>
+      <div class="f"><label>Email</label><input type="email" id="newPersonEmail" value="${editing? (editing.email||'') : ''}" style="width:200px" /></div>
       <div class="f"><label>Mobile Number</label><input type="tel" id="newPersonPhone" value="${editing? (editing.phone||'') : ''}" style="width:130px" /></div>
       <div class="f"><label>Date of Joining</label><input type="date" id="newPersonDoj" value="${editing? (editing.dateOfJoining||'') : ''}" style="width:140px" /></div>
-      <div class="f"><label>${editing? 'New PIN (leave blank to keep current)' : 'PIN (4+ digits)'}</label><input type="text" inputmode="numeric" id="newPersonPin" ${editing? '' : 'required'} placeholder="${editing? 'unchanged':''}" /></div>
+      ${editing ? '' : `<div class="f"><label>Temporary Password</label><input type="password" id="newPersonPassword" required autocomplete="new-password" /></div>`}
       <button class="btn small" type="submit">${editing? 'Save changes' : '+ Add person'}</button>
       ${editing? `<button type="button" class="btn small secondary" onclick="cancelEditPerson()">Cancel</button>` : ''}
     </form>
-    <div class="muted" style="margin-top:6px;">${editing? `Editing ${editing.name} - changing PIN here immediately changes their login.` : "Give each person their PIN privately - this is what they'll use to sign in."}</div>
+    ${editing ? '' : passwordHintsHtml()}
+    <div class="muted" style="margin-top:6px;">${editing? `Editing ${editing.name} - use "Reset Password" to change their login password (Owner only).` : "This is a temporary password - they'll be required to set their own the first time they log in. Either an email or a mobile number is required so they have something to sign in with."}</div>
     ${myRole==="hr" ? `<div class="muted">Only the Owner can create or edit Owner or HR accounts.</div>` : ""}
     ${myRole==="ops_manager" ? `<div class="muted">Only the Owner can create or edit Owner, Operations Manager, or HR accounts.</div>` : ""}
     ` : `<div class="muted" style="margin-top:6px;">You have view-only access to People - only the Owner, Operations Manager, and HR can make changes here.</div>`}
@@ -1713,13 +1815,17 @@ async function peopleScreen(){
 }
 async function addPerson(evt){
   evt.preventDefault();
+  const password = document.getElementById("newPersonPassword").value;
+  const policyErr = passwordPolicyError(password);
+  if(policyErr){ alert(policyErr); return false; }
   const body = {
     name: document.getElementById("newPersonName").value,
     role: document.getElementById("newPersonRole").value,
     siteId: document.getElementById("newPersonSite").value || null,
+    email: document.getElementById("newPersonEmail").value,
     phone: document.getElementById("newPersonPhone").value,
     dateOfJoining: document.getElementById("newPersonDoj").value,
-    pin: document.getElementById("newPersonPin").value,
+    password,
   };
   try{
     const u = await api("/users", {method:"POST", body: JSON.stringify(body)});
@@ -1736,11 +1842,10 @@ async function saveEditPerson(evt){
     name: document.getElementById("newPersonName").value,
     role: document.getElementById("newPersonRole").value,
     siteId: document.getElementById("newPersonSite").value || null,
+    email: document.getElementById("newPersonEmail").value,
     phone: document.getElementById("newPersonPhone").value,
     dateOfJoining: document.getElementById("newPersonDoj").value,
   };
-  const pin = document.getElementById("newPersonPin").value;
-  if(pin) body.pin = pin;
   try{
     const u = await api(`/users/${editingUserId}`, {method:"PATCH", body: JSON.stringify(body)});
     const idx = meta.users.findIndex(x=>x.id===editingUserId);
@@ -1757,6 +1862,22 @@ async function setPersonActive(id, active){
     const updated = await api(`/users/${id}`, {method:"PATCH", body: JSON.stringify({active})});
     const idx = meta.users.findIndex(x=>x.id===id);
     meta.users[idx] = updated;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+// Owner-only "full control" password reset - doesn't need the person's old
+// password, but forces them to set a brand new one of their own the next
+// time they log in (mustChangePassword flips back on server-side).
+async function resetStaffPassword(id, name){
+  const newPassword = prompt(`Set a new temporary password for ${name}. They'll be required to set their own the next time they log in.\n\nMust be more than 8 characters with letters, numbers and symbols.`);
+  if(newPassword===null) return;
+  const policyErr = passwordPolicyError(newPassword);
+  if(policyErr){ alert(policyErr); return; }
+  try{
+    const updated = await api(`/users/${id}/reset-password`, {method:"PATCH", body: JSON.stringify({newPassword})});
+    const idx = meta.users.findIndex(x=>x.id===id);
+    if(idx>=0) meta.users[idx] = updated;
+    alert(`Password reset for ${name}.`);
     await renderMain();
   }catch(e){ alert(e.message); }
 }
@@ -2557,15 +2678,16 @@ async function backupsCardHtml(){
 }
 async function restoreBackup(id, label){
   if(!confirm(`Restore all app data to the backup from ${label}?\n\nThis REPLACES everything currently in the app (all vehicles, records, people, expenses, etc.) with that snapshot. This cannot be undone except by restoring a different backup. Are you sure?`)) return;
-  // A restore wipes and replaces ALL current data - re-confirming the PIN
-  // here is a deliberate second gate, separate from just being logged in as
-  // Owner, so a wrong click can't wipe the fleet's data by accident.
-  const pin = prompt("This will replace ALL current data. Re-enter your PIN to confirm the restore:");
-  if(pin===null) return;
+  // A restore wipes and replaces ALL current data - re-confirming the
+  // password here is a deliberate second gate, separate from just being
+  // logged in as Owner, so a wrong click can't wipe the fleet's data by
+  // accident.
+  const password = prompt("This will replace ALL current data. Re-enter your password to confirm the restore:");
+  if(password===null) return;
   try{
-    const result = await api("/verify-pin", {method:"POST", body: JSON.stringify({pin})});
-    if(!result.ok){ alert(result.error || "Incorrect PIN - restore cancelled."); return; }
-  }catch(e){ alert(e.message || "Could not verify PIN - restore cancelled."); return; }
+    const result = await api("/verify-password", {method:"POST", body: JSON.stringify({password})});
+    if(!result.ok){ alert(result.error || "Incorrect password - restore cancelled."); return; }
+  }catch(e){ alert(e.message || "Could not verify password - restore cancelled."); return; }
   try{
     await api(`/admin/backups/${id}/restore`, {method:"POST"});
     alert("Restored. Reloading the app now.");
@@ -2670,10 +2792,11 @@ function drawCharts(approved,pending,rejected,fails,passes){
 
 // ---------- expose for inline handlers ----------
 Object.assign(window, {
-  selectLoginUser, doLogin, doLogout, switchTab, goto, draftSet, updateBreathalyzer, startPhotoCapture,
+  doLogin, doLogout, switchTab, goto, draftSet, updateBreathalyzer, startPhotoCapture,
+  submitForcedPasswordChange, submitVoluntaryPasswordChange,
   updateDoc, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, addDriver, addPerson, correctOdometer, captureBillPhoto, submitExpense, decideExpense,
-  startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, saveOdometer, restoreBackup, downloadReport,
+  startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, resetStaffPassword, saveOdometer, restoreBackup, downloadReport,
   toggleVehicleDetails, saveVehicleDetails, saveVehicleDoc, onNewVehicleTypeChange, onVdVehicleTypeChange, onPermitStateToggle,
   toggleClientRoutes, saveRouteCap, addRoute, saveRouteEdit, deleteRoute,
   setVehicleUsage, unlockOwnerAssignmentEditing, setAuditRange, downloadFullBackup, setAssignmentsViewDate,

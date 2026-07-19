@@ -119,6 +119,19 @@ function backfillDefaults() {
   (db.users || []).forEach((u) => {
     if (u.phone === undefined) u.phone = "";
     if (u.dateOfJoining === undefined) u.dateOfJoining = "";
+    if (u.email === undefined) u.email = "";
+    if (!Array.isArray(u.passwordHistory)) u.passwordHistory = [];
+    // Migrating off the old 4-digit PIN login: anyone who doesn't already
+    // have a real password hash gets a one-time temporary password derived
+    // from their old PIN, and is forced to set their own real password the
+    // next time they log in - nobody gets locked out by this upgrade.
+    if (!u.passwordHash) {
+      const tempPassword = `Padmasri@${u.pin || "0000"}`;
+      u.passwordHash = hashPassword(tempPassword);
+      u.mustChangePassword = true;
+    }
+    if (u.mustChangePassword === undefined) u.mustChangePassword = false;
+    delete u.pin;
   });
   (db.drivers || []).forEach((d) => {
     if (d.phone === undefined) d.phone = "";
@@ -200,6 +213,51 @@ function computeRcExpiry(rcDate) {
 // These 5 document types get a photo/scan of the physical document attached
 // (Insurance does not, per the Owner's spec).
 const DOC_COPY_TYPES = ["RC", "Permit", "Fitness", "Tax", "PUC"];
+
+// ---------- PASSWORDS ----------
+// Every login is now email (or mobile number, if no email on file) plus a
+// real password - replacing the old 4-digit PIN entirely. Passwords are
+// hashed with scrypt (salted, stored as "salt:hash" hex) - never kept or
+// exported in plaintext anywhere, including the full-data backup.
+const PASSWORD_MIN_LENGTH = 9; // "more than 8 letters"
+const PASSWORD_HISTORY_LIMIT = 5;
+function hashPassword(password, salt) {
+  const useSalt = salt || crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(String(password), useSalt, 64).toString("hex");
+  return `${useSalt}:${hash}`;
+}
+function verifyPassword(password, stored) {
+  if (!password || !stored || typeof stored !== "string" || !stored.includes(":")) return false;
+  const [salt, hash] = stored.split(":");
+  let candidate;
+  try {
+    candidate = crypto.scryptSync(String(password), salt, 64).toString("hex");
+  } catch (err) {
+    return false;
+  }
+  const a = Buffer.from(candidate, "hex");
+  const b = Buffer.from(hash, "hex");
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+// Strong-password policy: more than 8 characters, and a mix of letters,
+// numbers and symbols - not just length.
+function passwordPolicyError(password) {
+  if (!password || String(password).length < PASSWORD_MIN_LENGTH) {
+    return `Password must be more than 8 characters (at least ${PASSWORD_MIN_LENGTH}).`;
+  }
+  if (!/[a-zA-Z]/.test(password)) return "Password must include at least one letter.";
+  if (!/[0-9]/.test(password)) return "Password must include at least one number.";
+  if (!/[^a-zA-Z0-9]/.test(password)) return "Password must include at least one symbol (e.g. ! @ # $ %).";
+  return null;
+}
+// Blocks reusing the current password OR any of the last few - checked by
+// re-hashing the candidate against each stored salt, since hashes are
+// salted and can't be compared directly.
+function passwordReused(password, user) {
+  const history = [user.passwordHash, ...(user.passwordHistory || [])].filter(Boolean);
+  return history.some((stored) => verifyPassword(password, stored));
+}
 
 // Vehicle class + fuel type - the fleet only has Diesel buses (no Petrol/
 // CNG/EV/Hybrid buses), so a Bus is always forced to Diesel. Cabs can be
@@ -304,16 +362,24 @@ const sessions = new Map(); // token -> userId
 
 function publicUser(u) {
   if (!u) return null;
-  const { pin, ...rest } = u;
+  const { passwordHash, passwordHistory, ...rest } = u;
   return rest;
 }
 
+// A handful of routes stay reachable even while a user is mid-forced-
+// password-change (mustChangePassword=true) - just enough for the frontend
+// to know who they are and let them actually set the new password. Every
+// other endpoint is blocked until that's done.
+const ALLOWED_DURING_FORCED_PASSWORD_CHANGE = ["/api/meta", "/api/change-password", "/api/logout"];
 function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   const userId = token && sessions.get(token);
   const user = userId && db.users.find((u) => u.id === userId && u.active !== false);
   if (!user) return res.status(401).json({ error: "Not signed in. Please log in again." });
+  if (user.mustChangePassword && !ALLOWED_DURING_FORCED_PASSWORD_CHANGE.includes(req.path)) {
+    return res.status(403).json({ error: "You must set a new password before continuing.", mustChangePassword: true });
+  }
   req.user = user;
   next();
 }
@@ -338,21 +404,27 @@ function h(fn) {
 }
 
 // ---------- AUTH ROUTES ----------
-app.get("/api/users/login-list", (req, res) => {
-  res.json(
-    db.users
-      .filter((u) => u.active !== false)
-      .map((u) => ({ id: u.id, name: u.name, role: u.role }))
-  );
-});
-
+// Everyone signs in with their email address (or, if they don't have one on
+// file, their mobile number) plus their password - there's no more "pick
+// your name from a list" picker, both because it doesn't scale to a real
+// login and because it quietly exposed every active user's name/role to
+// anyone who loaded the login page, unauthenticated.
 app.post(
   "/api/login",
   h(async (req, res) => {
-    const { id, pin } = req.body || {};
-    const user = db.users.find((u) => u.id === id && u.active !== false);
-    if (!user || String(user.pin) !== String(pin)) {
-      return res.status(401).json({ error: "Wrong user or PIN." });
+    const { identifier, password } = req.body || {};
+    if (!identifier || !password) {
+      return res.status(400).json({ error: "Email/mobile number and password are required." });
+    }
+    const idNorm = String(identifier).trim().toLowerCase();
+    const phoneNorm = String(identifier).trim();
+    const user = db.users.find(
+      (u) =>
+        u.active !== false &&
+        ((u.email && u.email.toLowerCase() === idNorm) || (u.phone && u.phone === phoneNorm))
+    );
+    if (!user || !verifyPassword(password, user.passwordHash)) {
+      return res.status(401).json({ error: "Incorrect email/mobile number or password." });
     }
     const token = crypto.randomBytes(24).toString("hex");
     sessions.set(token, user.id);
@@ -370,6 +442,36 @@ app.post(
     sessions.delete(token);
     await audit(req.user, "logout", `${req.user.name} logged out`);
     res.json({ ok: true });
+  })
+);
+
+// Self-service password change - this is the one and only escape hatch
+// from a forced mustChangePassword lock (first login, or after an Owner
+// reset), and also how anyone can voluntarily change their own password
+// at any time. Always requires re-entering the current password, even
+// during a forced change, since that's simple proof they are who they
+// say they are.
+app.post(
+  "/api/change-password",
+  requireAuth,
+  h(async (req, res) => {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: "Current and new password are required." });
+    }
+    if (!verifyPassword(currentPassword, req.user.passwordHash)) {
+      return res.status(400).json({ error: "Current password is incorrect." });
+    }
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError) return res.status(400).json({ error: policyError });
+    if (passwordReused(newPassword, req.user)) {
+      return res.status(400).json({ error: "New password cannot be the same as your current or a recent previous password." });
+    }
+    req.user.passwordHistory = [req.user.passwordHash, ...(req.user.passwordHistory || [])].slice(0, PASSWORD_HISTORY_LIMIT);
+    req.user.passwordHash = hashPassword(newPassword);
+    req.user.mustChangePassword = false;
+    await audit(req.user, "change_password", `${req.user.name} changed their own password`);
+    res.json(publicUser(req.user));
   })
 );
 
@@ -411,27 +513,56 @@ function canManageUserRole(actorRole, targetRole) {
   return !!allowed && allowed.includes(targetRole);
 }
 
+// Login identifiers (email, or phone as a fallback) must be unique across
+// active accounts - otherwise login can't tell two people apart. Checked
+// on both create and edit, excluding the user being edited themselves.
+function findLoginIdentifierClash(email, phone, excludeUserId) {
+  const emailNorm = email ? String(email).trim().toLowerCase() : "";
+  const phoneNorm = phone ? String(phone).trim() : "";
+  if (!emailNorm && !phoneNorm) return null;
+  return db.users.find(
+    (u) =>
+      u.id !== excludeUserId &&
+      ((emailNorm && u.email && u.email.toLowerCase() === emailNorm) || (phoneNorm && u.phone && u.phone === phoneNorm))
+  );
+}
+
 app.post(
   "/api/users",
   requireAuth,
   requireRole(...PEOPLE_EDITOR_ROLES),
   h(async (req, res) => {
-    const { name, role, pin, siteId, supervises, phone, dateOfJoining } = req.body || {};
-    if (!name || !VALID_ROLES.includes(role) || !pin) {
-      return res.status(400).json({ error: "name, role and pin are required." });
+    const { name, role, password, siteId, supervises, phone, dateOfJoining, email } = req.body || {};
+    if (!name || !VALID_ROLES.includes(role) || !password) {
+      return res.status(400).json({ error: "name, role and password are required." });
     }
     if (!canManageUserRole(req.user.role, role)) {
       return res.status(403).json({ error: `Only the Owner can create ${roleLabelServer(role)} accounts.` });
     }
+    const emailNorm = email ? String(email).trim().toLowerCase() : "";
+    const phoneNorm = phone ? String(phone).trim() : "";
+    if (!emailNorm && !phoneNorm) {
+      return res.status(400).json({ error: "Either an email address or a mobile number is required to log in." });
+    }
+    if (findLoginIdentifierClash(emailNorm, phoneNorm, null)) {
+      return res.status(400).json({ error: "That email or mobile number is already in use by another account." });
+    }
+    const policyError = passwordPolicyError(password);
+    if (policyError) return res.status(400).json({ error: policyError });
     const user = {
       id: uid("u"),
       name,
       role,
-      pin: String(pin),
+      email: emailNorm,
+      phone: phoneNorm,
+      passwordHash: hashPassword(password),
+      passwordHistory: [],
+      // New accounts always have to set their own password on first login -
+      // whoever created the account only ever sets a temporary one.
+      mustChangePassword: true,
       active: true,
       siteId: siteId || null,
       supervises: Array.isArray(supervises) ? supervises : [],
-      phone: phone || "",
       dateOfJoining: dateOfJoining || "",
     };
     db.users.push(user);
@@ -452,10 +583,11 @@ app.patch(
     }
     const before = { name: user.name, role: user.role, siteId: user.siteId, supervises: user.supervises, active: user.active };
 
-    // Whitelisted fields only - and PIN is left alone unless a new non-empty
-    // one is actually provided, so an edit form with a blank PIN field can't
-    // accidentally lock someone out.
-    const { name, role, pin, siteId, supervises, active, phone, dateOfJoining } = req.body || {};
+    // Whitelisted fields only - password is deliberately NOT settable here
+    // at all, even by the Owner. Password changes only ever happen through
+    // /api/change-password (self-service) or /api/users/:id/reset-password
+    // (Owner-only), so there's exactly one audited path for each.
+    const { name, role, siteId, supervises, active, phone, dateOfJoining, email } = req.body || {};
     if (name !== undefined && String(name).trim()) user.name = String(name).trim();
     if (role !== undefined) {
       if (!VALID_ROLES.includes(role)) return res.status(400).json({ error: "Unknown role." });
@@ -465,15 +597,50 @@ app.patch(
       }
       user.role = role;
     }
-    if (pin !== undefined && String(pin).trim()) user.pin = String(pin).trim();
+    if (email !== undefined || phone !== undefined) {
+      const nextEmail = email !== undefined ? email : user.email;
+      const nextPhone = phone !== undefined ? phone : user.phone;
+      if (!nextEmail && !nextPhone) {
+        return res.status(400).json({ error: "Either an email address or a mobile number is required to log in." });
+      }
+      if (findLoginIdentifierClash(nextEmail, nextPhone, user.id)) {
+        return res.status(400).json({ error: "That email or mobile number is already in use by another account." });
+      }
+      if (email !== undefined) user.email = email ? String(email).trim().toLowerCase() : "";
+      if (phone !== undefined) user.phone = phone ? String(phone).trim() : "";
+    }
     if (siteId !== undefined) user.siteId = siteId || null;
     if (supervises !== undefined) user.supervises = Array.isArray(supervises) ? supervises : user.supervises;
-    if (phone !== undefined) user.phone = phone || "";
     if (dateOfJoining !== undefined) user.dateOfJoining = dateOfJoining || "";
     if (active !== undefined) user.active = !!active;
 
     const after = { name: user.name, role: user.role, siteId: user.siteId, supervises: user.supervises, active: user.active };
     await audit(req.user, "update_user", `${req.user.name} updated ${user.name} (${user.id}): ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
+    res.json(publicUser(user));
+  })
+);
+
+// Owner-only password reset - gives the Owner full control over every
+// staff member's password. Unlike a self-service change, this doesn't
+// require knowing the old password, but it does force the target to set
+// their own brand-new password the next time they log in.
+app.patch(
+  "/api/users/:id/reset-password",
+  requireAuth,
+  requireRole("owner"),
+  h(async (req, res) => {
+    const user = db.users.find((u) => u.id === req.params.id);
+    if (!user) return res.status(404).json({ error: "User not found." });
+    const { newPassword } = req.body || {};
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError) return res.status(400).json({ error: policyError });
+    if (passwordReused(newPassword, user)) {
+      return res.status(400).json({ error: "New password cannot match this person's current or a recent previous password." });
+    }
+    user.passwordHistory = [user.passwordHash, ...(user.passwordHistory || [])].filter(Boolean).slice(0, PASSWORD_HISTORY_LIMIT);
+    user.passwordHash = hashPassword(newPassword);
+    user.mustChangePassword = true;
+    await audit(req.user, "reset_password", `${req.user.name} reset the password for ${user.name} (${user.id}) - they must set a new one at next login`);
     res.json(publicUser(user));
   })
 );
@@ -912,21 +1079,23 @@ app.patch(
   })
 );
 
-// Lets the currently-logged-in user re-confirm their own PIN mid-session -
-// used as a "step-up" confirmation (not a separate login) before letting the
-// Owner edit Assignments data, so an accidental tap can't silently change a
-// vehicle/route/supervisor. Never exposes the stored PIN to the client.
+// Lets the currently-logged-in user re-confirm their own password
+// mid-session - used as a "step-up" confirmation (not a separate login)
+// before letting the Owner edit Assignments data or confirm a data
+// restore, so an accidental tap can't silently change a vehicle/route/
+// supervisor or wipe the fleet's data. Never exposes the stored password
+// hash to the client.
 app.post(
-  "/api/verify-pin",
+  "/api/verify-password",
   requireAuth,
   h(async (req, res) => {
-    const { pin } = req.body || {};
+    const { password } = req.body || {};
     // Deliberately always a 200 (never 401) - the frontend's generic api()
     // helper treats any 401 as "session expired" and force-logs-out, which
-    // would be wrong here: an incorrect PIN re-entry is an expected, normal
-    // outcome, not an invalid/expired session.
-    if (!pin || String(pin) !== String(req.user.pin)) {
-      return res.json({ ok: false, error: "Incorrect PIN." });
+    // would be wrong here: an incorrect password re-entry is an expected,
+    // normal outcome, not an invalid/expired session.
+    if (!verifyPassword(password, req.user.passwordHash)) {
+      return res.json({ ok: false, error: "Incorrect password." });
     }
     res.json({ ok: true });
   })
@@ -2095,10 +2264,15 @@ app.get(
     // own embedded history includes the download that produced it.
     const clone = JSON.parse(JSON.stringify(db));
     delete clone._id;
-    // Never include PINs in an exportable file, even though this is
-    // restricted to Owner/Ops Manager - a downloaded file can end up
-    // anywhere (email, a shared drive, a personal laptop).
-    if (Array.isArray(clone.users)) clone.users.forEach((u) => delete u.pin);
+    // Never include password hashes (or history) in an exportable file,
+    // even though this is restricted to Owner/Ops Manager - a downloaded
+    // file can end up anywhere (email, a shared drive, a personal laptop).
+    if (Array.isArray(clone.users)) {
+      clone.users.forEach((u) => {
+        delete u.passwordHash;
+        delete u.passwordHistory;
+      });
+    }
 
     const filename = `padmasri_backup_${takenAt.slice(0, 10)}.json`;
     res.setHeader("Content-Type", "application/json");
