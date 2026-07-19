@@ -369,7 +369,10 @@ function ensureDraft(vehicleId){
     condition: Object.assign({}, defaultCondition, (existing && existing.condition) ? JSON.parse(JSON.stringify(existing.condition)) : {}),
     photoTags: {},
     breathalyzer: Object.assign({driver:"", reading:"0.00", result:"pass"}, (existing && existing.breathalyzer) || {}),
-    attendance: Object.assign({driver:"", status:"present", uniform:"compliant"}, (existing && existing.attendance) || {}),
+    attendance: Object.assign({
+      driver:"", status:"present", uniform:"compliant",
+      tempDriver: {arranged:false, name:"", phone:"", upiId:"", amount:""},
+    }, (existing && existing.attendance) || {}),
     fuel: {odometer:"", fuelPrice:"", litres:"", fillLevel:"full"},
   };
   return draft;
@@ -522,6 +525,7 @@ function vehicleChecklistScreen(vehicleId){
         <button class="${d.attendance.uniform==='non_compliant'?'active-bad':''}" onclick="draftSet('attendance.uniform','non_compliant')">Non-compliant</button>
       </div></div>
     </div>
+    ${d.attendance.status==='absent' ? tempDriverRows(d) : ""}
   </div>
 
   <div class="card">
@@ -557,6 +561,33 @@ function draftSet(path, value){
   for(let i=0;i<parts.length-1;i++) obj = obj[parts[i]];
   obj[parts[parts.length-1]] = value;
   renderMain();
+}
+// Shown when a driver is marked Absent - lets the supervisor record a paid
+// temporary replacement. If an amount is entered, submitting the checklist
+// automatically raises an expense request for that amount under this
+// supervisor's name, tagged with which regular driver it's covering for, so
+// Operations/Data Team/Owner know to deduct it from that driver's pay.
+function tempDriverRows(d){
+  const t = d.attendance.tempDriver;
+  return `
+  <div class="check-row">
+    <div class="label">Temporary driver arranged &amp; paid today?</div>
+    <div class="controls"><div class="toggle">
+      <button class="${!t.arranged?'active-ok':''}" onclick="draftSet('attendance.tempDriver.arranged', false)">No</button>
+      <button class="${t.arranged?'active-bad':''}" onclick="draftSet('attendance.tempDriver.arranged', true)">Yes</button>
+    </div></div>
+  </div>
+  ${t.arranged ? `
+  <div class="check-row"><div class="label">Temporary driver name</div><div class="controls"><input type="text" value="${t.name}" style="width:160px" onchange="draftSet('attendance.tempDriver.name', this.value)" /></div></div>
+  <div class="check-row"><div class="label">Mobile number</div><div class="controls"><input type="tel" value="${t.phone}" style="width:140px" onchange="draftSet('attendance.tempDriver.phone', this.value)" /></div></div>
+  <div class="check-row"><div class="label">UPI ID</div><div class="controls"><input type="text" placeholder="name@bank" value="${t.upiId}" style="width:160px" onchange="draftSet('attendance.tempDriver.upiId', this.value)" /></div></div>
+  <div class="check-row"><div class="label">Amount paid (₹)</div><div class="controls"><input type="number" value="${t.amount}" style="width:100px" onchange="draftSet('attendance.tempDriver.amount', this.value)" /></div></div>
+  <div class="check-row">
+    <div class="label">Payment proof (UPI screenshot) ${Number(t.amount)>0 ? '<b style="color:var(--danger,#c0392b)">(required)</b>' : ''}</div>
+    <div class="controls">${photoButton("tempDriverPayment")} <span class="thumbs">${(d.photoTags.tempDriverPayment||[]).map(s=>`<img src="${s}"/>`).join("")}</span></div>
+  </div>
+  <div class="muted">Submitting will automatically raise an expense request for this amount under your name, for Operations to approve - noted as covering for ${d.attendance.driver||'the regular driver'} today.</div>
+  ` : ""}`;
 }
 function updateBreathalyzer(reading){
   draft.breathalyzer.reading = Number(reading).toFixed(2);
@@ -615,6 +646,11 @@ async function submitVehicle(vehicleId){
     alert("You entered litres filled, so a photo of the fuel receipt is required before you can submit.");
     return;
   }
+  const t = draft.attendance.tempDriver;
+  if(draft.attendance.status==='absent' && t && t.arranged && Number(t.amount) > 0 && !(draft.photoTags.tempDriverPayment||[]).length){
+    alert("You entered an amount paid to the temporary driver, so a photo of the payment (UPI screenshot) is required before you can submit.");
+    return;
+  }
   const btn = document.getElementById("submitBtn");
   btn.disabled = true; btn.innerHTML = `<span class="spinner"></span> Submitting...`;
   try{
@@ -623,6 +659,10 @@ async function submitVehicle(vehicleId){
     draft = null;
     if(rec.fuel.belowStandard){
       alert(`Heads up: this vehicle's mileage today is ${rec.fuel.mileage} km/l, below the standard of ${vehicles.find(v=>v.id===vehicleId).standardMileage} km/l. Warn the driver.`);
+    }
+    if(rec.autoExpense){
+      expenses.unshift(rec.autoExpense);
+      alert(`A ₹${rec.autoExpense.amount} expense request for the temporary driver has been sent to Operations for approval.`);
     }
     await goto("list");
   }catch(e){
