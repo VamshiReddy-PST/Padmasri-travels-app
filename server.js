@@ -49,6 +49,7 @@ async function initStorage() {
     if (existing) {
       delete existing._id;
       db = existing;
+      backfillDefaults();
       console.log("Storage: connected to MongoDB, loaded existing data. Data will survive redeploys/restarts.");
     } else {
       db = JSON.parse(fs.readFileSync(SEED_FILE, "utf8"));
@@ -59,12 +60,23 @@ async function initStorage() {
     if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
     if (!fs.existsSync(DATA_FILE)) fs.copyFileSync(SEED_FILE, DATA_FILE);
     db = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+    backfillDefaults();
     console.warn(
       "Storage: MONGODB_URI not set - using local file storage. This is fine for local testing, but on Render's " +
         "free tier this data (and uploaded photos) will be WIPED on every redeploy/restart. Set MONGODB_URI to fix " +
         "this permanently - see DEPLOY.md."
     );
   }
+}
+
+// Fills in fields that didn't exist in older data (e.g. an existing Atlas
+// database created before this update) so upgrades never crash on
+// `undefined` - new installs already have these from seed.json.
+function backfillDefaults() {
+  if (!db.odometerLogs) db.odometerLogs = {};
+  (db.vehicles || []).forEach((v) => {
+    if (v.driverAssignedDate === undefined) v.driverAssignedDate = null;
+  });
 }
 
 async function persistNow() {
@@ -384,6 +396,7 @@ app.post(
       siteId: null,
       supervisorId: null,
       driverId: null,
+      driverAssignedDate: null,
       standardMileage: Number(standardMileage) || 4.0,
       lastOdometer: null,
       docs: {
@@ -410,18 +423,28 @@ app.patch(
   h(async (req, res) => {
     const vehicle = db.vehicles.find((v) => v.id === req.params.id);
     if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
-    const before = { siteId: vehicle.siteId, supervisorId: vehicle.supervisorId, driverId: vehicle.driverId, clientId: vehicle.clientId };
-    const { siteId, supervisorId, driverId, clientId, usage, standardMileage } = req.body || {};
+    const before = { siteId: vehicle.siteId, supervisorId: vehicle.supervisorId, driverId: vehicle.driverId, clientId: vehicle.clientId, driverAssignedDate: vehicle.driverAssignedDate };
+    const { siteId, supervisorId, driverId, clientId, usage, standardMileage, driverAssignedDate } = req.body || {};
     if (siteId !== undefined) vehicle.siteId = siteId || null;
     if (supervisorId !== undefined) vehicle.supervisorId = supervisorId || null;
-    if (driverId !== undefined) vehicle.driverId = driverId || null;
+    if (driverId !== undefined) {
+      const driverChanged = vehicle.driverId !== (driverId || null);
+      vehicle.driverId = driverId || null;
+      // A new driver being put on this vehicle - stamp the date it happened
+      // (today, unless the caller explicitly sent a date in the same request,
+      // e.g. to backdate a correction) so "Driver since" has something to show.
+      if (driverChanged) vehicle.driverAssignedDate = driverAssignedDate || (vehicle.driverId ? todayStr() : null);
+    } else if (driverAssignedDate !== undefined) {
+      // Manual edit of the date only, without changing the driver.
+      vehicle.driverAssignedDate = driverAssignedDate || null;
+    }
     if (clientId !== undefined) vehicle.clientId = clientId || null;
     if (usage !== undefined) vehicle.usage = usage;
     if (standardMileage !== undefined) vehicle.standardMileage = Number(standardMileage) || vehicle.standardMileage;
     await audit(
       req.user,
       "assign_vehicle",
-      `${req.user.name} reassigned ${vehicle.reg}: ${JSON.stringify(before)} -> ${JSON.stringify({ siteId: vehicle.siteId, supervisorId: vehicle.supervisorId, driverId: vehicle.driverId, clientId: vehicle.clientId })}`
+      `${req.user.name} reassigned ${vehicle.reg}: ${JSON.stringify(before)} -> ${JSON.stringify({ siteId: vehicle.siteId, supervisorId: vehicle.supervisorId, driverId: vehicle.driverId, clientId: vehicle.clientId, driverAssignedDate: vehicle.driverAssignedDate })}`
     );
     res.json(vehicle);
   })
@@ -498,6 +521,14 @@ app.post(
     const distance = Math.max(odometer - previousOdometer, 0);
     const mileage = litres > 0 ? Math.round((distance / litres) * 10) / 10 : 0;
     const belowStandard = litres > 0 && distance > 0 && mileage < vehicle.standardMileage;
+
+    // A receipt photo is mandatory any time fuel was actually filled - not
+    // required on days with no fuel entry (litres left at 0).
+    const fuelReceiptUrls = photoTags.fuelReceipt || [];
+    if (litres > 0 && fuelReceiptUrls.length === 0) {
+      return res.status(400).json({ error: "A photo of the fuel receipt is required whenever fuel is filled." });
+    }
+
     vehicle.lastOdometer = odometer;
 
     const record = {
@@ -518,6 +549,7 @@ app.post(
         mileage,
         totalCost: Math.round(litres * fuelPrice),
         belowStandard,
+        receiptUrls: fuelReceiptUrls,
       },
       verification: { status: "pending", verifiedBy: null, comment: "" },
       submittedBy: req.user.id,
@@ -562,6 +594,58 @@ app.patch(
     obj[parts[parts.length - 1]] = value;
     await audit(req.user, "correction", `${req.user.name} corrected ${fieldPath} on ${req.params.vehicleId} (${req.params.date}): ${before} -> ${value}`);
     res.json(record);
+  })
+);
+
+// ---------- DAY-START / DAY-CLOSE ODOMETER (separate from the fuel entry) ----------
+// Site supervisors log two odometer readings per vehicle per day - one when
+// the vehicle starts its day, one when it closes - independent of whether
+// fuel was filled that day. These are saved immediately (like clock in/out),
+// not held in a draft.
+app.get("/api/odometer", requireAuth, (req, res) => {
+  const date = req.query.date || todayStr();
+  const visibleIds = new Set(visibleVehiclesFor(req.user).map((v) => v.id));
+  const out = {};
+  Object.values(db.odometerLogs).forEach((o) => {
+    if (o.date === date && visibleIds.has(o.vehicleId)) out[o.vehicleId] = o;
+  });
+  res.json(out);
+});
+
+app.post(
+  "/api/odometer/:vehicleId/:type(start|close)",
+  requireAuth,
+  requireRole("site_supervisor"),
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.vehicleId);
+    if (!vehicle) return res.status(400).json({ error: "Unknown vehicle." });
+    if (vehicle.supervisorId !== req.user.id) {
+      return res.status(403).json({ error: "This vehicle is not allotted to you." });
+    }
+    const reading = Number((req.body || {}).value);
+    if (!Number.isFinite(reading) || reading < 0) {
+      return res.status(400).json({ error: "Enter a valid odometer reading." });
+    }
+    const date = todayStr();
+    const key = recordKey(vehicle.id, date);
+    const entry = db.odometerLogs[key] || { vehicleId: vehicle.id, date, dayStart: null, dayClose: null };
+    if (req.params.type === "start") {
+      entry.dayStart = { value: reading, ts: nowIso(), by: req.user.id };
+    } else {
+      if (entry.dayStart && reading < entry.dayStart.value) {
+        return res.status(400).json({
+          error: `Day-close reading (${reading} km) can't be less than the day-start reading (${entry.dayStart.value} km).`,
+        });
+      }
+      entry.dayClose = { value: reading, ts: nowIso(), by: req.user.id };
+    }
+    db.odometerLogs[key] = entry;
+    await audit(
+      req.user,
+      req.params.type === "start" ? "odometer_day_start" : "odometer_day_close",
+      `${req.user.name} logged ${req.params.type === "start" ? "day-start" : "day-close"} odometer ${reading} km for ${vehicle.reg}`
+    );
+    res.json(entry);
   })
 );
 

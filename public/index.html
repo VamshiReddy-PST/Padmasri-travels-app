@@ -122,6 +122,7 @@ let currentUser = null;
 let meta = { clients: [], sites: [], drivers: [], users: [] };
 let vehicles = [];
 let records = {};
+let odometerLogs = {};
 let leaves = [];
 let expenses = [];
 let view = { tab: null, name: "home" };
@@ -173,13 +174,14 @@ function defaultTab(role){
   return {site_supervisor:"my_vehicles", area_supervisor:"queue", ops_manager:"operations", data_team:"corrections", hr:"attendance", owner:"dashboard"}[role];
 }
 async function loadCoreData(){
-  const [v, r, l, ex] = await Promise.all([
+  const [v, r, o, l, ex] = await Promise.all([
     api("/vehicles"),
     api("/records?date="+todayStr()),
+    api("/odometer?date="+todayStr()),
     api("/leaves"),
     api("/expenses"),
   ]);
-  vehicles = v; records = r; leaves = l; expenses = ex;
+  vehicles = v; records = r; odometerLogs = o; leaves = l; expenses = ex;
 }
 
 function doLogout(silent){
@@ -351,21 +353,69 @@ let draft = null;
 function ensureDraft(vehicleId){
   if(draft && draft.vehicleId === vehicleId) return draft;
   const existing = records[vehicleId];
+  // Merge onto the defaults (rather than replacing wholesale) so a record
+  // that's missing a key - e.g. one saved through a partial/older API call -
+  // can't crash the checklist screen with "Cannot read properties of undefined".
+  const defaultSafety = {
+    fireExtinguisher:{present:true, expiry:""}, firstAid:{present:true}, stepney:{present:true},
+    jack:{present:true}, jackRod:{present:true}, wheelSpanner:{present:true}, chargingSockets:{present:true},
+  };
+  const defaultCondition = {
+    suspension:"ok", seatCovers:"ok", curtains:"ok", seatPushBack:"ok", batteryWater:"ok", engineOil:"ok", coolant:"ok", airPressure:"ok", tyreWear:"ok",
+  };
   draft = {
     vehicleId,
-    safety: (existing && existing.safety) ? JSON.parse(JSON.stringify(existing.safety)) : {
-      fireExtinguisher:{present:true, expiry:""}, firstAid:{present:true}, stepney:{present:true},
-      jack:{present:true}, jackRod:{present:true}, wheelSpanner:{present:true}, chargingSockets:{present:true},
-    },
-    condition: (existing && existing.condition) ? JSON.parse(JSON.stringify(existing.condition)) : {
-      suspension:"ok", seatCovers:"ok", curtains:"ok", seatPushBack:"ok", batteryWater:"ok", engineOil:"ok", coolant:"ok", airPressure:"ok", tyreWear:"ok",
-    },
+    safety: Object.assign({}, defaultSafety, (existing && existing.safety) ? JSON.parse(JSON.stringify(existing.safety)) : {}),
+    condition: Object.assign({}, defaultCondition, (existing && existing.condition) ? JSON.parse(JSON.stringify(existing.condition)) : {}),
     photoTags: {},
-    breathalyzer: (existing && existing.breathalyzer) ? {...existing.breathalyzer} : {driver:"", reading:"0.00", result:"pass"},
-    attendance: (existing && existing.attendance) ? {...existing.attendance} : {driver:"", status:"present", uniform:"compliant"},
+    breathalyzer: Object.assign({driver:"", reading:"0.00", result:"pass"}, (existing && existing.breathalyzer) || {}),
+    attendance: Object.assign({driver:"", status:"present", uniform:"compliant"}, (existing && existing.attendance) || {}),
     fuel: {odometer:"", fuelPrice:"", litres:"", fillLevel:"full"},
   };
   return draft;
+}
+
+// Day-start / day-close odometer - separate from the fuel checklist above,
+// saved immediately (like clock in/out) rather than held in the draft, so a
+// supervisor can log the start reading in the morning and the close reading
+// in the evening without redoing the whole vehicle checklist.
+function dayOdometerCard(vehicleId){
+  const log = odometerLogs[vehicleId] || {};
+  const start = log.dayStart;
+  const close = log.dayClose;
+  return `
+  <div class="card">
+    <h2 class="section-title">Day Odometer Readings</h2>
+    <p class="muted">Log the odometer at the start of the day (before the vehicle goes out) and again at the close of the day - separate from the fuel entry above.</p>
+    <div class="check-row">
+      <div class="label">Day start (km)</div>
+      <div class="controls">
+        ${start
+          ? `<span class="badge ok">${start.value} km · ${new Date(start.ts).toLocaleTimeString()}</span>`
+          : `<input type="number" id="odoStart_${vehicleId}" style="width:100px" placeholder="e.g. 45260" />
+             <button class="btn small" onclick="saveOdometer('${vehicleId}','start')">Save</button>`}
+      </div>
+    </div>
+    <div class="check-row">
+      <div class="label">Day close (km)</div>
+      <div class="controls">
+        ${close
+          ? `<span class="badge ok">${close.value} km · ${new Date(close.ts).toLocaleTimeString()}</span>`
+          : `<input type="number" id="odoClose_${vehicleId}" style="width:100px" placeholder="e.g. 45310" />
+             <button class="btn small" onclick="saveOdometer('${vehicleId}','close')">Save</button>`}
+      </div>
+    </div>
+  </div>`;
+}
+async function saveOdometer(vehicleId, type){
+  const input = document.getElementById(type==="start" ? `odoStart_${vehicleId}` : `odoClose_${vehicleId}`);
+  const value = input ? input.value : "";
+  if(value === "" || Number(value) < 0){ alert("Enter a valid odometer reading."); return; }
+  try{
+    const entry = await api(`/odometer/${vehicleId}/${type}`, {method:"POST", body: JSON.stringify({value})});
+    odometerLogs[vehicleId] = entry;
+    await renderMain();
+  }catch(e){ alert(e.message); }
 }
 
 function vehicleChecklistScreen(vehicleId){
@@ -432,6 +482,8 @@ function vehicleChecklistScreen(vehicleId){
   ${statusBadge}
   ${existingRec && existingRec.verification.comment ? `<div class="banner" style="margin-top:10px;">Area Supervisor note: "${existingRec.verification.comment}"</div>` : ""}
 
+  ${dayOdometerCard(vehicleId)}
+
   <div class="card checklist-group"><h2 class="section-title">1. Vehicle Documents</h2>${docsRows}</div>
   <div class="card checklist-group"><h2 class="section-title">2. Safety Equipment</h2>${safetyRows}</div>
   <div class="card checklist-group">
@@ -486,6 +538,10 @@ function vehicleChecklistScreen(vehicleId){
         <option value="other" ${d.fuel.fillLevel==='other'?'selected':''}>Other / partial</option>
       </select>
     </div></div>
+    <div class="check-row">
+      <div class="label">Fuel receipt photo ${Number(d.fuel.litres)>0 ? '<b style="color:var(--danger,#c0392b)">(required - fuel was filled)</b>' : '(only needed if you fill fuel)'}</div>
+      <div class="controls">${photoButton("fuelReceipt")} <span class="thumbs">${(d.photoTags.fuelReceipt||[]).map(s=>`<img src="${s}"/>`).join("")}</span></div>
+    </div>
     <div class="muted">Distance and average mileage will be calculated by the server when you submit, and you'll be warned here if it's below standard.</div>
   </div>
 
@@ -555,6 +611,10 @@ async function updateDoc(vehicleId, docType, expiry){
   }catch(e){ alert(e.message); }
 }
 async function submitVehicle(vehicleId){
+  if(Number(draft.fuel.litres) > 0 && !(draft.photoTags.fuelReceipt||[]).length){
+    alert("You entered litres filled, so a photo of the fuel receipt is required before you can submit.");
+    return;
+  }
   const btn = document.getElementById("submitBtn");
   btn.disabled = true; btn.innerHTML = `<span class="spinner"></span> Submitting...`;
   try{
@@ -846,6 +906,7 @@ async function assignmentsScreen(){
         <option value="">- unassigned -</option>
         ${meta.drivers.map(d=>`<option value="${d.id}" ${v.driverId===d.id?'selected':''}>${d.name}</option>`).join("")}
       </select></td>
+      <td><input type="date" value="${v.driverAssignedDate||''}" title="Date this driver was assigned to this vehicle" onchange="assignField('${v.id}','driverAssignedDate', this.value||null)" /></td>
       <td><select onchange="assignField('${v.id}','usage', this.value)">
         <option value="fixed_route" ${v.usage==='fixed_route'?'selected':''}>Fixed route</option>
         <option value="client_on_demand" ${v.usage==='client_on_demand'?'selected':''}>Client on-demand</option>
@@ -856,7 +917,7 @@ async function assignmentsScreen(){
   <div class="banner">Assign each vehicle to a site, a site supervisor, and a driver here. Only Operations Manager, Data Team and Owner can make these changes - every change is logged.</div>
   <div class="card">
     <h2 class="section-title">Vehicles (${vehicles.length})</h2>
-    <table><tr><th>Vehicle</th><th>Client</th><th>Site</th><th>Site Supervisor</th><th>Driver</th><th>Usage</th></tr>${rows}</table>
+    <table><tr><th>Vehicle</th><th>Client</th><th>Site</th><th>Site Supervisor</th><th>Driver</th><th>Driver since</th><th>Usage</th></tr>${rows}</table>
     <form class="inline-form" onsubmit="return addVehicle(event)">
       <div class="f"><label>New registration number</label><input type="text" id="newVehicleReg" placeholder="TS 09 XX 1234" required /></div>
       <div class="f"><label>Route (optional)</label><input type="text" id="newVehicleRoute" placeholder="Route name" /></div>
@@ -1181,7 +1242,7 @@ Object.assign(window, {
   selectLoginUser, doLogin, doLogout, switchTab, goto, draftSet, updateBreathalyzer, startPhotoCapture,
   updateDoc, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, addDriver, addPerson, correctOdometer, setAttDate, captureBillPhoto, submitExpense, decideExpense,
-  startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive,
+  startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, saveOdometer,
 });
 
 boot();

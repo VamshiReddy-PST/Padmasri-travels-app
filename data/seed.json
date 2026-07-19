@@ -77,6 +77,7 @@
     {
       "id": "v1", "reg": "TS 09 AT 1001", "route": "Route 12 - IT Corridor", "usage": "fixed_route",
       "clientId": null, "siteId": "s_gachibowli", "supervisorId": "u_ravi", "driverId": "d_mahesh",
+      "driverAssignedDate": "2026-07-01",
       "standardMileage": 4.2, "lastOdometer": 45260,
       "docs": {
         "RC": { "number": "RC1001", "expiry": "2027-09-01" },
@@ -90,6 +91,7 @@
     {
       "id": "v2", "reg": "TS 09 BT 1002", "route": "Route 07 - Old City", "usage": "fixed_route",
       "clientId": null, "siteId": "s_kondapur", "supervisorId": "u_suresh", "driverId": "d_kiran",
+      "driverAssignedDate": "2026-07-01",
       "standardMileage": 4.2, "lastOdometer": 45480,
       "docs": {
         "RC": { "number": "RC1002", "expiry": "2027-09-08" },
@@ -103,6 +105,7 @@
     {
       "id": "v3", "reg": "TS 09 CT 1003", "route": "Route 21 - Airport Shuttle", "usage": "fixed_route",
       "clientId": null, "siteId": "s_gachibowli", "supervisorId": "u_ravi", "driverId": "d_raju",
+      "driverAssignedDate": "2026-07-01",
       "standardMileage": 4.5, "lastOdometer": 45700,
       "docs": {
         "RC": { "number": "RC1003", "expiry": "2027-09-15" },
@@ -116,6 +119,7 @@
     {
       "id": "v4", "reg": "TS 09 DT 1004", "route": "Client On-Demand", "usage": "client_on_demand",
       "clientId": "c_01", "siteId": "s_kondapur", "supervisorId": "u_suresh", "driverId": "d_prasad",
+      "driverAssignedDate": "2026-07-01",
       "standardMileage": 4.0, "lastOdometer": 45920,
       "docs": {
         "RC": { "number": "RC1004", "expiry": "2027-09-20" },
@@ -129,6 +133,7 @@
     {
       "id": "v5", "reg": "TS 09 ET 1005", "route": "Client On-Demand", "usage": "client_on_demand",
       "clientId": "c_02", "siteId": "s_gachibowli", "supervisorId": "u_ravi", "driverId": "d_vijay",
+      "driverAssignedDate": "2026-07-01",
       "standardMileage": 4.0, "lastOdometer": 46140,
       "docs": {
         "RC": { "number": "RC1005", "expiry": "2027-09-25" },
@@ -142,6 +147,7 @@
     {
       "id": "v6", "reg": "TS 09 FT 1006", "route": "Route 07 - Old City", "usage": "fixed_route",
       "clientId": null, "siteId": "s_kondapur", "supervisorId": "u_suresh", "driverId": "d_naveen",
+      "driverAssignedDate": "2026-07-01",
       "standardMileage": 4.2, "lastOdometer": 46360,
       "docs": {
         "RC": { "number": "RC1006", "expiry": "2027-09-28" },
@@ -154,6 +160,7 @@
     }
   ],
   "records": {},
+  "odometerLogs": {},
   "leaves": [
     { "id": "l1", "driverId": "d_mahesh", "driver": "Mahesh", "type": "Planned", "start": "2026-07-19", "end": "2026-07-21", "status": "approved", "requestedBy": "u_ravi" },
     { "id": "l2", "driverId": "d_kiran", "driver": "Kiran", "type": "Emergency", "start": "2026-07-15", "end": "2026-07-16", "status": "pending", "requestedBy": "u_suresh" }
