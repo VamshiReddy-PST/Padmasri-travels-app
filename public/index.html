@@ -251,10 +251,10 @@ async function doLogin(){
 function tabsFor(role){
   if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["routes","Routes"]];
   if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["reports","Reports"],["routes","Routes"]];
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Assignments"],["people","People"],["reports","Reports"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Assignments"],["people","People"],["reports","Reports"],["backup","Backup"]];
   if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Assignments"],["people","People"],["audit","Audit Log"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Assignments"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Assignments"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"]];
   if(role==="bookings") return [["usage","Vehicle Usage"]];
   return [];
 }
@@ -314,6 +314,7 @@ async function routeView(){
     if(tab==="assignments") return assignmentsScreen();
     if(tab==="people") return peopleScreen();
     if(tab==="reports") return reportsScreen();
+    if(tab==="backup") return backupDownloadsScreen();
   }
   if(role==="data_team"){
     if(tab==="corrections") return correctionsScreen();
@@ -334,6 +335,7 @@ async function routeView(){
     if(tab==="attendance") return hrAttendanceScreen();
     if(tab==="audit") return auditScreen();
     if(tab==="reports") return reportsScreen();
+    if(tab==="backup") return backupDownloadsScreen();
   }
   if(role==="bookings"){
     if(tab==="usage") return vehicleUsageScreen();
@@ -935,6 +937,7 @@ async function operationsScreen(){
     <td>${l.status==='pending' ? `<button class="btn small" onclick="setLeave('${l.id}','approved')">Approve</button> <button class="btn small danger" onclick="setLeave('${l.id}','rejected')">Reject</button>` : "<span class='muted'>-</span>"}</td></tr>`).join("");
   return `
   <h1 class="page-title">Operations Overview</h1>
+  ${await backupReminderBannerHtml()}
   <div class="grid cols-3" style="margin-bottom:18px;">
     <div class="kpi"><div class="num">${vehicles.length}</div><div class="label">Vehicles visible to you</div></div>
     <div class="kpi warn"><div class="num">${leaves.filter(l=>l.status==='pending').length}</div><div class="label">Leave requests pending</div></div>
@@ -1904,6 +1907,8 @@ async function ownerDashboardScreen(){
   <h1 class="page-title">Owner Dashboard - Fleet Overview</h1>
   <p class="muted" style="margin-top:-8px;">Click any number below to see the full list and take action.</p>
 
+  ${await backupReminderBannerHtml()}
+
   ${await priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpenses)}
 
   <div class="grid cols-4">
@@ -2040,6 +2045,91 @@ async function restoreBackup(id, label){
     await boot();
   }catch(e){ alert(e.message); }
 }
+
+// ================= FULL DATA BACKUP DOWNLOAD (Owner, Operations Manager) =================
+// Separate from the automatic Mongo snapshots above - this is a complete,
+// downloadable export the Owner/Ops Manager take themselves roughly every
+// 15 days and keep outside the app as an independent copy. Every download
+// is logged so it's visible who took one and when.
+const BACKUP_TARGET_DAYS = 15;
+const BACKUP_REMINDER_AFTER_DAYS = 12;
+function daysSinceIso(iso){
+  if(!iso) return null;
+  return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+}
+async function fetchBackupHistory(){
+  try{ return await api("/backup/history"); }catch(e){ return null; }
+}
+async function backupDownloadsScreen(){
+  const history = await fetchBackupHistory();
+  const rows = (history||[]).map(b=>`
+    <tr>
+      <td>${new Date(b.takenAt).toLocaleString()}</td>
+      <td>${b.userName}</td>
+      <td>${roleLabel(b.role)}</td>
+    </tr>`).join("");
+  const last = history && history[0];
+  const days = last ? daysSinceIso(last.takenAt) : null;
+  let statusHtml;
+  if(days===null){
+    statusHtml = `<div class="banner error">No full backup has ever been downloaded - please take one now.</div>`;
+  } else if(days >= BACKUP_TARGET_DAYS){
+    statusHtml = `<div class="banner error">It's been ${days} days since the last full backup (target: every ${BACKUP_TARGET_DAYS} days) - please download one now.</div>`;
+  } else if(days >= BACKUP_REMINDER_AFTER_DAYS){
+    statusHtml = `<div class="banner">It's been ${days} days since the last full backup - one is due soon (target: every ${BACKUP_TARGET_DAYS} days).</div>`;
+  } else {
+    statusHtml = `<div class="banner">Last full backup was ${days} day${days===1?'':'s'} ago - you're on schedule.</div>`;
+  }
+  return `
+  <h1 class="page-title">Backup</h1>
+  <div class="banner">Download a complete copy of all fleet data (vehicles, people, records, expenses, documents, everything) roughly every ${BACKUP_TARGET_DAYS} days and keep it somewhere outside the app - separate from the app's own automatic 30-day rolling snapshots.</div>
+  <div class="card">
+    ${statusHtml}
+    <button class="btn" onclick="downloadFullBackup()">Download Full Backup</button>
+  </div>
+  <div class="card">
+    <h2 class="section-title">Backup download history</h2>
+    <table><tr><th>Taken</th><th>By</th><th>Role</th></tr>
+    ${rows || "<tr><td colspan='3' class='empty'>No backups downloaded yet.</td></tr>"}
+    </table>
+  </div>`;
+}
+async function downloadFullBackup(){
+  try{
+    const headers = {};
+    if(authToken) headers["Authorization"] = "Bearer " + authToken;
+    const res = await fetch(`${API}/backup/full`, {headers});
+    if(!res.ok){
+      const data = await res.json().catch(()=>({}));
+      throw new Error(data.error || `Download failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `padmasri_backup_${todayStr()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+// Shared reminder banner shown at the top of both the Owner Dashboard and
+// the Operations Manager's Operations screen - their two "home" views.
+async function backupReminderBannerHtml(){
+  const history = await fetchBackupHistory();
+  if(history===null) return ""; // not visible to this role, or request failed - stay silent
+  const last = history[0];
+  const days = last ? daysSinceIso(last.takenAt) : null;
+  if(days!==null && days < BACKUP_REMINDER_AFTER_DAYS) return "";
+  const msg = days===null
+    ? "No full data backup has ever been downloaded."
+    : `It's been ${days} days since the last full data backup (target: every ${BACKUP_TARGET_DAYS} days).`;
+  return `<div class="banner ${days!==null && days>=BACKUP_TARGET_DAYS ? 'error' : ''}" style="margin-bottom:14px;">
+    ⏰ ${msg} <button class="btn small secondary" onclick="switchTab('backup')" style="margin-left:8px;">Go to Backup</button>
+  </div>`;
+}
 function drawCharts(approved,pending,rejected,fails,passes){
   const f = document.getElementById("chartFunnel");
   const b = document.getElementById("chartBreath");
@@ -2058,7 +2148,7 @@ Object.assign(window, {
   startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, saveOdometer, restoreBackup, downloadReport,
   toggleVehicleDetails, saveVehicleDetails, saveVehicleDoc, onNewVehicleTypeChange, onVdVehicleTypeChange, onPermitStateToggle,
   toggleClientRoutes, saveRouteCap, addRoute, saveRouteEdit, deleteRoute,
-  setVehicleUsage, unlockOwnerAssignmentEditing, setAuditRange,
+  setVehicleUsage, unlockOwnerAssignmentEditing, setAuditRange, downloadFullBackup,
 });
 
 boot();

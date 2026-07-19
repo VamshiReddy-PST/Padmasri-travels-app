@@ -81,6 +81,7 @@ async function initStorage() {
 // `undefined` - new installs already have these from seed.json.
 function backfillDefaults() {
   if (!db.odometerLogs) db.odometerLogs = {};
+  if (!Array.isArray(db.backupDownloads)) db.backupDownloads = [];
   (db.vehicles || []).forEach((v) => {
     if (v.driverAssignedDate === undefined) v.driverAssignedDate = null;
     if (v.make === undefined) v.make = "";
@@ -1688,6 +1689,51 @@ app.post(
     await audit(req.user, "restore_backup", `${req.user.name} restored all app data from the backup taken ${snapshot.takenAt}`);
     res.json({ ok: true, restoredFrom: snapshot.takenAt });
   })
+);
+
+// ---------- MANUAL FULL DATA BACKUP DOWNLOAD (Owner, Operations Manager) ----------
+// Separate from the automatic 30-day Mongo snapshots above (which only
+// exist in Mongo mode and aren't downloadable) - this is a complete,
+// downloadable export of every record in the app, meant to be taken
+// roughly every 15 days and kept outside the app entirely as an
+// independent copy. Every download is logged (who, when) so the Owner and
+// Operations Manager can see whether the fleet's data is actually being
+// backed up on schedule.
+const BACKUP_DOWNLOAD_ROLES = ["owner", "ops_manager"];
+app.get(
+  "/api/backup/full",
+  requireAuth,
+  requireRole(...BACKUP_DOWNLOAD_ROLES),
+  h(async (req, res) => {
+    const takenAt = nowIso();
+    db.backupDownloads = db.backupDownloads || [];
+    db.backupDownloads.unshift({ id: uid("bkdl"), userId: req.user.id, userName: req.user.name, role: req.user.role, takenAt });
+    if (db.backupDownloads.length > 200) db.backupDownloads.length = 200;
+    await audit(req.user, "download_full_backup", `${req.user.name} downloaded a full data backup`);
+
+    // Snapshot taken AFTER recording this download, so the exported file's
+    // own embedded history includes the download that produced it.
+    const clone = JSON.parse(JSON.stringify(db));
+    delete clone._id;
+    // Never include PINs in an exportable file, even though this is
+    // restricted to Owner/Ops Manager - a downloaded file can end up
+    // anywhere (email, a shared drive, a personal laptop).
+    if (Array.isArray(clone.users)) clone.users.forEach((u) => delete u.pin);
+
+    const filename = `padmasri_backup_${takenAt.slice(0, 10)}.json`;
+    res.setHeader("Content-Type", "application/json");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(clone, null, 2));
+  })
+);
+
+app.get(
+  "/api/backup/history",
+  requireAuth,
+  requireRole(...BACKUP_DOWNLOAD_ROLES),
+  (req, res) => {
+    res.json((db.backupDownloads || []).slice(0, 100));
+  }
 );
 
 // ---------- fallback to the app shell ----------
