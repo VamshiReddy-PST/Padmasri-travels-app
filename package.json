@@ -4,13 +4,16 @@
   "private": true,
   "description": "Fleet Supervisor App - shared backend + web app",
   "main": "server.js",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.19.2",
     "mongodb": "^6.9.0",
+    "pdfkit": "^0.15.2",
     "xlsx": "^0.18.5"
   }
 }

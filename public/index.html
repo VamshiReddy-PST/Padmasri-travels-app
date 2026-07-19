@@ -1469,11 +1469,11 @@ async function addVehicle(evt){
 // ---- Vehicle Details: onboarding fields (Make/Model/Engine/Chassis/RC
 // Date/Seating) and per-document number/expiry, including Permit's district
 // details. Opened per-vehicle from the Assignments table.
-const DOC_TYPES = ["RC","Permit","Insurance","Fitness","Tax","PUC"];
+const DOC_TYPES = ["RC","Permit","Insurance","Fitness","Tax","PUC","TemporaryPermit","BorderTax"];
 // These 5 get a photo/scan of the physical document attached + a visible
 // "last updated" stamp - Insurance does not (matches the server's
 // DOC_COPY_TYPES list).
-const DOC_COPY_TYPES = ["RC","Permit","Fitness","Tax","PUC"];
+const DOC_COPY_TYPES = ["RC","Permit","Fitness","Tax","PUC","TemporaryPermit","BorderTax"];
 function toggleVehicleDetails(vehicleId){
   editingVehicleId = editingVehicleId===vehicleId ? null : vehicleId;
   renderMain();
@@ -1974,10 +1974,39 @@ function driverEditorHtml(d){
       <div class="f"><label>ESI Number</label><input type="text" id="ed_esi_${d.id}" value="${d.esiNumber||''}" style="width:130px" /></div>
       <div class="f"><label>PF Number</label><input type="text" id="ed_pf_${d.id}" value="${d.pfNumber||''}" style="width:130px" /></div>
       <div class="f"><label>UAN Number</label><input type="text" id="ed_uan_${d.id}" value="${d.uanNumber||''}" style="width:130px" /></div>
+      <div class="f"><label>PAN Number</label><input type="text" id="ed_pan_${d.id}" value="${d.panNumber||''}" style="width:130px" /></div>
+      <div class="f"><label>Bank Account Number</label><input type="text" id="ed_bankacc_${d.id}" value="${d.bankAccountNumber||''}" style="width:150px" /></div>
+      <div class="f"><label>Bank IFSC</label><input type="text" id="ed_ifsc_${d.id}" value="${d.bankIfsc||''}" style="width:120px" /></div>
+      <div class="f"><label>Account Holder Name</label><input type="text" id="ed_bankname_${d.id}" value="${d.bankAccountHolderName||''}" style="width:160px" /></div>
       <button class="btn small" type="submit">Save</button>
       <button type="button" class="btn small secondary" onclick="toggleDriverDetails('${d.id}')">Close</button>
     </form>
-    <div class="grid cols-2" style="margin-top:10px;">
+    <div class="muted" style="margin:10px 0 4px;">Documents (visible to the driver in their app, view/download only there):</div>
+    <div class="grid cols-2" style="margin-top:6px;">
+      <div>
+        <label class="muted">Driving License Copy</label><br/>
+        ${d.licenseCopyUrl ? `<a href="${d.licenseCopyUrl}" target="_blank">View current copy</a><br/>` : `<span class="muted">Not uploaded yet</span><br/>`}
+        <input type="file" accept="image/*,application/pdf" id="ed_licensecopy_${d.id}" style="width:220px" />
+        <button type="button" class="btn small secondary" onclick="saveDriverCertificate('${d.id}','license')">Upload</button>
+      </div>
+      <div>
+        <label class="muted">Aadhar Copy</label><br/>
+        ${d.aadharCopyUrl ? `<a href="${d.aadharCopyUrl}" target="_blank">View current copy</a><br/>` : `<span class="muted">Not uploaded yet</span><br/>`}
+        <input type="file" accept="image/*,application/pdf" id="ed_aadharcopy_${d.id}" style="width:220px" />
+        <button type="button" class="btn small secondary" onclick="saveDriverCertificate('${d.id}','aadhar')">Upload</button>
+      </div>
+      <div>
+        <label class="muted">PAN Copy</label><br/>
+        ${d.panCopyUrl ? `<a href="${d.panCopyUrl}" target="_blank">View current copy</a><br/>` : `<span class="muted">Not uploaded yet</span><br/>`}
+        <input type="file" accept="image/*,application/pdf" id="ed_pancopy_${d.id}" style="width:220px" />
+        <button type="button" class="btn small secondary" onclick="saveDriverCertificate('${d.id}','pan')">Upload</button>
+      </div>
+      <div>
+        <label class="muted">Bank Cancelled Cheque</label><br/>
+        ${d.bankChequeUrl ? `<a href="${d.bankChequeUrl}" target="_blank">View current copy</a><br/>` : `<span class="muted">Not uploaded yet</span><br/>`}
+        <input type="file" accept="image/*,application/pdf" id="ed_cheque_${d.id}" style="width:220px" />
+        <button type="button" class="btn small secondary" onclick="saveDriverCertificate('${d.id}','cheque')">Upload</button>
+      </div>
       <div>
         <label class="muted">ESI Certificate</label><br/>
         ${d.esiCertificateUrl ? `<a href="${d.esiCertificateUrl}" target="_blank">View current certificate</a><br/>` : `<span class="muted">Not uploaded yet</span><br/>`}
@@ -2009,6 +2038,10 @@ async function saveDriverDetails(evt, id){
     esiNumber: document.getElementById(`ed_esi_${id}`).value,
     pfNumber: document.getElementById(`ed_pf_${id}`).value,
     uanNumber: document.getElementById(`ed_uan_${id}`).value,
+    panNumber: document.getElementById(`ed_pan_${id}`).value,
+    bankAccountNumber: document.getElementById(`ed_bankacc_${id}`).value,
+    bankIfsc: document.getElementById(`ed_ifsc_${id}`).value,
+    bankAccountHolderName: document.getElementById(`ed_bankname_${id}`).value,
   };
   try{
     const updated = await api(`/drivers/${id}`, {method:"PATCH", body: JSON.stringify(body)});
@@ -2018,11 +2051,13 @@ async function saveDriverDetails(evt, id){
   }catch(e){ alert(e.message); }
   return false;
 }
+const DRIVER_CERT_FIELD_IDS = { esi:"ed_esicert_", pf:"ed_pfcert_", license:"ed_licensecopy_", aadhar:"ed_aadharcopy_", pan:"ed_pancopy_", cheque:"ed_cheque_" };
+const DRIVER_CERT_BODY_KEYS = { esi:"esiCertificate", pf:"pfCertificate", license:"licenseCopy", aadhar:"aadharCopy", pan:"panCopy", cheque:"bankCheque" };
 async function saveDriverCertificate(id, kind){
-  const input = document.getElementById(kind==='esi' ? `ed_esicert_${id}` : `ed_pfcert_${id}`);
+  const input = document.getElementById(DRIVER_CERT_FIELD_IDS[kind] + id);
   const dataUrl = await readFileAsDataUrl(input);
   if(!dataUrl){ alert("Choose a file first."); return; }
-  const body = kind==='esi' ? {esiCertificate: dataUrl} : {pfCertificate: dataUrl};
+  const body = { [DRIVER_CERT_BODY_KEYS[kind]]: dataUrl };
   try{
     const updated = await api(`/drivers/${id}`, {method:"PATCH", body: JSON.stringify(body)});
     const idx = meta.drivers.findIndex(x=>x.id===id);
@@ -2824,7 +2859,9 @@ async function tripsScreen(){
       </div>
       <div class="f"><label>Date</label><input type="date" id="tripDate" value="${todayStr()}" required /></div>
       <div class="f"><label>Time</label><input type="text" id="tripTime" placeholder="e.g. 09:00 AM" /></div>
-      <div class="f" style="flex:2;min-width:220px;"><label>Trip / Route Details</label><input type="text" id="tripDesc" placeholder="e.g. Airport pickup - Client X" /></div>
+      <div class="f" style="min-width:200px;"><label>Pickup Point</label><input type="text" id="tripPickup" placeholder="e.g. Gachibowli - Client Office" /></div>
+      <div class="f" style="min-width:200px;"><label>Drop Point</label><input type="text" id="tripDrop" placeholder="e.g. Miyapur - Residence" /></div>
+      <div class="f" style="flex:2;min-width:200px;"><label>Notes (optional)</label><input type="text" id="tripNotes" placeholder="e.g. client's reference number, gate code, etc." /></div>
       <button class="btn" type="submit">Allocate Trip</button>
     </form>`}
   </div>
@@ -2832,14 +2869,15 @@ async function tripsScreen(){
     <h2 class="section-title">All Trips</h2>
     ${sorted.length===0 ? `<div class="empty">No trips allocated yet.</div>` : `
     <table>
-      <tr><th>Date</th><th>Vehicle</th><th>Driver</th><th>Details</th><th>Status</th><th></th></tr>
+      <tr><th>Date</th><th>Vehicle</th><th>Driver</th><th>Pickup</th><th>Drop</th><th>Status</th><th></th></tr>
       ${sorted.map(t=>{
         const v = vehicles.find(x=>x.id===t.vehicleId);
         return `<tr>
           <td>${t.date}${t.scheduledTime? " "+t.scheduledTime : ""}</td>
           <td>${v? v.reg : t.vehicleId}</td>
           <td>${driverName(t.driverId)}</td>
-          <td>${t.description || "-"}</td>
+          <td>${t.pickupPoint || "-"}</td>
+          <td>${t.dropPoint || "-"}</td>
           <td>${tripStatusBadge(t.status)}</td>
           <td>
             ${t.status!=="cancelled" && t.status!=="completed" ? `<button class="btn small secondary" onclick="cancelTrip('${t.id}')">Cancel</button>` : ""}
@@ -2855,10 +2893,12 @@ async function createTrip(evt){
   const vehicleId = document.getElementById("tripVehicleId").value;
   const date = document.getElementById("tripDate").value;
   const scheduledTime = document.getElementById("tripTime").value;
-  const description = document.getElementById("tripDesc").value;
+  const pickupPoint = document.getElementById("tripPickup").value;
+  const dropPoint = document.getElementById("tripDrop").value;
+  const notes = document.getElementById("tripNotes").value;
   if(!vehicleId || !date){ alert("Select a vehicle and date."); return false; }
   try{
-    await api("/trips", {method:"POST", body: JSON.stringify({vehicleId, date, scheduledTime, description})});
+    await api("/trips", {method:"POST", body: JSON.stringify({vehicleId, date, scheduledTime, pickupPoint, dropPoint, notes})});
     await renderMain();
   }catch(e){ alert(e.message); }
   return false;
@@ -2933,6 +2973,7 @@ async function myPayslipCardHtml(){
     <h2 class="section-title">My Payslip - ${payrollMonth}</h2>
     ${payslipTableHtml(payslip)}
     <div class="controls" style="margin-top:10px;">
+      <button class="btn small secondary" onclick="downloadPayslip('user','${currentUser.id}','pdf')">Download PDF</button>
       <button class="btn small secondary" onclick="downloadPayslip('user','${currentUser.id}','csv')">Download CSV</button>
       <button class="btn small secondary" onclick="downloadPayslip('user','${currentUser.id}','xlsx')">Download Excel</button>
     </div>
@@ -2951,7 +2992,7 @@ async function downloadPayslip(personType, personId, format){
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `payslip_${personId}_${payrollMonth}.${format==='xlsx'?'xlsx':'csv'}`;
+    a.download = `payslip_${personId}_${payrollMonth}.${format==='xlsx'?'xlsx':format==='pdf'?'pdf':'csv'}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -2980,6 +3021,7 @@ async function payrollManagementHtml(){
       <td>${r.hasProfile ? `<b>${money(r.netPay)}</b>` : '-'}</td>
       <td>
         <button class="btn small secondary" onclick="togglePayrollDetail('${r.personType}','${r.personId}')">${editingPayrollKey===key?'Close':(canEdit?'Manage':'View')}</button>
+        <button class="btn small secondary" onclick="downloadPayslip('${r.personType}','${r.personId}','pdf')">PDF</button>
         <button class="btn small secondary" onclick="downloadPayslip('${r.personType}','${r.personId}','csv')">CSV</button>
         <button class="btn small secondary" onclick="downloadPayslip('${r.personType}','${r.personId}','xlsx')">Excel</button>
       </td>

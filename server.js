@@ -24,6 +24,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { MongoClient } = require("mongodb");
 const XLSX = require("xlsx");
+const PDFDocument = require("pdfkit");
 
 const DATA_DIR = path.join(__dirname, "data");
 const DATA_FILE = path.join(DATA_DIR, "data.json");
@@ -103,6 +104,11 @@ function backfillDefaults() {
       if (v.docs.Permit.districtNames === undefined) v.docs.Permit.districtNames = "";
     }
     if (v.docs) {
+      // TemporaryPermit and BorderTax were added after some vehicles already
+      // existed - give any vehicle missing them a blank entry so the office
+      // can fill them in and drivers can see the field at all.
+      if (!v.docs.TemporaryPermit) v.docs.TemporaryPermit = { number: "", expiry: "", updatedAt: null, copyUrl: null };
+      if (!v.docs.BorderTax) v.docs.BorderTax = { number: "", expiry: "", updatedAt: null, copyUrl: null };
       DOC_COPY_TYPES.forEach((docType) => {
         const doc = v.docs[docType];
         if (!doc) return;
@@ -151,6 +157,17 @@ function backfillDefaults() {
     if (d.uanNumber === undefined) d.uanNumber = "";
     if (d.esiCertificateUrl === undefined) d.esiCertificateUrl = null;
     if (d.pfCertificateUrl === undefined) d.pfCertificateUrl = null;
+    // Documents tab in the driver app (view/download only, the office fills
+    // these in via the Staff People screen): PAN, License copy, Aadhar
+    // copy, and bank details + a cancelled cheque copy.
+    if (d.panNumber === undefined) d.panNumber = "";
+    if (d.panCopyUrl === undefined) d.panCopyUrl = null;
+    if (d.licenseCopyUrl === undefined) d.licenseCopyUrl = null;
+    if (d.aadharCopyUrl === undefined) d.aadharCopyUrl = null;
+    if (d.bankAccountNumber === undefined) d.bankAccountNumber = "";
+    if (d.bankIfsc === undefined) d.bankIfsc = "";
+    if (d.bankAccountHolderName === undefined) d.bankAccountHolderName = "";
+    if (d.bankChequeUrl === undefined) d.bankChequeUrl = null;
     if (d.dateOfJoining === undefined) d.dateOfJoining = "";
     if (d.drivingLevel === undefined) d.drivingLevel = "";
     if (d.performanceScore === undefined) d.performanceScore = null;
@@ -166,6 +183,16 @@ function backfillDefaults() {
   if (!Array.isArray(db.trips)) db.trips = [];
   if (!Array.isArray(db.driverLocationLogs)) db.driverLocationLogs = [];
   if (!db.payrollApprovals) db.payrollApprovals = {};
+  (db.trips || []).forEach((t) => {
+    // pickupPoint/dropPoint are what the driver app's Current Trip tab
+    // actually displays now - older trips (from before this existed) only
+    // had a single free-text "description", which becomes the trip notes.
+    if (t.pickupPoint === undefined) t.pickupPoint = "";
+    if (t.dropPoint === undefined) t.dropPoint = "";
+    if (t.notes === undefined) t.notes = t.description || "";
+    if (t.startedAt === undefined) t.startedAt = null;
+    if (t.completedAt === undefined) t.completedAt = null;
+  });
 }
 
 // MongoDB Atlas's free (M0) tier doesn't include automatic cloud backups -
@@ -230,9 +257,12 @@ function computeRcExpiry(rcDate) {
   d.setFullYear(d.getFullYear() + 15);
   return d.toISOString().slice(0, 10);
 }
-// These 5 document types get a photo/scan of the physical document attached
-// (Insurance does not, per the Owner's spec).
-const DOC_COPY_TYPES = ["RC", "Permit", "Fitness", "Tax", "PUC"];
+// These document types get a photo/scan of the physical document attached
+// (Insurance does not, per the Owner's spec). TemporaryPermit and BorderTax
+// cover whatever an RTA checkpoint outside the vehicle's home state might
+// ask for, alongside the original 5 - drivers view/download all of these
+// read-only in the driver app once the office has filled them in here.
+const DOC_COPY_TYPES = ["RC", "Permit", "Fitness", "Tax", "PUC", "TemporaryPermit", "BorderTax"];
 
 // ---------- PASSWORDS ----------
 // Every login is now email (or mobile number, if no email on file) plus a
@@ -837,6 +867,8 @@ app.patch(
     const {
       name, phone, licenseNumber, aadharNumber, esiNumber, pfNumber, uanNumber,
       dateOfJoining, drivingLevel, esiCertificate, pfCertificate,
+      panNumber, bankAccountNumber, bankIfsc, bankAccountHolderName,
+      licenseCopy, aadharCopy, panCopy, bankCheque,
     } = req.body || {};
     if (drivingLevel !== undefined && drivingLevel && !DRIVING_LEVELS.includes(drivingLevel)) {
       return res.status(400).json({ error: `Driving level must be one of: ${DRIVING_LEVELS.join(", ")}.` });
@@ -851,6 +883,14 @@ app.patch(
     if (uanNumber !== undefined) { driver.uanNumber = uanNumber || ""; changed = true; }
     if (dateOfJoining !== undefined) { driver.dateOfJoining = dateOfJoining || ""; changed = true; }
     if (drivingLevel !== undefined) { driver.drivingLevel = drivingLevel || ""; changed = true; }
+    // Documents tab in the driver app - PAN, bank account details, and a
+    // cancelled cheque copy, alongside the License/Aadhar copies below.
+    // View/download only for the driver; only HR/Ops Manager/Owner/Data
+    // Team can actually set these, same as everything else on this route.
+    if (panNumber !== undefined) { driver.panNumber = panNumber || ""; changed = true; }
+    if (bankAccountNumber !== undefined) { driver.bankAccountNumber = bankAccountNumber || ""; changed = true; }
+    if (bankIfsc !== undefined) { driver.bankIfsc = bankIfsc || ""; changed = true; }
+    if (bankAccountHolderName !== undefined) { driver.bankAccountHolderName = bankAccountHolderName || ""; changed = true; }
     if (esiCertificate) {
       const url = await savePhoto(esiCertificate, "driver_esi_" + driver.id);
       if (url) { driver.esiCertificateUrl = url; changed = true; }
@@ -858,6 +898,22 @@ app.patch(
     if (pfCertificate) {
       const url = await savePhoto(pfCertificate, "driver_pf_" + driver.id);
       if (url) { driver.pfCertificateUrl = url; changed = true; }
+    }
+    if (licenseCopy) {
+      const url = await savePhoto(licenseCopy, "driver_license_" + driver.id);
+      if (url) { driver.licenseCopyUrl = url; changed = true; }
+    }
+    if (aadharCopy) {
+      const url = await savePhoto(aadharCopy, "driver_aadhar_" + driver.id);
+      if (url) { driver.aadharCopyUrl = url; changed = true; }
+    }
+    if (panCopy) {
+      const url = await savePhoto(panCopy, "driver_pan_" + driver.id);
+      if (url) { driver.panCopyUrl = url; changed = true; }
+    }
+    if (bankCheque) {
+      const url = await savePhoto(bankCheque, "driver_cheque_" + driver.id);
+      if (url) { driver.bankChequeUrl = url; changed = true; }
     }
     if (changed) {
       await audit(req.user, "update_driver", `${req.user.name} updated driver ${driver.name} (${driver.id})`);
@@ -993,6 +1049,8 @@ app.post(
         Fitness: { number: "", expiry: "", updatedAt: null, copyUrl: null },
         Tax: { number: "", expiry: "", updatedAt: null, copyUrl: null },
         PUC: { number: "", expiry: "", updatedAt: null, copyUrl: null },
+        TemporaryPermit: { number: "", expiry: "", updatedAt: null, copyUrl: null },
+        BorderTax: { number: "", expiry: "", updatedAt: null, copyUrl: null },
       },
     };
     db.vehicles.push(vehicle);
@@ -2093,7 +2151,11 @@ app.get("/api/payroll/payslip/:personType/:personId/download", requireAuth, (req
   }
   const month = /^\d{4}-\d{2}$/.test(req.query.month || "") ? req.query.month : nowIso().slice(0, 7);
   const payslip = computePayslip(personType, personId, month);
-  const { name } = personLabel(personType, personId);
+  const { name, subLabel } = personLabel(personType, personId);
+  const filenameBase = `payslip_${name.replace(/\s+/g, "_")}_${month}`;
+  if ((req.query.format || "").toLowerCase() === "pdf") {
+    return sendPayslipPdf(res, { name, subLabel, month, payslip }, filenameBase);
+  }
   const rows = [
     ...payslip.earnings.map((e) => ({ item: e.label, type: "Earning", amount: e.amount })),
     ...payslip.deductions.map((d) => ({ item: d.label, type: "Deduction", amount: -d.amount })),
@@ -2104,7 +2166,7 @@ app.get("/api/payroll/payslip/:personType/:personId/download", requireAuth, (req
     { label: "Type", key: "type" },
     { label: "Amount (₹)", key: "amount" },
   ];
-  sendDownload(res, rows, columns, `payslip_${name.replace(/\s+/g, "_")}_${month}`, req.query.format);
+  sendDownload(res, rows, columns, filenameBase, req.query.format);
 });
 
 // HR "approves" a month's payslip for a person, which snapshots the
@@ -2186,7 +2248,7 @@ app.post(
   requireAuth,
   requireRole(...TRIP_ASSIGN_ROLES),
   h(async (req, res) => {
-    const { vehicleId, driverId, date, scheduledTime, description } = req.body || {};
+    const { vehicleId, driverId, date, scheduledTime, pickupPoint, dropPoint, notes } = req.body || {};
     const vehicle = db.vehicles.find((v) => v.id === vehicleId);
     if (!vehicle) return res.status(400).json({ error: "Vehicle not found." });
     if (req.user.role === "site_supervisor" && vehicle.supervisorId !== req.user.id) {
@@ -2203,12 +2265,16 @@ app.post(
       driverId: useDriverId,
       date,
       scheduledTime: scheduledTime || "",
-      description: description || "",
+      pickupPoint: pickupPoint || "",
+      dropPoint: dropPoint || "",
+      notes: notes || "",
       status: "upcoming",
       createdBy: req.user.id,
       createdByName: req.user.name,
       createdAt: nowIso(),
       updatedAt: nowIso(),
+      startedAt: null,
+      completedAt: null,
     };
     db.trips.push(trip);
     await audit(req.user, "create_trip", `${req.user.name} allocated a trip on ${date} to driver ${useDriverId} (${vehicle.reg})`);
@@ -2226,15 +2292,19 @@ app.patch(
     if (req.user.role === "site_supervisor" && (!vehicle || vehicle.supervisorId !== req.user.id)) {
       return res.status(403).json({ error: "You can only manage trips for your own vehicles." });
     }
-    const { date, scheduledTime, description, status } = req.body || {};
+    const { date, scheduledTime, pickupPoint, dropPoint, notes, status } = req.body || {};
     if (date !== undefined) trip.date = date;
     if (scheduledTime !== undefined) trip.scheduledTime = scheduledTime;
-    if (description !== undefined) trip.description = description;
+    if (pickupPoint !== undefined) trip.pickupPoint = pickupPoint;
+    if (dropPoint !== undefined) trip.dropPoint = dropPoint;
+    if (notes !== undefined) trip.notes = notes;
     if (status !== undefined) {
       if (!["upcoming", "in_progress", "completed", "cancelled"].includes(status)) {
         return res.status(400).json({ error: "Invalid trip status." });
       }
       trip.status = status;
+      if (status === "in_progress" && !trip.startedAt) trip.startedAt = nowIso();
+      if (status === "completed" && !trip.completedAt) trip.completedAt = nowIso();
     }
     trip.updatedAt = nowIso();
     await audit(req.user, "update_trip", `${req.user.name} updated trip ${trip.id}`);
@@ -2391,17 +2461,37 @@ app.post(
   })
 );
 
+// The whole month's schedule for the "Upcoming Trips" tab - defaults to the
+// current month if none given. Still excludes cancelled trips (nothing
+// useful for a driver to do with those).
 app.get(
   "/api/driver-auth/trips",
   driverAuth,
   h(async (req, res) => {
+    const month = /^\d{4}-\d{2}$/.test(req.query.month || "") ? req.query.month : nowIso().slice(0, 7);
     const rows = db.trips
-      .filter((t) => t.driverId === req.driver.id && t.status !== "cancelled")
+      .filter((t) => t.driverId === req.driver.id && t.status !== "cancelled" && t.date.slice(0, 7) === month)
       .sort((a, b) => (a.date + (a.scheduledTime || "")).localeCompare(b.date + (b.scheduledTime || "")));
     res.json({
+      month,
       upcoming: rows.filter((t) => t.status === "upcoming" || t.status === "in_progress"),
-      completed: rows.filter((t) => t.status === "completed").slice(-10).reverse(),
+      completed: rows.filter((t) => t.status === "completed"),
     });
+  })
+);
+
+// The single trip currently in progress (if any) - what the "Current Trip"
+// tab is built around. Not month-scoped, since "what am I doing right now"
+// shouldn't disappear just because the driver is browsing a different
+// month in the Upcoming Trips tab.
+app.get(
+  "/api/driver-auth/trips/current",
+  driverAuth,
+  h(async (req, res) => {
+    const trip = db.trips.find((t) => t.driverId === req.driver.id && t.status === "in_progress") || null;
+    if (!trip) return res.json(null);
+    const vehicle = db.vehicles.find((v) => v.id === trip.vehicleId);
+    res.json(Object.assign({}, trip, { vehicleReg: vehicle ? vehicle.reg : "" }));
   })
 );
 
@@ -2413,6 +2503,14 @@ app.post(
     if (!trip) return res.status(404).json({ error: "Trip not found." });
     const { status } = req.body || {};
     if (!["in_progress", "completed"].includes(status)) return res.status(400).json({ error: "Invalid trip status." });
+    if (status === "in_progress") {
+      const alreadyRunning = db.trips.find((t) => t.driverId === req.driver.id && t.status === "in_progress" && t.id !== trip.id);
+      if (alreadyRunning) {
+        return res.status(400).json({ error: "You already have a trip in progress - complete or finish that one first." });
+      }
+      trip.startedAt = nowIso();
+    }
+    if (status === "completed") trip.completedAt = nowIso();
     trip.status = status;
     trip.updatedAt = nowIso();
     await audit({ id: req.driver.id, name: req.driver.name }, "driver_trip_status", `Driver ${req.driver.name} marked trip ${trip.id} as ${status}`);
@@ -2505,6 +2603,10 @@ app.get(
     const month = /^\d{4}-\d{2}$/.test(req.query.month || "") ? req.query.month : nowIso().slice(0, 7);
     const approval = db.payrollApprovals[payrollApprovalKey("driver", req.driver.id, month)];
     if (!approval) return res.status(404).json({ error: "This month's payslip hasn't been approved by HR yet." });
+    const filenameBase = `payslip_${req.driver.name.replace(/\s+/g, "_")}_${month}`;
+    if ((req.query.format || "").toLowerCase() === "pdf") {
+      return sendPayslipPdf(res, { name: req.driver.name, subLabel: "Driver", month, payslip: approval }, filenameBase);
+    }
     const rows = [
       ...approval.earnings.map((e) => ({ item: e.label, type: "Earning", amount: e.amount })),
       ...approval.deductions.map((d) => ({ item: d.label, type: "Deduction", amount: -d.amount })),
@@ -2515,7 +2617,123 @@ app.get(
       { label: "Type", key: "type" },
       { label: "Amount (₹)", key: "amount" },
     ];
-    sendDownload(res, rows, columns, `payslip_${req.driver.name.replace(/\s+/g, "_")}_${month}`, req.query.format);
+    sendDownload(res, rows, columns, filenameBase, req.query.format);
+  })
+);
+
+// A driver requesting leave against a specific upcoming trip (or just a
+// date) lands in the exact same db.leaves list/approval flow the Ops
+// Manager already uses for staff-submitted leave requests - nothing new
+// to build on that side, it just shows up in their existing queue with
+// type "Requested by Driver" so it's obviously distinguishable.
+app.post(
+  "/api/driver-auth/leave-request",
+  driverAuth,
+  h(async (req, res) => {
+    const { date, reason, tripId } = req.body || {};
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "")) return res.status(400).json({ error: "A valid date is required." });
+    if (tripId && !db.trips.some((t) => t.id === tripId && t.driverId === req.driver.id)) {
+      return res.status(400).json({ error: "Trip not found." });
+    }
+    const leave = {
+      id: uid("l"),
+      driverId: req.driver.id,
+      driver: req.driver.name,
+      type: "Requested by Driver",
+      start: date,
+      end: date,
+      status: "pending",
+      requestedBy: null,
+      tripId: tripId || null,
+      reason: reason || "",
+    };
+    db.leaves.push(leave);
+    await audit({ id: req.driver.id, name: req.driver.name }, "driver_leave_request", `Driver ${req.driver.name} requested leave for ${date}${reason ? ` (${reason})` : ""}`);
+    res.json(leave);
+  })
+);
+app.get(
+  "/api/driver-auth/leave-requests",
+  driverAuth,
+  h(async (req, res) => {
+    const rows = db.leaves
+      .filter((l) => l.driverId === req.driver.id)
+      .slice()
+      .sort((a, b) => b.start.localeCompare(a.start));
+    res.json(rows);
+  })
+);
+
+// Documents tab: the driver's own personal documents (filled in by HR via
+// the Staff screen) plus whichever vehicle they're currently mapped to's
+// RTA-facing documents - both strictly view/download here, no editing.
+app.get(
+  "/api/driver-auth/documents",
+  driverAuth,
+  h(async (req, res) => {
+    const d = req.driver;
+    const personal = {
+      licenseNumber: d.licenseNumber || "",
+      licenseCopyUrl: d.licenseCopyUrl || null,
+      aadharNumber: d.aadharNumber || "",
+      aadharCopyUrl: d.aadharCopyUrl || null,
+      panNumber: d.panNumber || "",
+      panCopyUrl: d.panCopyUrl || null,
+      bankAccountNumber: d.bankAccountNumber || "",
+      bankIfsc: d.bankIfsc || "",
+      bankAccountHolderName: d.bankAccountHolderName || "",
+      bankChequeUrl: d.bankChequeUrl || null,
+      uanNumber: d.uanNumber || "",
+      pfCertificateUrl: d.pfCertificateUrl || null,
+      esiNumber: d.esiNumber || "",
+      esiCertificateUrl: d.esiCertificateUrl || null,
+    };
+    const vehicle = db.vehicles.find((v) => v.driverId === req.driver.id);
+    const vehicleDocs = vehicle
+      ? {
+          reg: vehicle.reg,
+          docs: DOC_COPY_TYPES.reduce((acc, docType) => {
+            const doc = vehicle.docs[docType];
+            if (doc) acc[docType] = { number: doc.number || "", expiry: doc.expiry || "", copyUrl: doc.copyUrl || null };
+            return acc;
+          }, {}),
+        }
+      : null;
+    res.json({ personal, vehicle: vehicleDocs });
+  })
+);
+
+// Attendance tab: the driver's own shift history, drawn straight from
+// driverShifts (the same records that gate login/odometer/logout) rather
+// than a separate attendance log - login-to-logout, with distance driven
+// if both odometer readings were taken.
+app.get(
+  "/api/driver-auth/attendance",
+  driverAuth,
+  h(async (req, res) => {
+    const month = /^\d{4}-\d{2}$/.test(req.query.month || "") ? req.query.month : nowIso().slice(0, 7);
+    const rows = db.driverShifts
+      .filter((s) => s.driverId === req.driver.id && s.loginAt && s.loginAt.slice(0, 7) === month)
+      .map((s) => {
+        const hours =
+          s.logoutAt && s.loginAt ? Math.round(((new Date(s.logoutAt) - new Date(s.loginAt)) / 3600000) * 10) / 10 : null;
+        const distanceKm =
+          typeof s.odometerClose === "number" && typeof s.odometerOpen === "number" ? s.odometerClose - s.odometerOpen : null;
+        return {
+          id: s.id,
+          date: s.loginAt.slice(0, 10),
+          loginAt: s.loginAt,
+          logoutAt: s.logoutAt,
+          status: s.status,
+          odometerOpen: s.odometerOpen,
+          odometerClose: s.odometerClose,
+          distanceKm,
+          hours,
+          autoClosedReason: s.autoClosedReason || null,
+        };
+      })
+      .sort((a, b) => b.loginAt.localeCompare(a.loginAt));
+    res.json({ month, rows });
   })
 );
 
@@ -2650,6 +2868,60 @@ function sendDownload(res, rows, columns, filenameBase, format) {
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.send(toCsv(rows, columns));
+}
+// Every payslip - staff or driver - can be downloaded as a proper PDF
+// payslip, not just CSV/Excel. Kept separate from sendDownload() (which
+// stays CSV/XLSX-only and is shared by a bunch of unrelated reports) since
+// a payslip is the one thing in this app that actually wants to look like
+// a real, printable document.
+function sendPayslipPdf(res, { name, subLabel, month, payslip }, filenameBase) {
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${filenameBase}.pdf"`);
+  doc.pipe(res);
+
+  doc.fontSize(16).fillColor("#1f3864").text("Padmasri Travels", { align: "left" });
+  doc.fontSize(11).fillColor("#666").text("Payslip", { align: "left" });
+  doc.moveDown(0.6);
+  doc.fontSize(10).fillColor("#1a1a1a");
+  doc.text(`Name: ${name}`);
+  if (subLabel) doc.text(`Role: ${subLabel}`);
+  doc.text(`Month: ${month}`);
+  doc.moveDown(0.8);
+
+  const colX = { item: 50, type: 320, amount: 420 };
+  const rowH = 20;
+  let y = doc.y;
+  doc.fontSize(10).fillColor("#fff");
+  doc.rect(50, y, 495, rowH).fill("#2e74b5");
+  doc.fillColor("#fff").text("Item", colX.item + 5, y + 5).text("Type", colX.type, y + 5).text("Amount (Rs.)", colX.amount, y + 5);
+  y += rowH;
+
+  const rows = [
+    ...payslip.earnings.map((e) => ({ item: e.label, type: "Earning", amount: e.amount })),
+    ...payslip.deductions.map((d) => ({ item: d.label, type: "Deduction", amount: -d.amount })),
+  ];
+  doc.fontSize(9.5);
+  rows.forEach((r, i) => {
+    doc.rect(50, y, 495, rowH).fill(i % 2 === 0 ? "#f7f9fc" : "#ffffff");
+    doc.fillColor("#1a1a1a")
+      .text(String(r.item), colX.item + 5, y + 5, { width: 260 })
+      .text(String(r.type), colX.type, y + 5)
+      .text(r.amount.toLocaleString("en-IN"), colX.amount, y + 5);
+    y += rowH;
+  });
+
+  y += 4;
+  doc.rect(50, y, 495, rowH + 4).fill("#1f3864");
+  doc.fillColor("#fff").fontSize(11).text("NET PAY", colX.item + 5, y + 7).text(
+    `Rs. ${payslip.netPay.toLocaleString("en-IN")}`,
+    colX.amount,
+    y + 7
+  );
+
+  doc.moveDown(3);
+  doc.fontSize(8).fillColor("#9aa4b2").text("Generated by the Padmasri Travels Fleet Supervisor App.", 50, doc.y + 20);
+  doc.end();
 }
 function vehicleReg(id) {
   const v = db.vehicles.find((x) => x.id === id);

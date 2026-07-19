@@ -50,6 +50,21 @@
   .badge.upcoming{background:#fff4d6;color:var(--amber);}
   .badge.in_progress{background:#dce9fb;color:var(--accent);}
   .badge.completed{background:#e2f4e6;color:var(--green);}
+  .badge.pending{background:#fff4d6;color:var(--amber);}
+  .badge.approved{background:#e2f4e6;color:var(--green);}
+  .badge.rejected{background:#fbe4e1;color:var(--red);}
+  .driver-tabbar{display:flex;gap:6px;overflow-x:auto;margin-bottom:14px;-webkit-overflow-scrolling:touch;padding-bottom:2px;}
+  .driver-tabbar button{flex:0 0 auto;background:#fff;border:1px solid var(--border);color:var(--grey);padding:9px 14px;border-radius:20px;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;}
+  .driver-tabbar button.active{background:var(--navy);color:#fff;border-color:var(--navy);}
+  .trip-point{margin-top:10px;padding:10px 12px;background:#fbfcfe;border:1px solid var(--border);border-radius:8px;}
+  .trip-point-label{font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.4px;}
+  .trip-point a{font-size:12px;}
+  .doc-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #f0f2f5;font-size:13px;}
+  .doc-row:last-child{border-bottom:none;}
+  .doc-row .dl-link{background:var(--accent);color:#fff;padding:7px 12px;border-radius:8px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  table th{text-align:left;padding:7px 5px;color:var(--navy);border-bottom:2px solid var(--border);font-size:11.5px;}
+  table td{padding:7px 5px;border-bottom:1px solid #f0f2f5;}
   .trip-actions{margin-top:10px;display:flex;gap:8px;}
   .trip-actions button{flex:1;padding:9px;border-radius:8px;border:1px solid var(--accent);background:#fff;color:var(--accent);font-size:12.5px;font-weight:600;cursor:pointer;}
   .empty{text-align:center;color:var(--grey);padding:20px 10px;font-size:13px;}
@@ -62,7 +77,8 @@
   .month-picker input{flex:1;padding:10px;border:1px solid #ccd3db;border-radius:8px;font-size:14px;}
   .payslip-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f0f2f5;font-size:13.5px;}
   .payslip-row.total{font-weight:700;color:var(--navy);border-top:2px solid var(--border);border-bottom:none;padding-top:10px;margin-top:4px;}
-  .dl-row{display:flex;gap:10px;margin-top:14px;}
+  .dl-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px;}
+  .dl-row button{min-width:100px;}
   .dl-row button{flex:1;}
   .spinner{display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px;}
   @keyframes spin{to{transform:rotate(360deg);}}
@@ -87,8 +103,17 @@ const API = "/api";
 let driverToken = localStorage.getItem("driverAuthToken") || null;
 let driver = null;
 let shift = null;
-let trips = { upcoming: [], completed: [] };
 let lastError = "";
+// Which sub-tab is showing once the shift is active (on_trip/ready_to_logout).
+let driverTab = "current";
+let currentTrip = null;
+let tripsMonth = new Date().toISOString().slice(0,7);
+let monthTrips = { upcoming: [], completed: [] };
+let myLeaveRequests = [];
+let attendanceMonth = new Date().toISOString().slice(0,7);
+let attendanceRows = [];
+let documentsData = null;
+const DOC_TYPE_LABELS = { RC:"RC", Permit:"Permit", Fitness:"Fitness Certificate", Tax:"Road Tax", PUC:"PUC", TemporaryPermit:"Temporary Permit", BorderTax:"Border Tax" };
 let lastPos = { lat: null, lng: null };
 let locationOk = false;
 let pingTimer = null;
@@ -122,6 +147,9 @@ async function api(path, opts={}){
 function resetSession(){
   driverToken = null; driver = null; shift = null;
   odoOpenDraft = ""; odoCloseDraft = "";
+  driverTab = "current"; currentTrip = null;
+  monthTrips = { upcoming: [], completed: [] }; myLeaveRequests = [];
+  attendanceRows = []; documentsData = null; payslip = null;
   localStorage.removeItem("driverAuthToken");
   stopLocationPings(); stopPolling();
 }
@@ -154,7 +182,7 @@ function startLocationPings(){
 }
 function stopLocationPings(){ if(pingTimer){ clearInterval(pingTimer); pingTimer=null; } }
 
-// ---------- polling (keeps the trip list fresh while on_trip) ----------
+// ---------- polling (keeps whichever tab is open fresh while active) ----------
 // Skipped entirely while awaiting_odometer - the dedicated countdown
 // ticker below already handles that screen's one job (catching the
 // server's 10-minute auto-expiry) without the full re-render a poll
@@ -172,12 +200,61 @@ async function refreshMe(){
   try{
     const m = await api("/driver-auth/me");
     driver = m.driver; shift = m.shift;
-    if(shift && (shift.status==="on_trip")) await loadTrips();
+    if(shift && shift.status!=="awaiting_odometer" && shift.status!=="closed") await loadActiveTabData();
     render();
   }catch(e){ /* api() already resets session on 401 */ }
 }
-async function loadTrips(){
-  try{ trips = await api("/driver-auth/trips"); }catch(e){}
+// Fetches whatever data the currently-visible driver-app tab needs. Called
+// both when switching tabs and by the 15s poll, so whichever tab is open
+// always has fresh data without re-fetching every tab on every poll.
+async function loadActiveTabData(){
+  if(driverTab==="current") await fetchCurrentTrip();
+  else if(driverTab==="upcoming") await Promise.all([fetchMonthTrips(), fetchMyLeaveRequests()]);
+  else if(driverTab==="attendance") await fetchAttendance();
+  else if(driverTab==="payroll") await fetchPayslip();
+  else if(driverTab==="documents") await fetchDocuments();
+}
+async function setDriverTab(tab){
+  driverTab = tab;
+  render(); // show a loading state immediately, then fill in once fetched
+  await loadActiveTabData();
+  render();
+}
+async function fetchCurrentTrip(){
+  try{ currentTrip = await api("/driver-auth/trips/current"); }catch(e){ currentTrip = null; }
+}
+async function fetchMonthTrips(){
+  try{ monthTrips = await api(`/driver-auth/trips?month=${tripsMonth}`); }catch(e){ monthTrips = {upcoming:[],completed:[]}; }
+}
+async function fetchMyLeaveRequests(){
+  try{ myLeaveRequests = await api("/driver-auth/leave-requests"); }catch(e){ myLeaveRequests = []; }
+}
+async function setTripsMonth(v){
+  tripsMonth = v || new Date().toISOString().slice(0,7);
+  await fetchMonthTrips();
+  render();
+}
+async function requestLeaveForTrip(tripId, date){
+  const reason = prompt("Reason for leave request (optional):", "");
+  if(reason===null) return;
+  try{
+    await api("/driver-auth/leave-request", {method:"POST", body: JSON.stringify({date, tripId, reason})});
+    await fetchMyLeaveRequests();
+    render();
+    alert("Leave request submitted - your Site Supervisor / Operations Manager will review it.");
+  }catch(e){ alert(e.message); }
+}
+async function fetchAttendance(){
+  try{ const r = await api(`/driver-auth/attendance?month=${attendanceMonth}`); attendanceRows = r.rows; }
+  catch(e){ attendanceRows = []; }
+}
+async function setAttendanceMonth(v){
+  attendanceMonth = v || new Date().toISOString().slice(0,7);
+  await fetchAttendance();
+  render();
+}
+async function fetchDocuments(){
+  try{ documentsData = await api("/driver-auth/documents"); }catch(e){ documentsData = null; }
 }
 
 // ---------- boot ----------
@@ -188,7 +265,10 @@ async function boot(){
     driver = m.driver; shift = m.shift;
     if(shift && shift.status!=="closed"){
       startLocationPings(); startPolling();
-      if(shift.status==="on_trip" || shift.status==="ready_to_logout") await loadTrips();
+      if(shift.status==="on_trip" || shift.status==="ready_to_logout"){
+        driverTab = "current";
+        await fetchCurrentTrip();
+      }
     }
     render();
   }catch(e){
@@ -283,7 +363,10 @@ async function doDriverLogin(){
     driverToken = r.token; driver = r.driver; shift = r.shift;
     localStorage.setItem("driverAuthToken", driverToken);
     startLocationPings(); startPolling();
-    if(shift && (shift.status==="on_trip" || shift.status==="ready_to_logout")) await loadTrips();
+    if(shift && (shift.status==="on_trip" || shift.status==="ready_to_logout")){
+      driverTab = "current";
+      await fetchCurrentTrip();
+    }
   }catch(e){
     lastError = e.message;
   }
@@ -301,16 +384,20 @@ async function submitOdometerOpen(){
     shift = await api("/driver-auth/odometer-open", {method:"POST", body: JSON.stringify({odometer:Number(odometer), photo:capturedOpenPhoto, lat:pos.lat, lng:pos.lng})});
     capturedOpenPhoto = null;
     odoOpenDraft = "";
-    await loadTrips();
+    driverTab = "current";
+    await fetchCurrentTrip();
   }catch(e){ lastError = e.message; }
   busy = false; render();
 }
+// Used both by the Upcoming Trips tab ("Start Trip") and the Current Trip
+// tab ("Mark Trip Completed") - refreshes both after any status change so
+// whichever tab the driver switches to next is already up to date.
 async function markTripStatus(tripId, status){
   if(busy) return;
   busy = true; render();
   try{
     await api(`/driver-auth/trips/${tripId}/status`, {method:"POST", body: JSON.stringify({status})});
-    await loadTrips();
+    await Promise.all([fetchCurrentTrip(), fetchMonthTrips()]);
   }catch(e){ lastError = e.message; }
   busy = false; render();
 }
@@ -355,7 +442,7 @@ async function downloadDriverPayslip(format){
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = `payslip_${payslipMonth}.${format==="xlsx"?"xlsx":"csv"}`;
+    a.href = url; a.download = `payslip_${payslipMonth}.${format==="xlsx"?"xlsx":format==="pdf"?"pdf":"csv"}`;
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   }catch(e){ alert(e.message); }
@@ -456,38 +543,178 @@ function odometerOpenScreen(){
 }
 
 function activeShiftScreen(){
-  const isReadyToLogout = shift.status === "ready_to_logout";
   return `
   <h1 class="page-title">Welcome, ${driver.name}</h1>
   ${errorBannerHtml()}
-  ${tripsCardHtml()}
-  ${isReadyToLogout ? logoutCardHtml() : closingOdometerCardHtml()}
-  ${payslipCardHtml()}
+  ${driverTabBarHtml()}
+  ${driverTabContentHtml()}
   `;
 }
 
-function tripsCardHtml(){
-  const up = trips.upcoming || [];
-  const done = trips.completed || [];
+const DRIVER_TABS = [
+  ["current","Current Trip"], ["upcoming","Upcoming Trips"], ["attendance","Attendance"],
+  ["payroll","Payroll"], ["documents","Documents"], ["settings","Settings"],
+];
+function driverTabBarHtml(){
+  return `<div class="driver-tabbar">${DRIVER_TABS.map(([k,l])=>
+    `<button class="${driverTab===k?'active':''}" onclick="setDriverTab('${k}')">${l}</button>`
+  ).join("")}</div>`;
+}
+function driverTabContentHtml(){
+  if(driverTab==="upcoming") return upcomingTripsTabHtml();
+  if(driverTab==="attendance") return attendanceTabHtml();
+  if(driverTab==="payroll") return payslipCardHtml();
+  if(driverTab==="documents") return documentsTabHtml();
+  if(driverTab==="settings") return settingsTabHtml();
+  return currentTripTabHtml();
+}
+
+// ---------- Current Trip tab ----------
+function currentTripTabHtml(){
+  let tripHtml;
+  if(!currentTrip){
+    tripHtml = `<div class="card"><h2 class="section-title">Current Trip</h2><div class="empty">No trip currently running. Start one from the Upcoming Trips tab.</div></div>`;
+  } else {
+    const t = currentTrip;
+    tripHtml = `
+    <div class="card">
+      <h2 class="section-title">Current Trip</h2>
+      <p class="muted">${fmtDate(t.date)}${t.scheduledTime? " &middot; "+t.scheduledTime : ""}${t.vehicleReg? " &middot; "+t.vehicleReg : ""}</p>
+      <div class="trip-point">
+        <div class="trip-point-label">Pickup Point</div>
+        <div>${t.pickupPoint || "Not specified"}</div>
+        ${t.pickupPoint ? `<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(t.pickupPoint)}" target="_blank" rel="noopener">Open in Maps</a>` : ""}
+      </div>
+      <div class="trip-point">
+        <div class="trip-point-label">Drop Point</div>
+        <div>${t.dropPoint || "Not specified"}</div>
+        ${t.dropPoint ? `<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(t.dropPoint)}" target="_blank" rel="noopener">Open in Maps</a>` : ""}
+      </div>
+      ${t.notes ? `<p class="muted" style="margin-top:10px;">Notes: ${t.notes}</p>` : ""}
+      <button class="big-btn" style="margin-top:14px;" ${busy?"disabled":""} onclick="markTripStatus('${t.id}','completed')">${busy?'<span class="spinner"></span>Saving...':"Mark Trip Completed"}</button>
+    </div>`;
+  }
+  const shiftHtml = shift.status==="ready_to_logout" ? logoutCardHtml() : closingOdometerCardHtml();
+  return tripHtml + shiftHtml;
+}
+
+// ---------- Upcoming Trips tab ----------
+function upcomingTripsTabHtml(){
+  const up = monthTrips.upcoming || [];
+  const done = monthTrips.completed || [];
+  const rowHtml = (t) => `
+    <div class="trip-item">
+      <div class="date">${fmtDate(t.date)}${t.scheduledTime? " &middot; "+t.scheduledTime : ""}</div>
+      <div class="desc">${t.pickupPoint || "Pickup TBD"} &rarr; ${t.dropPoint || "Drop TBD"}</div>
+      <span class="badge ${t.status}">${t.status==="in_progress"?"In Progress":"Upcoming"}</span>
+      ${t.status==="upcoming" ? `
+      <div class="trip-actions">
+        <button ${busy?"disabled":""} onclick="markTripStatus('${t.id}','in_progress')">Start Trip</button>
+        <button ${busy?"disabled":""} onclick="requestLeaveForTrip('${t.id}','${t.date}')">Request Leave</button>
+      </div>` : ""}
+    </div>`;
+  const leaveRowHtml = (l) => `
+    <div class="trip-item">
+      <div class="date">${fmtDate(l.start)}</div>
+      <div class="desc">${l.reason || "Leave requested"}</div>
+      <span class="badge ${l.status}">${l.status.toUpperCase()}</span>
+    </div>`;
   return `
   <div class="card">
-    <h2 class="section-title">My Trips</h2>
-    ${up.length===0 ? `<div class="empty">No trips allocated yet. Check back or ask your Site Supervisor.</div>` : up.map(t=>`
-      <div class="trip-item">
-        <div class="date">${fmtDate(t.date)}${t.scheduledTime? " &middot; "+t.scheduledTime : ""}</div>
-        <div class="desc">${t.description || "Trip"}</div>
-        <span class="badge ${t.status}">${t.status==="in_progress"?"In Progress":"Upcoming"}</span>
-        <div class="trip-actions">
-          ${t.status==="upcoming" ? `<button onclick="markTripStatus('${t.id}','in_progress')">Start Trip</button>` : ""}
-          ${t.status==="in_progress" ? `<button onclick="markTripStatus('${t.id}','completed')">Mark Completed</button>` : ""}
-        </div>
-      </div>`).join("")}
-    ${done.length ? `<p class="muted" style="margin-top:10px;">Recently completed</p>` + done.map(t=>`
-      <div class="trip-item">
-        <div class="date">${fmtDate(t.date)}</div>
-        <div class="desc">${t.description || "Trip"}</div>
-        <span class="badge completed">Completed</span>
-      </div>`).join("") : ""}
+    <h2 class="section-title">Upcoming Trips</h2>
+    <div class="month-picker"><input type="month" value="${tripsMonth}" onchange="setTripsMonth(this.value)" /></div>
+    ${up.length===0 ? `<div class="empty">No trips allocated for this month yet.</div>` : up.map(rowHtml).join("")}
+    ${done.length ? `<p class="muted" style="margin-top:10px;">Completed this month</p>` + done.map(rowHtml).join("") : ""}
+  </div>
+  <div class="card">
+    <h2 class="section-title">My Leave Requests</h2>
+    ${myLeaveRequests.length===0 ? `<div class="empty">No leave requests yet.</div>` : myLeaveRequests.map(leaveRowHtml).join("")}
+  </div>`;
+}
+
+// ---------- Attendance tab ----------
+function attendanceTabHtml(){
+  const rows = attendanceRows.map(r=>`
+    <tr>
+      <td>${fmtDate(r.date)}</td>
+      <td>${fmtTime(r.loginAt)}</td>
+      <td>${r.logoutAt ? fmtTime(r.logoutAt) : (r.autoClosedReason ? "Auto-closed" : "-")}</td>
+      <td>${r.hours!=null ? r.hours+" hrs" : "-"}</td>
+      <td>${r.distanceKm!=null ? r.distanceKm+" km" : "-"}</td>
+    </tr>`).join("");
+  return `
+  <div class="card">
+    <h2 class="section-title">Attendance</h2>
+    <div class="month-picker"><input type="month" value="${attendanceMonth}" onchange="setAttendanceMonth(this.value)" /></div>
+    ${attendanceRows.length===0 ? `<div class="empty">No attendance records for this month.</div>` : `
+    <table>
+      <tr><th>Date</th><th>Login</th><th>Logout</th><th>Hours</th><th>Distance</th></tr>
+      ${rows}
+    </table>`}
+  </div>`;
+}
+
+// ---------- Documents tab ----------
+function docRowHtml(label, number, url){
+  return `
+  <div class="doc-row">
+    <div><b>${label}</b>${number ? ` <span class="muted">(${number})</span>` : ""}</div>
+    ${url ? `<a href="${url}" target="_blank" rel="noopener" class="dl-link">Download</a>` : `<span class="muted">Not uploaded yet</span>`}
+  </div>`;
+}
+function documentsTabHtml(){
+  if(!documentsData) return `<div class="card"><h2 class="section-title">Documents</h2><div class="empty"><span class="spinner"></span>Loading...</div></div>`;
+  const p = documentsData.personal;
+  const personalHtml = [
+    docRowHtml("Driving License", p.licenseNumber, p.licenseCopyUrl),
+    docRowHtml("Aadhar Card", p.aadharNumber, p.aadharCopyUrl),
+    docRowHtml("PAN Card", p.panNumber, p.panCopyUrl),
+    docRowHtml("Bank Cancelled Cheque", "", p.bankChequeUrl),
+    docRowHtml("UAN / PF Certificate", p.uanNumber, p.pfCertificateUrl),
+    docRowHtml("ESI Certificate", p.esiNumber, p.esiCertificateUrl),
+  ].join("");
+  const bankHtml = (p.bankAccountNumber || p.bankIfsc || p.bankAccountHolderName) ? `
+    <div class="doc-row" style="display:block;">
+      <b>Account Details</b>
+      <div class="muted" style="margin-top:4px;">
+        ${p.bankAccountHolderName ? `Name: ${p.bankAccountHolderName}<br/>` : ""}
+        ${p.bankAccountNumber ? `A/C No: ${p.bankAccountNumber}<br/>` : ""}
+        ${p.bankIfsc ? `IFSC: ${p.bankIfsc}` : ""}
+      </div>
+    </div>` : "";
+  const v = documentsData.vehicle;
+  const vehicleHtml = v
+    ? Object.keys(v.docs).map(docType=>{
+        const doc = v.docs[docType];
+        return docRowHtml(DOC_TYPE_LABELS[docType] || docType, doc.number, doc.copyUrl) +
+          (doc.expiry ? `<div class="muted" style="margin:-6px 0 8px;">Expiry: ${doc.expiry}</div>` : "");
+      }).join("")
+    : `<div class="empty">You're not currently mapped to a vehicle.</div>`;
+  return `
+  <div class="card">
+    <h2 class="section-title">My Documents</h2>
+    ${personalHtml}
+    ${bankHtml}
+  </div>
+  <div class="card">
+    <h2 class="section-title">Vehicle Documents${v ? " - "+v.reg : ""}</h2>
+    <p class="muted">For RTA checks. View/download only.</p>
+    ${vehicleHtml}
+  </div>`;
+}
+
+// ---------- Settings tab ----------
+function settingsTabHtml(){
+  const dot = locationOk ? "" : " off";
+  return `
+  <div class="card">
+    <h2 class="section-title">Settings</h2>
+    <div class="doc-row"><div>Name</div><div>${driver.name}</div></div>
+    <div class="doc-row"><div>Mobile Number</div><div>${driver.phone || "-"}</div></div>
+    <div class="doc-row"><div>License Number</div><div>${driver.licenseNumber || "-"}</div></div>
+    <div class="doc-row"><div>Driving Level</div><div>${driver.drivingLevel || "-"}</div></div>
+    <div class="doc-row"><div>Location Tracking</div><div class="status-pill"><span class="dot${dot}"></span>${locationOk?"On":"Off"}</div></div>
+    <p class="muted" style="margin-top:12px;">These details are set by the office and can't be edited here. To log out, use the swipe control in the Current Trip tab.</p>
   </div>`;
 }
 
@@ -523,7 +750,6 @@ function logoutCardHtml(){
 }
 
 function payslipCardHtml(){
-  if(payslip===null && !payslipLoading){ setTimeout(fetchPayslip, 0); }
   let inner;
   if(payslipLoading) inner = `<div class="empty"><span class="spinner"></span>Loading...</div>`;
   else if(!payslip || !payslip.approved) inner = `<div class="empty">Your payslip for this month hasn't been approved by HR yet.</div>`;
@@ -534,6 +760,7 @@ function payslipCardHtml(){
       ${p.deductions.map(d=>`<div class="payslip-row"><span>${d.label}</span><span>-${money(d.amount)}</span></div>`).join("")}
       <div class="payslip-row total"><span>Net Pay</span><span>${money(p.netPay)}</span></div>
       <div class="dl-row">
+        <button class="big-btn secondary" onclick="downloadDriverPayslip('pdf')">Download PDF</button>
         <button class="big-btn secondary" onclick="downloadDriverPayslip('csv')">Download CSV</button>
         <button class="big-btn secondary" onclick="downloadDriverPayslip('xlsx')">Download Excel</button>
       </div>`;
