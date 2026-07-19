@@ -1225,7 +1225,32 @@ async function ownerDashboardScreen(){
   </div>
 
   <div class="card"><h2 class="section-title">Full audit trail</h2>${await auditTableHtml(25)}</div>
+  ${await backupsCardHtml()}
   `;
+}
+async function backupsCardHtml(){
+  let list = [];
+  try{ list = await api("/admin/backups"); }catch(e){ return ""; }
+  const rows = list.slice(0,30).map(b=>`
+    <tr>
+      <td>${new Date(b.takenAt).toLocaleString()}</td>
+      <td>${b.reason}</td>
+      <td><button class="btn small secondary" onclick="restoreBackup('${b._id}','${new Date(b.takenAt).toLocaleString()}')">Restore this</button></td>
+    </tr>`).join("");
+  return `
+  <div class="card">
+    <h2 class="section-title">Backups (last 30 days)</h2>
+    <p class="muted">Taken automatically once a day. Restoring replaces ALL current app data with that snapshot - use only to undo a serious mistake.</p>
+    <table><tr><th>Taken</th><th>Reason</th><th></th></tr>${rows || "<tr><td colspan='3' class='empty'>No backups yet - the first is taken shortly after the server starts.</td></tr>"}</table>
+  </div>`;
+}
+async function restoreBackup(id, label){
+  if(!confirm(`Restore all app data to the backup from ${label}?\n\nThis REPLACES everything currently in the app (all vehicles, records, people, expenses, etc.) with that snapshot. This cannot be undone except by restoring a different backup. Are you sure?`)) return;
+  try{
+    await api(`/admin/backups/${id}/restore`, {method:"POST"});
+    alert("Restored. Reloading the app now.");
+    await boot();
+  }catch(e){ alert(e.message); }
 }
 function drawCharts(approved,pending,rejected,fails,passes){
   const f = document.getElementById("chartFunnel");
@@ -1242,7 +1267,7 @@ Object.assign(window, {
   selectLoginUser, doLogin, doLogout, switchTab, goto, draftSet, updateBreathalyzer, startPhotoCapture,
   updateDoc, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, addDriver, addPerson, correctOdometer, setAttDate, captureBillPhoto, submitExpense, decideExpense,
-  startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, saveOdometer,
+  startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, saveOdometer, restoreBackup,
 });
 
 boot();

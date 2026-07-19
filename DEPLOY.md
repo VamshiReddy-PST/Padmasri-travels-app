@@ -70,6 +70,16 @@ Your link (`https://padmasri-travels.onrender.com` or similar) is what you send 
 - **MongoDB Atlas free tier (M0) gives you 512MB of storage**, which is plenty for records, users, vehicles, and text data, and holds a meaningful number of photos too (they're compressed on the phone before upload). If you eventually outgrow it, upgrading is a paint-free plan change in Atlas, not a rebuild.
 - **This is genuinely shared, persistent data** now - not a preview, not something that resets. Treat PINs and access accordingly.
 
+## Backups (data kept for 30 days)
+
+Atlas's free tier doesn't include automatic cloud backups (that's a paid-tier feature), so the app now takes its own: once a day it saves a full snapshot of all your data into a separate part of the same database, and automatically deletes anything older than 30 days.
+
+- As the **Owner**, scroll to the bottom of the **Dashboard** to see the **Backups** card - a list of the last 30 days of snapshots.
+- If something goes badly wrong (a bad bulk edit, an accidental deletion), click **Restore this** next to the snapshot from before it happened. This replaces all current data with that snapshot - use it only to undo a real mistake, since anything entered after that snapshot's time is lost.
+- This protects against mistakes made *through the app*. It does not protect against Atlas itself going down, which Atlas already guards against on its own infrastructure.
+
+There's also an optional `backup/` folder in the project with a script that saves a copy of your data as plain JSON files onto your own computer, if you'd like an extra offline copy - `backup/config.json` already has your connection string in it (not uploaded to GitHub). Run it anytime from a terminal with `node backup/backup.js`.
+
 ## Adding your real team
 
 Once the link is live:

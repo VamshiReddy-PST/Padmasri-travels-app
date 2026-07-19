@@ -37,6 +37,9 @@ let db; // the whole app dataset, loaded into memory - all route handlers read/w
 let mongoClient = null;
 let appDataCol = null;
 let photosCol = null;
+let backupsCol = null;
+const BACKUP_RETENTION_DAYS = 30;
+const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // once a day
 
 async function initStorage() {
   if (USE_MONGO) {
@@ -45,6 +48,7 @@ async function initStorage() {
     const mdb = mongoClient.db("fleet_supervisor_app");
     appDataCol = mdb.collection("appdata");
     photosCol = mdb.collection("photos");
+    backupsCol = mdb.collection("backups");
     const existing = await appDataCol.findOne({ _id: "main" });
     if (existing) {
       delete existing._id;
@@ -56,6 +60,8 @@ async function initStorage() {
       await persistNow();
       console.log("Storage: connected to MongoDB, no existing data found - seeded with demo data.");
     }
+    await runBackup("startup");
+    setInterval(() => runBackup("daily"), BACKUP_INTERVAL_MS);
   } else {
     if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
     if (!fs.existsSync(DATA_FILE)) fs.copyFileSync(SEED_FILE, DATA_FILE);
@@ -77,6 +83,28 @@ function backfillDefaults() {
   (db.vehicles || []).forEach((v) => {
     if (v.driverAssignedDate === undefined) v.driverAssignedDate = null;
   });
+}
+
+// MongoDB Atlas's free (M0) tier doesn't include automatic cloud backups -
+// that's a paid-tier feature. This is the free substitute: a rolling 30-day
+// history of full-data snapshots kept in their own "backups" collection in
+// the same cluster, protecting against accidental deletions/bad edits made
+// through the app itself (not against Atlas infrastructure failure, which
+// Atlas already guards against on its own). Runs once at startup and then
+// once a day for as long as the server process stays up.
+async function runBackup(reason) {
+  if (!USE_MONGO || !backupsCol) return;
+  try {
+    const clone = JSON.parse(JSON.stringify(db));
+    delete clone._id;
+    const takenAt = nowIso();
+    await backupsCol.insertOne({ _id: uid("bk"), takenAt, reason: reason || "scheduled", data: clone });
+    const cutoffIso = new Date(Date.now() - BACKUP_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    const pruned = await backupsCol.deleteMany({ takenAt: { $lt: cutoffIso } });
+    console.log(`Backup taken (${reason || "scheduled"}) at ${takenAt}. Pruned ${pruned.deletedCount || 0} backup(s) older than ${BACKUP_RETENTION_DAYS} days.`);
+  } catch (err) {
+    console.error("Backup failed (app keeps running normally):", err);
+  }
 }
 
 async function persistNow() {
@@ -801,6 +829,41 @@ app.get("/api/audit", requireAuth, requireRole("owner", "data_team", "hr", "ops_
   const limit = Math.min(Number(req.query.limit) || 100, 1000);
   res.json(db.auditLog.slice(0, limit));
 });
+
+// ---------- BACKUPS (Owner only) ----------
+// A rolling 30-day history of full-data snapshots, taken automatically once
+// a day (see runBackup above). This is what "save this for a month" means in
+// practice on Atlas's free tier - it protects against an accidental bad
+// edit/deletion made through the app, restorable by the Owner without
+// needing anyone's help.
+app.get(
+  "/api/admin/backups",
+  requireAuth,
+  requireRole("owner"),
+  h(async (req, res) => {
+    if (!USE_MONGO) return res.json([]);
+    const list = await backupsCol
+      .find({}, { projection: { _id: 1, takenAt: 1, reason: 1 } })
+      .sort({ takenAt: -1 })
+      .toArray();
+    res.json(list);
+  })
+);
+
+app.post(
+  "/api/admin/backups/:id/restore",
+  requireAuth,
+  requireRole("owner"),
+  h(async (req, res) => {
+    if (!USE_MONGO) return res.status(400).json({ error: "Backups only apply when using MongoDB storage." });
+    const snapshot = await backupsCol.findOne({ _id: req.params.id });
+    if (!snapshot) return res.status(404).json({ error: "Backup not found." });
+    db = JSON.parse(JSON.stringify(snapshot.data));
+    backfillDefaults();
+    await audit(req.user, "restore_backup", `${req.user.name} restored all app data from the backup taken ${snapshot.takenAt}`);
+    res.json({ ok: true, restoredFrom: snapshot.takenAt });
+  })
+);
 
 // ---------- fallback to the app shell ----------
 app.get("*", (req, res, next) => {
