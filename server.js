@@ -133,6 +133,13 @@ function backfillDefaults() {
     if (u.mustChangePassword === undefined) u.mustChangePassword = false;
     delete u.pin;
   });
+  // The Owner's email is a one-time, explicitly-specified migration - it
+  // only lives in seed.json otherwise, which never touches an already-
+  // existing database (only a brand new one). Without this, an existing
+  // production Owner account would be stuck with a blank email forever and
+  // unable to log in with it.
+  const ownerAccount = (db.users || []).find((u) => u.role === "owner" && !u.email);
+  if (ownerAccount) ownerAccount.email = "vamshi.reddy@padmasritravels.in";
   (db.drivers || []).forEach((d) => {
     if (d.phone === undefined) d.phone = "";
     if (d.licenseNumber === undefined) d.licenseNumber = "";
