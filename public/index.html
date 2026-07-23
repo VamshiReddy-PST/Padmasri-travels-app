@@ -83,7 +83,7 @@
   .role-pick label.sel{border-color:var(--accent);background:var(--accent-light);}
   .role-pick label span.small{color:var(--grey);font-size:11px;}
   .login-wrap{max-width:420px;margin:60px auto;}
-  .login-wrap.wide{max-width:820px;}
+  .login-wrap.wide{max-width:1080px;}
   .login-wrap .logo{text-align:center;font-size:22px;font-weight:800;color:var(--navy);margin-bottom:4px;}
   .login-wrap .sub{text-align:center;color:var(--grey);font-size:13px;margin-bottom:22px;}
   .portal-hero{background:linear-gradient(135deg,#0d2545 0%,var(--navy) 45%,#284d82 100%);border-radius:18px;padding:38px 30px 34px;margin-bottom:0;box-shadow:0 12px 34px rgba(13,37,69,.28);position:relative;overflow:hidden;}
@@ -91,7 +91,8 @@
   .portal-hero::after{content:"";position:absolute;bottom:-80px;left:-40px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(46,116,181,.28),transparent 70%);}
   .portal-hero .logo{color:#fff;font-size:25px;position:relative;z-index:1;}
   .portal-hero .sub{color:#c7d7ee;margin-bottom:28px;position:relative;z-index:1;}
-  .portal-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;position:relative;z-index:1;}
+  .portal-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;position:relative;z-index:1;}
+  @media(max-width:900px){.portal-grid{grid-template-columns:1fr 1fr;}}
   @media(max-width:640px){.portal-grid{grid-template-columns:1fr;}}
   .portal-card{background:rgba(255,255,255,.97);border-radius:14px;padding:26px 22px;text-align:left;cursor:pointer;border:2px solid transparent;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;display:flex;flex-direction:column;gap:10px;}
   .portal-card:hover{transform:translateY(-4px);box-shadow:0 14px 30px rgba(0,0,0,.22);}
@@ -99,12 +100,15 @@
   .portal-card .portal-icon{width:54px;height:54px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:26px;}
   .portal-card.driver .portal-icon{background:linear-gradient(135deg,#f6a821,#c9720a);}
   .portal-card.staff .portal-icon{background:linear-gradient(135deg,#2e74b5,#1f3864);}
+  .portal-card.subvendor .portal-icon{background:linear-gradient(135deg,#1e8e3e,#125e28);}
   .portal-card .portal-title{font-size:18px;font-weight:800;color:var(--navy);}
   .portal-card .portal-desc{font-size:12.5px;color:var(--grey);line-height:1.5;}
   .portal-card .portal-cta{margin-top:auto;font-size:12.5px;font-weight:700;color:var(--accent);display:flex;align-items:center;gap:5px;}
   .portal-card.driver .portal-cta{color:#c9720a;}
+  .portal-card.subvendor .portal-cta{color:#1e8e3e;}
   .portal-card.driver:hover{border-color:#f6a821;}
   .portal-card.staff:hover{border-color:var(--accent);}
+  .portal-card.subvendor:hover{border-color:#1e8e3e;}
   .portal-footnote{text-align:center;color:#8ea1c1;font-size:11.5px;margin-top:20px;position:relative;z-index:1;}
   .portal-back{background:transparent;border:none;color:var(--accent);font-size:12.5px;cursor:pointer;padding:0 0 14px;display:flex;align-items:center;gap:4px;font-weight:600;}
   .portal-back:hover{text-decoration:underline;}
@@ -272,6 +276,12 @@ async function renderLogin(){
             <div class="portal-desc">Sign in with your Email or Mobile Number &amp; Password to manage vehicles, trips, drivers, payroll and reports.</div>
             <div class="portal-cta">Continue as Staff &rarr;</div>
           </div>
+          <div class="portal-card subvendor" onclick="choosePortal('subvendor')">
+            <div class="portal-icon">🤝</div>
+            <div class="portal-title">Subvendor / Vehicle Owner</div>
+            <div class="portal-desc">Sign in with your Email or Mobile Number &amp; Password to see your vehicles, trips, income earned and payments received.</div>
+            <div class="portal-cta">Continue as Subvendor &rarr;</div>
+          </div>
         </div>
         <div class="portal-footnote">Padmasri Travels · Fleet Supervisor App</div>
       </div>
@@ -300,6 +310,7 @@ async function renderLogin(){
 }
 function choosePortal(portal){
   if(portal === "driver"){ window.location.href = "/driver.html"; return; }
+  if(portal === "subvendor"){ window.location.href = "/subvendor.html"; return; }
   loginPortal = portal;
   lastError = "";
   renderLogin();
@@ -413,10 +424,10 @@ async function submitVoluntaryPasswordChange(){
 function tabsFor(role){
   if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["payroll","Payroll"]];
   if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["payroll","Payroll"]];
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["people","People"],["audit","Audit Log"],["payroll","Payroll"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["payroll","Payroll"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"]];
   return [];
 }
@@ -481,6 +492,7 @@ async function routeView(){
     if(tab==="expenses") return expensesScreen(true);
     if(tab==="assignments") return assignmentsScreen();
     if(tab==="trips") return tripsScreen();
+    if(tab==="subvendors") return subvendorsScreen();
     if(tab==="people") return peopleScreen();
     if(tab==="reports") return reportsScreen();
     if(tab==="backup") return backupDownloadsScreen();
@@ -502,6 +514,7 @@ async function routeView(){
     if(tab==="expenses") return expensesScreen(true);
     if(tab==="assignments") return assignmentsScreen();
     if(tab==="trips") return tripsScreen();
+    if(tab==="subvendors") return subvendorsScreen();
     if(tab==="people") return peopleScreen();
     if(tab==="attendance") return hrAttendanceScreen();
     if(tab==="audit") return auditScreen();
@@ -1897,6 +1910,8 @@ let editingClientRoutesId = null;
 // the Owner re-confirms their own PIN, and is reset whenever they navigate
 // away so the next visit is read-only again.
 let ownerAssignUnlocked = false;
+let subvendors = [];
+let editingSubvendorId = null;
 const ROLE_OPTIONS = [
   ["site_supervisor","Site Supervisor"],["area_supervisor","Area Supervisor"],["ops_manager","Operations Manager"],
   ["data_team","Data Team"],["hr","HR"],["owner","Owner"],["bookings","Bookings Department"],
@@ -3073,6 +3088,205 @@ async function deleteTrip(id){
   catch(e){ alert(e.message); }
 }
 
+// ================= SUBVENDORS (Driver-cum-Owner) - Owner, Ops Manager =================
+// A Subvendor is an external vehicle owner/operator we contract with, kept
+// entirely separate from our own drivers/staff/clients, with their own
+// login (see public/subvendor.html) and a fixed per-vehicle billing
+// contract (Per Trip / Per KM / Per Package) that only changes via an
+// explicit revision, never silently.
+function subvendorBillingLabel(b){
+  if(!b) return "-";
+  if(b.mode==="per_trip") return `₹${b.rate} / trip`;
+  if(b.mode==="per_km") return `₹${b.rate} / km`;
+  if(b.mode==="per_package") return `₹${b.rate} / month (package)`;
+  return "-";
+}
+async function subvendorsScreen(){
+  subvendors = await api("/subvendors");
+  const rows = subvendors.map(sv=>`
+    <tr>
+      <td><b>${sv.name}</b></td>
+      <td>${sv.contactPerson||"-"}</td>
+      <td>${sv.email||sv.phone||"-"}</td>
+      <td>${sv.active!==false ? '<span class="badge approved">ACTIVE</span>' : '<span class="badge rejected">INACTIVE</span>'}</td>
+      <td><button class="btn small secondary" onclick="toggleSubvendorDetail('${sv.id}')">${editingSubvendorId===sv.id?'Close':'View / Manage'}</button></td>
+    </tr>`).join("");
+  return `
+  <h1 class="page-title">Subvendors</h1>
+  <div class="banner">A Subvendor is an external vehicle owner/operator ("Driver-cum-Owner") we contract with - separate from our own drivers and from clients. Each linked vehicle has one fixed billing contract (Per Trip / Per KM / Per Package Monthly) that stays constant for the contract unless explicitly revised (e.g. a fuel price variation). Subvendors sign in separately via the Subvendor portal to see their own vehicles, trips, income and payments.</div>
+  <div class="card">
+    <h2 class="section-title">All Subvendors (${subvendors.length})</h2>
+    <table><tr><th>Name</th><th>Contact Person</th><th>Email / Mobile</th><th>Status</th><th></th></tr>
+    ${rows || "<tr><td colspan='5' class='empty'>No subvendors added yet.</td></tr>"}</table>
+    <form class="inline-form" onsubmit="return addSubvendor(event)">
+      <div class="f"><label>Name *</label><input type="text" id="newSvName" required /></div>
+      <div class="f"><label>Contact Person</label><input type="text" id="newSvContact" /></div>
+      <div class="f"><label>Email</label><input type="text" id="newSvEmail" placeholder="for their login" /></div>
+      <div class="f"><label>Mobile</label><input type="tel" id="newSvPhone" placeholder="for their login" /></div>
+      <div class="f"><label>Temporary Password *</label><input type="text" id="newSvPassword" placeholder="9+ chars, letters/numbers/symbols" required /></div>
+      <button class="btn small" type="submit">+ Add Subvendor</button>
+    </form>
+    <div class="muted" style="margin-top:6px;">Either an email or mobile number is required so they can log in - they'll be forced to set their own password the first time.</div>
+  </div>
+  ${editingSubvendorId ? await subvendorDetailHtml(editingSubvendorId) : ""}
+  `;
+}
+async function toggleSubvendorDetail(id){
+  editingSubvendorId = editingSubvendorId===id ? null : id;
+  await renderMain();
+}
+async function addSubvendor(evt){
+  evt.preventDefault();
+  const body = {
+    name: document.getElementById("newSvName").value,
+    contactPerson: document.getElementById("newSvContact").value,
+    email: document.getElementById("newSvEmail").value,
+    phone: document.getElementById("newSvPhone").value,
+    password: document.getElementById("newSvPassword").value,
+  };
+  try{
+    await api("/subvendors", {method:"POST", body: JSON.stringify(body)});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function subvendorDetailHtml(id){
+  const summary = await api(`/subvendors/${id}/summary`);
+  const sv = summary.subvendor;
+  const linkedVehicleIds = new Set(summary.vehicles.map(v=>v.id));
+  const unlinkedVehicles = vehicles.filter(v=>!v.subvendorId).filter(v=>!linkedVehicleIds.has(v.id));
+  const vehicleRows = summary.vehicles.map(v=>`
+    <tr>
+      <td><b>${v.reg}</b></td>
+      <td>${v.clientName||'-'}</td>
+      <td>${v.route||'-'}${v.routeStartingPoint?' ('+v.routeStartingPoint+')':''}</td>
+      <td>${v.driverName||'-'}</td>
+      <td>${subvendorBillingLabel(v.billing)}</td>
+      <td>
+        <button class="btn small secondary" onclick="reviseSubvendorBilling('${id}','${v.id}')">Revise Billing</button>
+        <button class="btn small danger" onclick="unlinkSubvendorVehicle('${id}','${v.id}')">Unlink</button>
+      </td>
+    </tr>`).join("");
+  const incomeRows = summary.incomeEntries.slice(0,20).map(e=>`
+    <tr><td>${e.date}</td><td>${e.source}</td><td>₹${e.amount}</td><td>${e.note||''}</td></tr>`).join("");
+  const paymentRows = summary.payments.map(p=>`
+    <tr><td>${p.date}</td><td>${p.type}</td><td>₹${p.amount}</td><td>${p.note||''}</td><td>${p.createdByName||''}</td></tr>`).join("");
+  const advanceRows = summary.advances.map(a=>`
+    <tr>
+      <td>${a.date}</td><td>₹${a.principal}</td><td>₹${a.outstandingPrincipal}</td><td>₹${a.interestAccrued} <span class="muted">(3%/mo)</span></td>
+      <td><span class="badge ${a.status==='outstanding'?'pending':'approved'}">${a.status.toUpperCase()}</span></td>
+      <td>${a.status==='outstanding' ? `<button class="btn small secondary" onclick="settleSubvendorAdvance('${id}','${a.id}', ${a.outstandingPrincipal})">Settle</button>` : ''}</td>
+    </tr>`).join("");
+  return `
+  <div class="card">
+    <h2 class="section-title">${sv.name} - Overview</h2>
+    <div class="grid cols-4" style="margin-bottom:16px;">
+      <div class="kpi"><div class="num">${summary.vehicles.length}</div><div class="label">Linked vehicles</div></div>
+      <div class="kpi"><div class="num">${summary.completedTrips} / ${summary.totalTrips}</div><div class="label">Completed / total trips</div></div>
+      <div class="kpi good"><div class="num">₹${summary.totalIncome}</div><div class="label">Total income earned</div></div>
+      <div class="kpi ${summary.netPayableToSubvendor<0?'bad':'good'}"><div class="num">₹${summary.netPayableToSubvendor}</div><div class="label">Net payable to them</div></div>
+    </div>
+    <h2 class="section-title">Linked Vehicles</h2>
+    <table><tr><th>Vehicle</th><th>Client</th><th>Route</th><th>Driver</th><th>Billing</th><th></th></tr>
+    ${vehicleRows || "<tr><td colspan='6' class='empty'>No vehicles linked yet.</td></tr>"}</table>
+    <form class="inline-form" onsubmit="return linkSubvendorVehicle('${id}', event)">
+      <div class="f"><label>Vehicle</label><select id="svLinkVehicle_${id}" required>
+        <option value="">Select...</option>
+        ${unlinkedVehicles.map(v=>`<option value="${v.id}">${v.reg}</option>`).join("")}
+      </select></div>
+      <div class="f"><label>Billing Mode</label><select id="svLinkMode_${id}" required>
+        <option value="per_trip">Per Trip</option>
+        <option value="per_km">Per KM</option>
+        <option value="per_package">Per Package (Monthly)</option>
+      </select></div>
+      <div class="f"><label>Rate (₹)</label><input type="number" step="0.01" min="0.01" id="svLinkRate_${id}" style="width:100px" required /></div>
+      <button class="btn small" type="submit">+ Link Vehicle</button>
+    </form>
+    <div class="muted" style="margin-top:6px;">The billing rate stays fixed for the contract - use "Revise Billing" on an already-linked vehicle to change it later (e.g. a fuel price variation); the old rate is kept in history.</div>
+
+    <h2 class="section-title" style="margin-top:20px;">Income Earned (most recent 20)</h2>
+    <table><tr><th>Date</th><th>Source</th><th>Amount</th><th>Note</th></tr>
+    ${incomeRows || "<tr><td colspan='4' class='empty'>No income yet.</td></tr>"}</table>
+
+    <h2 class="section-title" style="margin-top:20px;">Record a Payment (Diesel / Advance / Repair / Other)</h2>
+    <form class="inline-form" onsubmit="return recordSubvendorPayment('${id}', event)">
+      <div class="f"><label>Type</label><select id="svPayType_${id}">
+        <option>Diesel</option><option>Advance</option><option>Repair</option><option>Other</option>
+      </select></div>
+      <div class="f"><label>Vehicle (optional)</label><select id="svPayVehicle_${id}">
+        <option value="">-</option>
+        ${summary.vehicles.map(v=>`<option value="${v.id}">${v.reg}</option>`).join("")}
+      </select></div>
+      <div class="f"><label>Amount (₹)</label><input type="number" step="0.01" min="0.01" id="svPayAmount_${id}" style="width:100px" required /></div>
+      <div class="f"><label>Date</label><input type="date" id="svPayDate_${id}" value="${todayStr()}" /></div>
+      <div class="f" style="min-width:200px;"><label>Note</label><input type="text" id="svPayNote_${id}" /></div>
+      <button class="btn small" type="submit">+ Record Payment</button>
+    </form>
+    <div class="muted" style="margin:6px 0 14px;">An "Advance" payment automatically starts accruing simple interest at 36% p.a. (3% per month) on the outstanding balance until it's settled.</div>
+    <table><tr><th>Date</th><th>Type</th><th>Amount</th><th>Note</th><th>By</th></tr>
+    ${paymentRows || "<tr><td colspan='5' class='empty'>No payments recorded yet.</td></tr>"}</table>
+
+    <h2 class="section-title" style="margin-top:20px;">Advances &amp; Interest</h2>
+    <table><tr><th>Date</th><th>Principal</th><th>Outstanding</th><th>Interest</th><th>Status</th><th></th></tr>
+    ${advanceRows || "<tr><td colspan='6' class='empty'>No advances yet.</td></tr>"}</table>
+  </div>`;
+}
+async function linkSubvendorVehicle(id, evt){
+  evt.preventDefault();
+  const vehicleId = document.getElementById(`svLinkVehicle_${id}`).value;
+  const billingMode = document.getElementById(`svLinkMode_${id}`).value;
+  const billingRate = document.getElementById(`svLinkRate_${id}`).value;
+  if(!vehicleId){ alert("Select a vehicle."); return false; }
+  try{
+    await api(`/vehicles/${vehicleId}/subvendor`, {method:"PATCH", body: JSON.stringify({subvendorId:id, billingMode, billingRate})});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function reviseSubvendorBilling(id, vehicleId){
+  const mode = prompt("Billing mode - type exactly one of: per_trip, per_km, per_package");
+  if(mode===null) return;
+  if(!["per_trip","per_km","per_package"].includes(mode)){ alert("Must be exactly one of: per_trip, per_km, per_package"); return; }
+  const rate = prompt("New rate (₹):");
+  if(rate===null) return;
+  const reason = prompt("Reason for the change (e.g. fuel price variation):","");
+  if(reason===null) return;
+  try{
+    await api(`/vehicles/${vehicleId}/subvendor`, {method:"PATCH", body: JSON.stringify({subvendorId:id, billingMode:mode, billingRate:rate, reason})});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function unlinkSubvendorVehicle(id, vehicleId){
+  if(!confirm("Unlink this vehicle from the subvendor? Its billing contract will be cleared.")) return;
+  try{
+    await api(`/vehicles/${vehicleId}/subvendor`, {method:"PATCH", body: JSON.stringify({subvendorId:null})});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function recordSubvendorPayment(id, evt){
+  evt.preventDefault();
+  const body = {
+    type: document.getElementById(`svPayType_${id}`).value,
+    vehicleId: document.getElementById(`svPayVehicle_${id}`).value || null,
+    amount: Number(document.getElementById(`svPayAmount_${id}`).value),
+    date: document.getElementById(`svPayDate_${id}`).value,
+    note: document.getElementById(`svPayNote_${id}`).value,
+  };
+  try{
+    await api(`/subvendors/${id}/payments`, {method:"POST", body: JSON.stringify(body)});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function settleSubvendorAdvance(id, advanceId, maxAmount){
+  const amountStr = prompt(`Settlement amount (₹, up to ${maxAmount}):`, String(maxAmount));
+  if(amountStr===null) return;
+  try{
+    await api(`/subvendors/${id}/advances/${advanceId}/settle`, {method:"PATCH", body: JSON.stringify({amount:Number(amountStr)})});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+
 // ================= PAYROLL =================
 // Two pieces per person, mirroring the server: a recurring profile (base
 // salary + components like ESI/PF/Gratuity - set up once by HR, applies
@@ -3349,6 +3563,8 @@ Object.assign(window, {
   setPayrollMonth, downloadPayslip, togglePayrollDetail, addPayrollComponentRow, savePayrollProfile,
   addPayrollAdhoc, deletePayrollAdhoc, approvePayslip,
   createTrip, cancelTrip, deleteTrip,
+  toggleSubvendorDetail, addSubvendor, linkSubvendorVehicle, reviseSubvendorBilling, unlinkSubvendorVehicle,
+  recordSubvendorPayment, settleSubvendorAdvance,
 });
 
 boot();

@@ -95,6 +95,12 @@ function backfillDefaults() {
     if (v.rcDate === undefined) v.rcDate = "";
     if (v.seatingCapacity === undefined) v.seatingCapacity = null;
     if (v.routeId === undefined) v.routeId = null;
+    // Subvendor (Driver-cum-Owner) linkage - a vehicle owned/operated by an
+    // external subvendor we contract with, with a fixed billing contract
+    // (see the SUBVENDORS section below). null/null for the vast majority
+    // of the fleet, which is company-owned.
+    if (v.subvendorId === undefined) v.subvendorId = null;
+    if (v.billing === undefined) v.billing = null;
     // Existing fleet is all vans/cabs run on Diesel - safe defaults for
     // records created before vehicle class/fuel type existed as fields.
     if (v.vehicleType === undefined) v.vehicleType = "Cab";
@@ -193,6 +199,20 @@ function backfillDefaults() {
     if (t.notes === undefined) t.notes = t.description || "";
     if (t.startedAt === undefined) t.startedAt = null;
     if (t.completedAt === undefined) t.completedAt = null;
+  });
+  if (!Array.isArray(db.subvendors)) db.subvendors = [];
+  if (!Array.isArray(db.subvendorPayments)) db.subvendorPayments = [];
+  if (!Array.isArray(db.subvendorAdvances)) db.subvendorAdvances = [];
+  if (!Array.isArray(db.subvendorIncomeEntries)) db.subvendorIncomeEntries = [];
+  (db.subvendors || []).forEach((sv) => {
+    if (sv.contactPerson === undefined) sv.contactPerson = "";
+    if (sv.email === undefined) sv.email = "";
+    if (sv.phone === undefined) sv.phone = "";
+    if (sv.gstNumber === undefined) sv.gstNumber = "";
+    if (sv.address === undefined) sv.address = "";
+    if (!Array.isArray(sv.passwordHistory)) sv.passwordHistory = [];
+    if (sv.mustChangePassword === undefined) sv.mustChangePassword = false;
+    if (sv.active === undefined) sv.active = true;
   });
   (db.expenses || []).forEach((e) => {
     // Vehicle number is now mandatory unless the request is flagged as
@@ -2386,6 +2406,7 @@ app.patch(
       trip.status = status;
       if (status === "in_progress" && !trip.startedAt) trip.startedAt = nowIso();
       if (status === "completed" && !trip.completedAt) trip.completedAt = nowIso();
+      if (status === "completed") accrueTripIncomeIfNeeded(trip);
     }
     trip.updatedAt = nowIso();
     await audit(req.user, "update_trip", `${req.user.name} updated trip ${trip.id}`);
@@ -2406,6 +2427,478 @@ app.delete(
     db.trips = db.trips.filter((t) => t.id !== trip.id);
     await audit(req.user, "delete_trip", `${req.user.name} removed trip ${trip.id}`);
     res.json({ ok: true });
+  })
+);
+
+// ---------- SUBVENDORS (Driver-cum-Owner) ----------
+// A Subvendor is an external vehicle owner/operator we contract with -
+// distinct from a "driver" (our employee, paid a salary) and distinct
+// from a "client" (who we provide transport service to). A vehicle can
+// be linked to at most one Subvendor, with a fixed billing contract (per
+// trip / per km / per package) that stays constant for the life of the
+// contract and only changes via an explicit revision (e.g. a fuel price
+// variation) - never silently overwritten, so a full history is kept.
+// Subvendors get their own completely separate login (email/mobile +
+// password, same mechanics as staff) so each can see only their own
+// vehicles, trip counts, income earned running for us, and the payments
+// (Diesel/Advance/Repair/Other) and interest we've recorded against them.
+const SUBVENDOR_MANAGE_ROLES = ["owner", "ops_manager"];
+const SUBVENDOR_ADVANCE_INTEREST_RATE_MONTHLY = 0.36 / 12; // 36% per annum, simple interest, accrued monthly
+
+function publicSubvendor(sv) {
+  if (!sv) return null;
+  const { passwordHash, passwordHistory, ...rest } = sv;
+  return rest;
+}
+function monthKey(d) {
+  return (d instanceof Date ? d : new Date(d)).toISOString().slice(0, 7); // "YYYY-MM"
+}
+function monthsElapsed(fromKey, toKey) {
+  const [fy, fm] = fromKey.split("-").map(Number);
+  const [ty, tm] = toKey.split("-").map(Number);
+  return (ty - fy) * 12 + (tm - fm);
+}
+function nextMonthKey(key) {
+  const [y, m] = key.split("-").map(Number);
+  return monthKey(new Date(Date.UTC(y, m, 1))); // m is 1-indexed already, so this lands on the next month
+}
+// Lazily catches up simple monthly interest (3%/month on the outstanding
+// principal only - never compounded) on one advance. Same "check on read,
+// no cron job needed" pattern as expireStaleShift() elsewhere in this
+// file - safe to call as often as needed, a no-op once caught up.
+function accrueAdvanceInterest(advance) {
+  if (advance.status !== "outstanding" || !(advance.outstandingPrincipal > 0)) return;
+  const nowKey = monthKey(nowIso());
+  const months = monthsElapsed(advance.lastInterestAccrualMonth, nowKey);
+  if (months <= 0) return;
+  const interestAdded = Math.round(advance.outstandingPrincipal * SUBVENDOR_ADVANCE_INTEREST_RATE_MONTHLY * months * 100) / 100;
+  advance.interestAccrued = Math.round((advance.interestAccrued + interestAdded) * 100) / 100;
+  advance.lastInterestAccrualMonth = nowKey;
+}
+// Lazily catches up a "per package" vehicle's flat monthly income - one
+// income entry per whole calendar month elapsed since the contract's
+// effective date (inclusive of the start month itself), dated the 1st of
+// that month.
+function accruePackageIncome(vehicle) {
+  if (!vehicle.subvendorId || !vehicle.billing || vehicle.billing.mode !== "per_package") return;
+  const b = vehicle.billing;
+  const startKey = monthKey(b.effectiveFrom || nowIso());
+  if (!b.lastPackageAccrualMonth) {
+    const [y, m] = startKey.split("-").map(Number);
+    b.lastPackageAccrualMonth = monthKey(new Date(Date.UTC(y, m - 2, 1))); // the month BEFORE the start month
+  }
+  const nowKey = monthKey(nowIso());
+  while (true) {
+    const due = nextMonthKey(b.lastPackageAccrualMonth);
+    if (due > nowKey) break;
+    db.subvendorIncomeEntries.push({
+      id: uid("svinc"),
+      subvendorId: vehicle.subvendorId,
+      vehicleId: vehicle.id,
+      source: "package",
+      refId: null,
+      amount: b.rate,
+      date: due + "-01",
+      note: `Monthly package charge - ${due}`,
+      createdAt: nowIso(),
+    });
+    b.lastPackageAccrualMonth = due;
+  }
+}
+// Event-driven (not lazy) - called right when a trip is marked completed.
+function accrueTripIncomeIfNeeded(trip) {
+  const vehicle = db.vehicles.find((v) => v.id === trip.vehicleId);
+  if (!vehicle || !vehicle.subvendorId || !vehicle.billing || vehicle.billing.mode !== "per_trip") return;
+  if (db.subvendorIncomeEntries.some((e) => e.source === "trip" && e.refId === trip.id)) return; // already accrued
+  db.subvendorIncomeEntries.push({
+    id: uid("svinc"),
+    subvendorId: vehicle.subvendorId,
+    vehicleId: vehicle.id,
+    source: "trip",
+    refId: trip.id,
+    amount: vehicle.billing.rate,
+    date: todayStr(),
+    note: `Trip on ${trip.date}${trip.pickupPoint ? " (" + trip.pickupPoint + (trip.dropPoint ? " -> " + trip.dropPoint : "") + ")" : ""}`,
+    createdAt: nowIso(),
+  });
+}
+// Event-driven - called right when a driver's closing odometer reading is
+// recorded (end of that day's distance for whichever vehicle they drive).
+function accrueKmIncomeIfNeeded(shift) {
+  const vehicle = db.vehicles.find((v) => v.driverId === shift.driverId);
+  if (!vehicle || !vehicle.subvendorId || !vehicle.billing || vehicle.billing.mode !== "per_km") return;
+  if (typeof shift.odometerOpen !== "number" || typeof shift.odometerClose !== "number") return;
+  const distanceKm = shift.odometerClose - shift.odometerOpen;
+  if (!(distanceKm > 0)) return;
+  if (db.subvendorIncomeEntries.some((e) => e.source === "km" && e.refId === shift.id)) return; // already accrued
+  db.subvendorIncomeEntries.push({
+    id: uid("svinc"),
+    subvendorId: vehicle.subvendorId,
+    vehicleId: vehicle.id,
+    source: "km",
+    refId: shift.id,
+    amount: Math.round(vehicle.billing.rate * distanceKm * 100) / 100,
+    date: (shift.odometerCloseAt || nowIso()).slice(0, 10),
+    note: `${distanceKm} km on ${(shift.loginAt || "").slice(0, 10)}`,
+    createdAt: nowIso(),
+  });
+}
+// Everything a Subvendor (or the staff managing them) needs to see: their
+// vehicles, trip counts, total income earned, payments received broken
+// down by type, and outstanding advances with interest. Shared by both
+// the Subvendor's own dashboard and the staff-facing summary endpoint.
+function subvendorSummary(subvendorId) {
+  const vehiclesForSv = db.vehicles.filter((v) => v.subvendorId === subvendorId);
+  vehiclesForSv.forEach((v) => accruePackageIncome(v));
+  const advancesForSv = db.subvendorAdvances.filter((a) => a.subvendorId === subvendorId);
+  advancesForSv.forEach((a) => accrueAdvanceInterest(a));
+  const vehicleIds = new Set(vehiclesForSv.map((v) => v.id));
+  const tripsForSv = db.trips.filter((t) => vehicleIds.has(t.vehicleId));
+  const completedTrips = tripsForSv.filter((t) => t.status === "completed");
+  const incomeForSv = db.subvendorIncomeEntries.filter((e) => e.subvendorId === subvendorId);
+  const totalIncome = Math.round(incomeForSv.reduce((s, e) => s + e.amount, 0) * 100) / 100;
+  const paymentsForSv = db.subvendorPayments.filter((p) => p.subvendorId === subvendorId);
+  const paymentsByType = {};
+  paymentsForSv.forEach((p) => {
+    paymentsByType[p.type] = Math.round(((paymentsByType[p.type] || 0) + p.amount) * 100) / 100;
+  });
+  const totalPaid = Math.round(paymentsForSv.reduce((s, p) => s + p.amount, 0) * 100) / 100;
+  const totalOutstandingPrincipal =
+    Math.round(advancesForSv.filter((a) => a.status === "outstanding").reduce((s, a) => s + a.outstandingPrincipal, 0) * 100) / 100;
+  const totalInterestAccrued = Math.round(advancesForSv.reduce((s, a) => s + a.interestAccrued, 0) * 100) / 100;
+  return {
+    vehicles: vehiclesForSv.map((v) => ({
+      id: v.id,
+      reg: v.reg,
+      vehicleType: v.vehicleType,
+      fuelType: v.fuelType,
+      clientId: v.clientId,
+      clientName: v.clientId ? clientNameServer(v.clientId) : "",
+      route: vehicleRouteInfo(v).routeNumber,
+      routeStartingPoint: vehicleRouteInfo(v).startingPoint,
+      driverId: v.driverId,
+      driverName: v.driverId ? driverNameServer(v.driverId) : "",
+      billing: v.billing,
+    })),
+    totalTrips: tripsForSv.length,
+    completedTrips: completedTrips.length,
+    totalIncome,
+    incomeEntries: incomeForSv.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 200),
+    payments: paymentsForSv.slice().sort((a, b) => b.date.localeCompare(a.date)),
+    paymentsByType,
+    totalPaid,
+    advances: advancesForSv.slice().sort((a, b) => b.date.localeCompare(a.date)),
+    totalOutstandingPrincipal,
+    totalInterestAccrued,
+    // What we still owe them: income earned, minus what we've already paid
+    // out (fuel/advances/repairs/other), minus interest they owe us back on
+    // any outstanding advance.
+    netPayableToSubvendor: Math.round((totalIncome - totalPaid - totalInterestAccrued) * 100) / 100,
+  };
+}
+
+app.get("/api/subvendors", requireAuth, requireRole(...SUBVENDOR_MANAGE_ROLES), (req, res) => {
+  res.json(db.subvendors.map(publicSubvendor));
+});
+
+app.post(
+  "/api/subvendors",
+  requireAuth,
+  requireRole(...SUBVENDOR_MANAGE_ROLES),
+  h(async (req, res) => {
+    const { name, contactPerson, email, phone, gstNumber, address, password } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "Subvendor name is required." });
+    const emailNorm = email ? String(email).trim().toLowerCase() : "";
+    const phoneNorm = phone ? String(phone).trim() : "";
+    if (!emailNorm && !phoneNorm) return res.status(400).json({ error: "Either an email address or a mobile number is required to log in." });
+    const clash = db.subvendors.find((s) => (emailNorm && s.email === emailNorm) || (phoneNorm && s.phone === phoneNorm));
+    if (clash) return res.status(400).json({ error: "That email or mobile number is already in use by another subvendor." });
+    if (!password) return res.status(400).json({ error: "A temporary password is required." });
+    const policyError = passwordPolicyError(password);
+    if (policyError) return res.status(400).json({ error: policyError });
+    const sv = {
+      id: uid("sv"),
+      name,
+      contactPerson: contactPerson || "",
+      email: emailNorm,
+      phone: phoneNorm,
+      gstNumber: gstNumber || "",
+      address: address || "",
+      passwordHash: hashPassword(password),
+      passwordHistory: [],
+      mustChangePassword: true,
+      active: true,
+      createdAt: nowIso(),
+    };
+    db.subvendors.push(sv);
+    await audit(req.user, "create_subvendor", `${req.user.name} added subvendor ${name}`);
+    res.json(publicSubvendor(sv));
+  })
+);
+
+app.patch(
+  "/api/subvendors/:id",
+  requireAuth,
+  requireRole(...SUBVENDOR_MANAGE_ROLES),
+  h(async (req, res) => {
+    const sv = db.subvendors.find((s) => s.id === req.params.id);
+    if (!sv) return res.status(404).json({ error: "Subvendor not found." });
+    const { name, contactPerson, email, phone, gstNumber, address, active } = req.body || {};
+    if (name !== undefined) sv.name = name;
+    if (contactPerson !== undefined) sv.contactPerson = contactPerson;
+    if (email !== undefined) sv.email = String(email).trim().toLowerCase();
+    if (phone !== undefined) sv.phone = String(phone).trim();
+    if (gstNumber !== undefined) sv.gstNumber = gstNumber;
+    if (address !== undefined) sv.address = address;
+    if (active !== undefined) sv.active = !!active;
+    await audit(req.user, "update_subvendor", `${req.user.name} updated subvendor ${sv.name}`);
+    res.json(publicSubvendor(sv));
+  })
+);
+
+app.patch(
+  "/api/subvendors/:id/reset-password",
+  requireAuth,
+  requireRole("owner"),
+  h(async (req, res) => {
+    const sv = db.subvendors.find((s) => s.id === req.params.id);
+    if (!sv) return res.status(404).json({ error: "Subvendor not found." });
+    const { newPassword } = req.body || {};
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError) return res.status(400).json({ error: policyError });
+    sv.passwordHistory = [sv.passwordHash, ...(sv.passwordHistory || [])].filter(Boolean).slice(0, PASSWORD_HISTORY_LIMIT);
+    sv.passwordHash = hashPassword(newPassword);
+    sv.mustChangePassword = true;
+    await audit(req.user, "reset_subvendor_password", `${req.user.name} reset the password for subvendor ${sv.name} - they must set a new one at next login`);
+    res.json(publicSubvendor(sv));
+  })
+);
+
+app.get(
+  "/api/subvendors/:id/summary",
+  requireAuth,
+  requireRole(...SUBVENDOR_MANAGE_ROLES),
+  h(async (req, res) => {
+    const sv = db.subvendors.find((s) => s.id === req.params.id);
+    if (!sv) return res.status(404).json({ error: "Subvendor not found." });
+    res.json({ subvendor: publicSubvendor(sv), ...subvendorSummary(sv.id) });
+  })
+);
+
+// Link (or unlink) a vehicle to a Subvendor and set/revise its billing
+// contract. Switching mode or rate on an already-billed vehicle doesn't
+// overwrite history - the old contract is pushed into billing.revisions
+// first, so a full record of every rate change (e.g. a fuel price
+// variation) is kept.
+app.patch(
+  "/api/vehicles/:id/subvendor",
+  requireAuth,
+  requireRole(...SUBVENDOR_MANAGE_ROLES),
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+    const { subvendorId, billingMode, billingRate, reason } = req.body || {};
+    if (subvendorId === null || subvendorId === "") {
+      vehicle.subvendorId = null;
+      vehicle.billing = null;
+      await audit(req.user, "unlink_subvendor", `${req.user.name} unlinked vehicle ${vehicle.reg} from its subvendor`);
+      return res.json(vehicle);
+    }
+    if (subvendorId !== undefined) {
+      const sv = db.subvendors.find((s) => s.id === subvendorId && s.active !== false);
+      if (!sv) return res.status(400).json({ error: "Subvendor not found." });
+      vehicle.subvendorId = subvendorId;
+    }
+    if (!vehicle.subvendorId) return res.status(400).json({ error: "Select a Subvendor before setting a billing contract." });
+    if (billingMode !== undefined || billingRate !== undefined) {
+      const mode = billingMode !== undefined ? billingMode : vehicle.billing && vehicle.billing.mode;
+      const rate = billingRate !== undefined ? Number(billingRate) : vehicle.billing && vehicle.billing.rate;
+      if (!["per_trip", "per_km", "per_package"].includes(mode)) {
+        return res.status(400).json({ error: "Billing mode must be per_trip, per_km, or per_package." });
+      }
+      if (!(rate > 0)) return res.status(400).json({ error: "Billing rate must be a positive number." });
+      const revisions = (vehicle.billing && vehicle.billing.revisions) || [];
+      const changed = vehicle.billing && (vehicle.billing.mode !== mode || vehicle.billing.rate !== rate);
+      if (vehicle.billing && changed) {
+        revisions.push({
+          mode: vehicle.billing.mode,
+          rate: vehicle.billing.rate,
+          effectiveFrom: vehicle.billing.effectiveFrom,
+          endedAt: nowIso(),
+          changedBy: req.user.id,
+          changedByName: req.user.name,
+          changedAt: nowIso(),
+          reason: reason || "",
+        });
+      }
+      vehicle.billing = {
+        mode,
+        rate,
+        effectiveFrom: vehicle.billing && !changed ? vehicle.billing.effectiveFrom : nowIso(),
+        lastPackageAccrualMonth: vehicle.billing && !changed ? vehicle.billing.lastPackageAccrualMonth : null,
+        revisions,
+      };
+    }
+    await audit(req.user, "set_subvendor_billing", `${req.user.name} set billing for ${vehicle.reg}: ${JSON.stringify(vehicle.billing)}`);
+    res.json(vehicle);
+  })
+);
+
+// A payment WE make TO a Subvendor - Diesel / Advance / Repair Costs /
+// Other. An "Advance" additionally opens an interest-bearing balance
+// (simple interest, 3%/month = 36% p.a., accrued monthly on whatever
+// principal remains outstanding) that has to be settled separately.
+app.post(
+  "/api/subvendors/:id/payments",
+  requireAuth,
+  requireRole(...SUBVENDOR_MANAGE_ROLES),
+  h(async (req, res) => {
+    const sv = db.subvendors.find((s) => s.id === req.params.id);
+    if (!sv) return res.status(404).json({ error: "Subvendor not found." });
+    const { vehicleId, type, amount, date, note } = req.body || {};
+    const validTypes = ["Diesel", "Advance", "Repair", "Other"];
+    if (!validTypes.includes(type)) return res.status(400).json({ error: "Payment type must be one of: " + validTypes.join(", ") + "." });
+    if (!amount || Number(amount) <= 0) return res.status(400).json({ error: "A valid amount is required." });
+    const payment = {
+      id: uid("svpay"),
+      subvendorId: sv.id,
+      vehicleId: vehicleId || null,
+      type,
+      amount: Number(amount),
+      date: date || todayStr(),
+      note: note || "",
+      createdBy: req.user.id,
+      createdByName: req.user.name,
+      createdAt: nowIso(),
+    };
+    db.subvendorPayments.push(payment);
+    let advance = null;
+    if (type === "Advance") {
+      advance = {
+        id: uid("svadv"),
+        subvendorId: sv.id,
+        vehicleId: vehicleId || null,
+        paymentId: payment.id,
+        principal: payment.amount,
+        outstandingPrincipal: payment.amount,
+        interestAccrued: 0,
+        status: "outstanding",
+        date: payment.date,
+        lastInterestAccrualMonth: monthKey(payment.date),
+        note: note || "",
+        createdAt: nowIso(),
+      };
+      db.subvendorAdvances.push(advance);
+    }
+    await audit(req.user, "subvendor_payment", `${req.user.name} recorded a ${type} payment of ₹${payment.amount} to subvendor ${sv.name}`);
+    res.json({ payment, advance });
+  })
+);
+
+// Settle (fully or partially) an outstanding advance - e.g. deducted from
+// a future payment, or repaid directly.
+app.patch(
+  "/api/subvendors/:id/advances/:advanceId/settle",
+  requireAuth,
+  requireRole(...SUBVENDOR_MANAGE_ROLES),
+  h(async (req, res) => {
+    const advance = db.subvendorAdvances.find((a) => a.id === req.params.advanceId && a.subvendorId === req.params.id);
+    if (!advance) return res.status(404).json({ error: "Advance not found." });
+    accrueAdvanceInterest(advance);
+    const { amount } = req.body || {};
+    const settleAmount = amount !== undefined ? Number(amount) : advance.outstandingPrincipal;
+    if (!(settleAmount > 0)) return res.status(400).json({ error: "A valid settlement amount is required." });
+    if (settleAmount > advance.outstandingPrincipal) {
+      return res.status(400).json({ error: `Cannot settle more than the outstanding principal (₹${advance.outstandingPrincipal}).` });
+    }
+    advance.outstandingPrincipal = Math.round((advance.outstandingPrincipal - settleAmount) * 100) / 100;
+    if (advance.outstandingPrincipal <= 0) {
+      advance.status = "settled";
+      advance.settledAt = nowIso();
+    }
+    await audit(req.user, "settle_subvendor_advance", `${req.user.name} settled ₹${settleAmount} against an advance for subvendor ${advance.subvendorId}`);
+    res.json(advance);
+  })
+);
+
+// ---------- SUBVENDOR AUTH (their own separate login) ----------
+// Mirrors staff login mechanics (email/mobile + hashed password, forced
+// change on first login) but is entirely its own session map/table -
+// Subvendors are not staff `db.users` and never appear in People/Staff
+// management, payroll, or the audit-triggered user list.
+const subvendorSessions = new Map(); // token -> subvendorId
+const SUBVENDOR_ALLOWED_DURING_FORCED_PASSWORD_CHANGE = ["/api/subvendor-auth/me", "/api/subvendor-auth/change-password", "/api/subvendor-auth/logout"];
+function subvendorAuth(req, res, next) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  const subvendorId = token && subvendorSessions.get(token);
+  const sv = subvendorId && db.subvendors.find((s) => s.id === subvendorId && s.active !== false);
+  if (!sv) return res.status(401).json({ error: "Not signed in. Please log in again." });
+  if (sv.mustChangePassword && !SUBVENDOR_ALLOWED_DURING_FORCED_PASSWORD_CHANGE.includes(req.path)) {
+    return res.status(403).json({ error: "You must set a new password before continuing.", mustChangePassword: true });
+  }
+  req.subvendor = sv;
+  req.subvendorToken = token;
+  next();
+}
+
+app.post(
+  "/api/subvendor-auth/login",
+  h(async (req, res) => {
+    const { identifier, password } = req.body || {};
+    if (!identifier || !password) return res.status(400).json({ error: "Email/mobile number and password are required." });
+    const idNorm = String(identifier).trim().toLowerCase();
+    const phoneNorm = String(identifier).trim();
+    const sv = db.subvendors.find((s) => s.active !== false && ((s.email && s.email === idNorm) || (s.phone && s.phone === phoneNorm)));
+    if (!sv || !verifyPassword(password, sv.passwordHash)) {
+      return res.status(401).json({ error: "Incorrect email/mobile number or password." });
+    }
+    const token = crypto.randomBytes(24).toString("hex");
+    subvendorSessions.set(token, sv.id);
+    await audit({ id: sv.id, name: sv.name }, "subvendor_login", `Subvendor ${sv.name} logged in`);
+    res.json({ token, subvendor: publicSubvendor(sv) });
+  })
+);
+
+app.get("/api/subvendor-auth/me", subvendorAuth, (req, res) => {
+  res.json(publicSubvendor(req.subvendor));
+});
+
+app.post(
+  "/api/subvendor-auth/change-password",
+  subvendorAuth,
+  h(async (req, res) => {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: "Current and new password are required." });
+    if (!verifyPassword(currentPassword, req.subvendor.passwordHash)) return res.status(400).json({ error: "Current password is incorrect." });
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError) return res.status(400).json({ error: policyError });
+    if (passwordReused(newPassword, req.subvendor)) {
+      return res.status(400).json({ error: "New password cannot be the same as your current or a recent previous password." });
+    }
+    req.subvendor.passwordHistory = [req.subvendor.passwordHash, ...(req.subvendor.passwordHistory || [])].slice(0, PASSWORD_HISTORY_LIMIT);
+    req.subvendor.passwordHash = hashPassword(newPassword);
+    req.subvendor.mustChangePassword = false;
+    await audit(req.subvendor, "subvendor_change_password", `${req.subvendor.name} changed their own password`);
+    res.json(publicSubvendor(req.subvendor));
+  })
+);
+
+app.post(
+  "/api/subvendor-auth/logout",
+  subvendorAuth,
+  h(async (req, res) => {
+    subvendorSessions.delete(req.subvendorToken);
+    await audit(req.subvendor, "subvendor_logout", `${req.subvendor.name} logged out`);
+    res.json({ ok: true });
+  })
+);
+
+app.get(
+  "/api/subvendor-auth/dashboard",
+  subvendorAuth,
+  h(async (req, res) => {
+    res.json(subvendorSummary(req.subvendor.id));
   })
 );
 
@@ -2609,7 +3102,10 @@ app.post(
       }
       trip.startedAt = nowIso();
     }
-    if (status === "completed") trip.completedAt = nowIso();
+    if (status === "completed") {
+      trip.completedAt = nowIso();
+      accrueTripIncomeIfNeeded(trip);
+    }
     trip.status = status;
     trip.updatedAt = nowIso();
     await audit({ id: req.driver.id, name: req.driver.name }, "driver_trip_status", `Driver ${req.driver.name} marked trip ${trip.id} as ${status}`);
@@ -2642,6 +3138,7 @@ app.post(
     shift.odometerCloseLat = typeof lat === "number" ? lat : null;
     shift.odometerCloseLng = typeof lng === "number" ? lng : null;
     shift.status = "ready_to_logout";
+    accrueKmIncomeIfNeeded(shift);
     await audit({ id: req.driver.id, name: req.driver.name }, "driver_odometer_close", `Driver ${req.driver.name} recorded closing odometer ${shift.odometerClose}`);
     res.json(shift);
   })
@@ -3380,6 +3877,12 @@ app.get(
       clone.users.forEach((u) => {
         delete u.passwordHash;
         delete u.passwordHistory;
+      });
+    }
+    if (Array.isArray(clone.subvendors)) {
+      clone.subvendors.forEach((sv) => {
+        delete sv.passwordHash;
+        delete sv.passwordHistory;
       });
     }
 
