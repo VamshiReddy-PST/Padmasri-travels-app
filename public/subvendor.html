@@ -4,58 +4,61 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Padmasri Travels - Subvendor Portal</title>
-<meta name="theme-color" content="#1f3864" />
+<meta name="theme-color" content="#2B2E1F" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@1,500;1,600;1,700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --navy:#1f3864; --accent:#2e74b5; --accent-light:#eaf2fb; --green:#1e8e3e;
-    --amber:#b8860b; --red:#c0392b; --grey:#666; --bg:#f4f6f9; --card:#ffffff;
-    --border:#e1e6ec;
+    --ink:#2B2E1F; --accent:#4C6A2B; --accent-dark:#3A5220; --accent-light:#E9EDA8; --green:#2E7D32;
+    --amber:#b8860b; --red:#c0392b; --grey:#6b6b5e; --bg:#FBF8E3; --card:#ffffff;
+    --border:#ECE6C8; --purple:#6C63FF; --purple-dark:#4A43C7; --purple-light:#E7E5FF;
   }
   *{box-sizing:border-box;}
-  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;}
+  body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;}
+  .accent-script{font-family:'Playfair Display',Georgia,serif;font-style:italic;font-weight:600;}
   #app{max-width:1080px;margin:0 auto;min-height:100vh;background:var(--bg);}
-  header.topbar{background:var(--navy);color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;}
+  header.topbar{background:var(--ink);color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;}
   header.topbar .brand{font-weight:700;font-size:17px;}
   header.topbar .who{font-size:12.5px;opacity:.9;text-align:right;}
-  header.topbar button.logout{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35);color:#fff;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-left:10px;}
+  header.topbar button.logout{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35);color:#fff;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;margin-left:10px;}
   main{padding:18px 20px 60px;}
-  .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.03);}
-  h1.page-title{font-size:20px;margin:4px 0 16px;color:var(--navy);}
-  h2.section-title{font-size:15px;margin:0 0 10px;color:var(--navy);border-bottom:2px solid var(--accent-light);padding-bottom:6px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px 18px;margin-bottom:16px;box-shadow:0 4px 14px rgba(43,46,31,.05);}
+  h1.page-title{font-size:20px;margin:4px 0 16px;color:var(--ink);}
+  h2.section-title{font-size:15px;margin:0 0 10px;color:var(--ink);border-bottom:2px solid var(--accent-light);padding-bottom:6px;}
   .grid{display:grid;gap:14px;}
   .grid.cols-4{grid-template-columns:repeat(4,1fr);}
   @media(max-width:900px){.grid.cols-4{grid-template-columns:repeat(2,1fr);}}
   @media(max-width:520px){.grid.cols-4{grid-template-columns:1fr;}}
-  .kpi{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;}
-  .kpi .num{font-size:24px;font-weight:700;color:var(--navy);}
+  .kpi{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px;}
+  .kpi .num{font-size:24px;font-weight:700;color:var(--ink);}
   .kpi .label{font-size:12px;color:var(--grey);margin-top:2px;}
   .kpi.good .num{color:var(--green);}
   .kpi.bad .num{color:var(--red);}
   .kpi.warn .num{color:var(--amber);}
   table{width:100%;border-collapse:collapse;font-size:13px;}
-  table th{text-align:left;background:var(--accent-light);color:var(--navy);padding:8px 10px;font-size:12px;}
+  table th{text-align:left;background:var(--accent-light);color:var(--ink);padding:8px 10px;font-size:12px;}
   table td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
   .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;}
-  .badge.trip{background:#eaf2fb;color:var(--accent);}
-  .badge.km{background:#fff4d6;color:var(--amber);}
-  .badge.package{background:#e2f4e6;color:var(--green);}
+  .badge.trip{background:var(--purple-light);color:var(--purple-dark);}
+  .badge.km{background:#FBF3D6;color:var(--amber);}
+  .badge.package{background:#E9F3DC;color:var(--green);}
   .badge.outstanding{background:#fbe4e1;color:var(--red);}
-  .badge.settled{background:#e2f4e6;color:var(--green);}
+  .badge.settled{background:#E9F3DC;color:var(--green);}
   .login-wrap{max-width:420px;margin:60px auto;}
-  .login-wrap .logo{text-align:center;font-size:22px;font-weight:800;color:var(--navy);margin-bottom:4px;}
+  .login-wrap .logo{text-align:center;font-size:22px;font-weight:800;color:var(--ink);margin-bottom:4px;}
   .login-wrap .sub{text-align:center;color:var(--grey);font-size:13px;margin-bottom:22px;}
   .field{margin-bottom:12px;}
   .field label{display:block;font-size:12px;color:var(--grey);margin-bottom:4px;}
-  .field input{width:100%;padding:9px 10px;border:1px solid #ccd3db;border-radius:6px;font-size:14px;}
-  .btn{background:var(--accent);color:#fff;border:none;padding:9px 16px;border-radius:6px;font-size:13.5px;cursor:pointer;font-weight:600;}
-  .btn:hover{background:var(--navy);}
+  .field input{width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:10px;font-size:14px;}
+  .btn{background:var(--accent);color:#fff;border:none;padding:9px 16px;border-radius:8px;font-size:13.5px;cursor:pointer;font-weight:600;}
+  .btn:hover{background:var(--accent-dark);}
   .btn.secondary{background:#fff;color:var(--accent);border:1px solid var(--accent);}
   .btn:disabled{opacity:.5;cursor:not-allowed;}
-  .banner{background:#fff8e6;border:1px solid #f0dca0;color:#7a5a00;padding:10px 14px;border-radius:8px;font-size:12.5px;margin-bottom:16px;}
+  .banner{background:#FBF3D6;border:1px solid #EBDA9B;color:#7a5a00;padding:10px 14px;border-radius:10px;font-size:12.5px;margin-bottom:16px;}
   .banner.error{background:#fbe4e1;border-color:#eab3ab;color:#7a2115;}
   .muted{color:var(--grey);font-size:12px;}
   .empty{text-align:center;color:var(--grey);padding:30px 10px;font-size:13px;}
-  .footer-note{font-size:11px;color:#9aa4b2;text-align:center;padding:20px;}
+  .footer-note{font-size:11px;color:#9a9576;text-align:center;padding:20px;}
 </style>
 </head>
 <body>
@@ -99,7 +102,7 @@ function renderLogin(){
   const app = document.getElementById("app");
   app.innerHTML = `
   <div class="login-wrap">
-    <div class="logo">🧭 Padmasri Travels</div>
+    <div class="logo">🧭 Padmasri <span class="accent-script">Travels</span></div>
     <div class="sub">Subvendor / Vehicle Owner Portal</div>
     <div class="card">
       ${lastError ? `<div class="banner error">${lastError}</div>` : ""}
@@ -145,7 +148,7 @@ function renderForcedPasswordChange(){
   const app = document.getElementById("app");
   app.innerHTML = `
   <div class="login-wrap">
-    <div class="logo">🧭 Padmasri Travels</div>
+    <div class="logo">🧭 Padmasri <span class="accent-script">Travels</span></div>
     <div class="sub">Set a new password to continue</div>
     <div class="card">
       <div class="banner">For security, you need to set your own password before you can use the portal${subvendor && subvendor.name ? ", " + subvendor.name : ""}.</div>
@@ -225,7 +228,7 @@ function render(){
 
   app.innerHTML = `
   <header class="topbar">
-    <div class="brand">🧭 Padmasri Travels - Subvendor Portal</div>
+    <div class="brand">🧭 Padmasri <span class="accent-script">Travels</span> - Subvendor Portal</div>
     <div>
       <span class="who">${subvendor ? subvendor.name : ""}</span>
       <button class="logout" onclick="doLogout()">Log out</button>
