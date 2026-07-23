@@ -49,6 +49,8 @@
   .badge.fail{background:#fbe4e1;color:var(--red);}
   .badge.ok{background:#e2f4e6;color:var(--green);}
   .badge.low{background:#fbe4e1;color:var(--red);}
+  .badge.in_process{background:#eaf2fb;color:var(--accent);}
+  .badge.completed{background:#e2f4e6;color:var(--green);}
   table{width:100%;border-collapse:collapse;font-size:13px;}
   table th{text-align:left;background:var(--accent-light);color:var(--navy);padding:8px 10px;font-size:12px;}
   table td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
@@ -977,6 +979,29 @@ function handleBillFile(e){
     if(prev) prev.innerHTML = `<img src="${dataUrl}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--border);" /> <span class="muted">Bill attached</span>`;
   });
 }
+function expenseVehicleLabel(ex){
+  if(ex.vehicleId){ const v = vehicles.find(x=>x.id===ex.vehicleId); return v ? v.reg : ex.vehicleId; }
+  if(ex.isOfficeExpenditure) return "Office Expenditure";
+  return "-";
+}
+function expensePaymentBadgeHtml(ex){
+  if(ex.status === "pending") return `<span class="badge pending">PENDING</span>`;
+  if(ex.status === "rejected") return `<span class="badge rejected">REJECTED</span>`;
+  const stage = ex.paymentStage || "approved";
+  const labels = {approved:"APPROVED", in_process:"IN PROCESS", completed:"COMPLETED"};
+  return `<span class="badge ${stage}">${labels[stage]}</span>`;
+}
+function expenseNoteHtml(ex){
+  if(ex.status === "rejected") return `<div class="muted">Reason: ${ex.comment||"-"}</div>`;
+  if(ex.status === "approved" && ex.paymentStage === "completed") return `<div class="muted">UTR: <b>${ex.utrNumber||"-"}</b></div>`;
+  return ex.comment ? `<div class="muted">${ex.comment}</div>` : "";
+}
+function onExpenseOfficeToggle(){
+  const office = document.getElementById("expOffice").checked;
+  const vSel = document.getElementById("expVehicle");
+  vSel.disabled = office;
+  if(office) vSel.value = "";
+}
 function myExpensesScreen(){
   pendingBillPhoto = null;
   const mine = expenses;
@@ -985,14 +1010,15 @@ function myExpensesScreen(){
       <td>${new Date(ex.submittedAt).toLocaleDateString()}</td>
       <td>${ex.category}</td>
       <td>₹${ex.amount}</td>
+      <td>${expenseVehicleLabel(ex)}</td>
       <td>${ex.description||"-"}</td>
       <td><img src="${ex.billUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:5px;border:1px solid var(--border);cursor:pointer;" onclick="window.open('${ex.billUrl}','_blank')" /></td>
-      <td><span class="badge ${ex.status}">${ex.status.toUpperCase()}</span></td>
-      <td>${ex.comment||""}</td>
+      <td>${expensePaymentBadgeHtml(ex)}</td>
+      <td>${expenseNoteHtml(ex)}</td>
     </tr>`).join("");
   return `
   <h1 class="page-title">My Expenses</h1>
-  <div class="banner">Every request needs a photo of the bill/receipt - requests without one can't be submitted. The Operations Manager approves before it's marked payable.</div>
+  <div class="banner">Every request needs a photo of the bill/receipt - requests without one can't be submitted. Mention the vehicle this expense is for, or mark it as Office Expenditure if it isn't tied to a vehicle. The Operations Manager approves before it's marked payable.</div>
   <div class="card">
     <h2 class="section-title">Request reimbursement</h2>
     <form class="inline-form" onsubmit="return submitExpense(event)">
@@ -1001,7 +1027,8 @@ function myExpensesScreen(){
         <option>Driver food / allowance</option><option>Cleaning</option><option>Other</option>
       </select></div>
       <div class="f"><label>Amount (₹)</label><input type="number" id="expAmount" style="width:100px" required /></div>
-      <div class="f"><label>Vehicle (optional)</label><select id="expVehicle"><option value="">-</option>${vehicles.map(v=>`<option value="${v.id}">${v.reg}</option>`).join("")}</select></div>
+      <div class="f"><label>Vehicle</label><select id="expVehicle"><option value="">Select vehicle...</option>${vehicles.map(v=>`<option value="${v.id}">${v.reg}</option>`).join("")}</select></div>
+      <div class="f"><label>&nbsp;</label><label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:400;white-space:nowrap;"><input type="checkbox" id="expOffice" onchange="onExpenseOfficeToggle()" /> Office Expenditure (no vehicle)</label></div>
       <div class="f" style="min-width:200px;"><label>Description</label><input type="text" id="expDesc" placeholder="What was this for?" /></div>
       <div class="f"><label>Bill photo (required)</label><button type="button" class="photo-btn" onclick="captureBillPhoto()">📷 Attach bill</button></div>
       <div id="billPreview" style="display:flex;align-items:center;gap:6px;"></div>
@@ -1010,17 +1037,21 @@ function myExpensesScreen(){
   </div>
   <div class="card">
     <h2 class="section-title">My requests</h2>
-    <table><tr><th>Date</th><th>Category</th><th>Amount</th><th>Description</th><th>Bill</th><th>Status</th><th>Note</th></tr>
-    ${rows || "<tr><td colspan='7' class='empty'>No requests yet.</td></tr>"}</table>
+    <table><tr><th>Date</th><th>Category</th><th>Amount</th><th>Vehicle</th><th>Description</th><th>Bill</th><th>Status</th><th>Note</th></tr>
+    ${rows || "<tr><td colspan='8' class='empty'>No requests yet.</td></tr>"}</table>
   </div>`;
 }
 async function submitExpense(evt){
   evt.preventDefault();
   if(!pendingBillPhoto){ alert("Please attach a photo of the bill before submitting - it's required for every expense request."); return false; }
+  const isOffice = document.getElementById("expOffice").checked;
+  const vehicleId = document.getElementById("expVehicle").value || null;
+  if(!isOffice && !vehicleId){ alert("Select the vehicle this expense is for, or tick Office Expenditure if it isn't tied to a vehicle."); return false; }
   const body = {
     category: document.getElementById("expCategory").value,
     amount: Number(document.getElementById("expAmount").value),
-    vehicleId: document.getElementById("expVehicle").value || null,
+    vehicleId: isOffice ? null : vehicleId,
+    isOfficeExpenditure: isOffice,
     description: document.getElementById("expDesc").value,
     bill: pendingBillPhoto,
   };
@@ -1032,6 +1063,27 @@ async function submitExpense(evt){
   }catch(e){ alert(e.message); }
   return false;
 }
+function expenseActionsHtml(ex, canDecide){
+  if(!canDecide){
+    if(ex.status==='rejected') return `<div class="muted">Reason: ${ex.comment||"-"}</div>`;
+    if(ex.status==='approved') return `<div class="muted">${ex.paymentStage==='completed' ? 'UTR: '+(ex.utrNumber||'-') : (ex.paymentStage==='in_process' ? 'Payment in process' : 'Awaiting payment')}</div>`;
+    return "";
+  }
+  if(ex.status==='pending'){
+    return `<button class="btn small" onclick="decideExpense('${ex.id}','approved')">Approve</button> <button class="btn small danger" onclick="decideExpense('${ex.id}','rejected')">Reject</button>`;
+  }
+  if(ex.status==='rejected'){
+    return `<div class="muted">Reason: ${ex.comment||"-"}</div>`;
+  }
+  // approved - walk the payment stage forward
+  if(ex.paymentStage==='approved'){
+    return `<button class="btn small" onclick="setExpensePaymentStage('${ex.id}','in_process')">Mark In Process</button>`;
+  }
+  if(ex.paymentStage==='in_process'){
+    return `<button class="btn small" onclick="setExpensePaymentStage('${ex.id}','completed')">Mark Completed</button>`;
+  }
+  return `<div class="muted">UTR: <b>${ex.utrNumber||"-"}</b></div>`;
+}
 function expensesScreen(canDecide){
   const pending = expenses.filter(e=>e.status==='pending');
   const rows = expenses.map(ex=>`
@@ -1040,24 +1092,47 @@ function expensesScreen(canDecide){
       <td>${ex.userName}</td>
       <td>${ex.category}</td>
       <td>₹${ex.amount}</td>
+      <td>${expenseVehicleLabel(ex)}</td>
       <td>${ex.description||"-"}</td>
       <td><img src="${ex.billUrl}" style="width:36px;height:36px;object-fit:cover;border-radius:5px;border:1px solid var(--border);cursor:pointer;" onclick="window.open('${ex.billUrl}','_blank')" /></td>
-      <td><span class="badge ${ex.status}">${ex.status.toUpperCase()}</span></td>
-      <td>${canDecide && ex.status==='pending' ? `<button class="btn small" onclick="decideExpense('${ex.id}','approved')">Approve</button> <button class="btn small danger" onclick="decideExpense('${ex.id}','rejected')">Reject</button>` : (ex.comment||"")}</td>
+      <td>${expensePaymentBadgeHtml(ex)}</td>
+      <td>${expenseActionsHtml(ex, canDecide)}</td>
     </tr>`).join("");
   return `
   <h1 class="page-title">${canDecide? 'Expense Requests' : 'Team Expenses'}</h1>
-  ${canDecide ? `<div class="grid cols-3" style="margin-bottom:18px;"><div class="kpi warn"><div class="num">${pending.length}</div><div class="label">Pending approval</div></div><div class="kpi"><div class="num">₹${pending.reduce((s,e)=>s+e.amount,0)}</div><div class="label">Pending amount</div></div><div class="kpi good"><div class="num">₹${expenses.filter(e=>e.status==='approved').reduce((s,e)=>s+e.amount,0)}</div><div class="label">Approved total</div></div></div>` : ""}
+  ${canDecide ? `<div class="grid cols-4" style="margin-bottom:18px;">
+    <div class="kpi warn"><div class="num">${pending.length}</div><div class="label">Pending approval</div></div>
+    <div class="kpi"><div class="num">${expenses.filter(e=>e.status==='approved' && e.paymentStage!=='completed').length}</div><div class="label">Approved / In process</div></div>
+    <div class="kpi good"><div class="num">${expenses.filter(e=>e.paymentStage==='completed').length}</div><div class="label">Completed payments</div></div>
+    <div class="kpi bad"><div class="num">${expenses.filter(e=>e.status==='rejected').length}</div><div class="label">Rejected</div></div>
+  </div>` : ""}
   <div class="card">
-    <table><tr><th>Date</th><th>Supervisor</th><th>Category</th><th>Amount</th><th>Description</th><th>Bill</th><th>Status</th><th></th></tr>
-    ${rows || "<tr><td colspan='8' class='empty'>No expense requests yet.</td></tr>"}</table>
+    <table><tr><th>Date</th><th>Supervisor</th><th>Category</th><th>Amount</th><th>Vehicle</th><th>Description</th><th>Bill</th><th>Status</th><th></th></tr>
+    ${rows || "<tr><td colspan='9' class='empty'>No expense requests yet.</td></tr>"}</table>
   </div>`;
 }
 async function decideExpense(id, status){
   let comment = "";
-  if(status==="rejected"){ comment = prompt("Reason for rejecting this expense:","Bill not clear / policy limit exceeded."); if(comment===null) return; }
+  if(status==="rejected"){
+    comment = prompt("Reason for rejecting this expense:","Bill not clear / policy limit exceeded.");
+    if(comment===null) return;
+    if(!comment.trim()){ alert("A reason is required to reject an expense."); return; }
+  }
   try{
     const ex = await api(`/expenses/${id}/decide`, {method:"PATCH", body: JSON.stringify({status, comment})});
+    const idx = expenses.findIndex(x=>x.id===id); expenses[idx] = ex;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function setExpensePaymentStage(id, paymentStage){
+  let utrNumber = "";
+  if(paymentStage==="completed"){
+    utrNumber = prompt("Enter the UTR Number for this payment:","");
+    if(utrNumber===null) return;
+    if(!utrNumber.trim()){ alert("A UTR Number is required to mark this payment as completed."); return; }
+  }
+  try{
+    const ex = await api(`/expenses/${id}/payment-status`, {method:"PATCH", body: JSON.stringify({paymentStage, utrNumber})});
     const idx = expenses.findIndex(x=>x.id===id); expenses[idx] = ex;
     await renderMain();
   }catch(e){ alert(e.message); }
@@ -3234,6 +3309,7 @@ Object.assign(window, {
   submitForcedPasswordChange, submitVoluntaryPasswordChange,
   updateDoc, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, addDriver, addPerson, correctOdometer, captureBillPhoto, submitExpense, decideExpense,
+  onExpenseOfficeToggle, setExpensePaymentStage,
   startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, resetStaffPassword, saveOdometer, restoreBackup, downloadReport,
   toggleVehicleDetails, saveVehicleDetails, saveVehicleDoc, onNewVehicleTypeChange, onVdVehicleTypeChange, onPermitStateToggle,
   toggleClientRoutes, saveRouteCap, addRoute, saveRouteEdit, deleteRoute,

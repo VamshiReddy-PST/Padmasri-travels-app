@@ -193,6 +193,15 @@ function backfillDefaults() {
     if (t.startedAt === undefined) t.startedAt = null;
     if (t.completedAt === undefined) t.completedAt = null;
   });
+  (db.expenses || []).forEach((e) => {
+    // Vehicle number is now mandatory unless the request is flagged as
+    // Office Expenditure - older requests either had a vehicle already or
+    // didn't, so infer the flag from whichever is true.
+    if (e.isOfficeExpenditure === undefined) e.isOfficeExpenditure = !e.vehicleId;
+    if (e.paymentStage === undefined) e.paymentStage = e.status === "approved" ? "approved" : null;
+    if (e.utrNumber === undefined) e.utrNumber = null;
+    if (e.paymentUpdatedAt === undefined) e.paymentUpdatedAt = null;
+  });
 }
 
 // MongoDB Atlas's free (M0) tier doesn't include automatic cloud backups -
@@ -1679,20 +1688,27 @@ app.get("/api/expenses", requireAuth, (req, res) => {
   res.json(visibleExpensesFor(req.user));
 });
 
+const EXPENSE_DECIDE_ROLES = ["ops_manager", "owner"];
+
 app.post(
   "/api/expenses",
   requireAuth,
   h(async (req, res) => {
-    const { amount, category, description, vehicleId, bill } = req.body || {};
+    const { amount, category, description, vehicleId, isOfficeExpenditure, bill } = req.body || {};
     if (!amount || Number(amount) <= 0) return res.status(400).json({ error: "A valid amount is required." });
     if (!bill) return res.status(400).json({ error: "A photo of the bill/receipt is required for every expense request." });
+    const officeExpenditure = !!isOfficeExpenditure;
+    if (!vehicleId && !officeExpenditure) {
+      return res.status(400).json({ error: "Select the vehicle this expense is for, or mark it as Office Expenditure." });
+    }
     const billUrl = await savePhoto(bill, "bill");
     if (!billUrl) return res.status(400).json({ error: "Could not read the bill photo - please try again." });
     const expense = {
       id: uid("e"),
       userId: req.user.id,
       userName: req.user.name,
-      vehicleId: vehicleId || null,
+      vehicleId: officeExpenditure ? null : vehicleId,
+      isOfficeExpenditure: officeExpenditure,
       category: category || "Other",
       amount: Number(amount),
       description: description || "",
@@ -1700,6 +1716,9 @@ app.post(
       status: "pending",
       decidedBy: null,
       comment: "",
+      paymentStage: null, // set once approved: "approved" -> "in_process" -> "completed"
+      utrNumber: null,
+      paymentUpdatedAt: null,
       submittedAt: nowIso(),
     };
     db.expenses.unshift(expense);
@@ -1711,16 +1730,37 @@ app.post(
 app.patch(
   "/api/expenses/:id/decide",
   requireAuth,
-  requireRole("ops_manager", "owner"),
+  requireRole(...EXPENSE_DECIDE_ROLES),
   h(async (req, res) => {
     const expense = db.expenses.find((e) => e.id === req.params.id);
     if (!expense) return res.status(404).json({ error: "Expense not found." });
     const { status, comment } = req.body || {};
     if (!["approved", "rejected"].includes(status)) return res.status(400).json({ error: "status must be approved or rejected." });
+    if (status === "rejected" && !(comment || "").trim()) return res.status(400).json({ error: "A reason is required when rejecting an expense." });
     expense.status = status;
     expense.decidedBy = req.user.id;
     expense.comment = comment || "";
+    expense.paymentStage = status === "approved" ? "approved" : null;
     await audit(req.user, "expense_decision", `${req.user.name} ${status} ₹${expense.amount} expense from ${expense.userName}${comment ? ": " + comment : ""}`);
+    res.json(expense);
+  })
+);
+
+app.patch(
+  "/api/expenses/:id/payment-status",
+  requireAuth,
+  requireRole(...EXPENSE_DECIDE_ROLES),
+  h(async (req, res) => {
+    const expense = db.expenses.find((e) => e.id === req.params.id);
+    if (!expense) return res.status(404).json({ error: "Expense not found." });
+    if (expense.status !== "approved") return res.status(400).json({ error: "Only approved expenses can have their payment status updated." });
+    const { paymentStage, utrNumber } = req.body || {};
+    if (!["in_process", "completed"].includes(paymentStage)) return res.status(400).json({ error: "paymentStage must be in_process or completed." });
+    if (paymentStage === "completed" && !(utrNumber || "").trim()) return res.status(400).json({ error: "A UTR Number is required to mark this payment as completed." });
+    expense.paymentStage = paymentStage;
+    if (paymentStage === "completed") expense.utrNumber = utrNumber.trim();
+    expense.paymentUpdatedAt = nowIso();
+    await audit(req.user, "expense_payment_status", `${req.user.name} marked ₹${expense.amount} expense from ${expense.userName} as ${paymentStage}${paymentStage === "completed" ? " (UTR " + expense.utrNumber + ")" : ""}`);
     res.json(expense);
   })
 );
@@ -2945,6 +2985,12 @@ function vehicleReg(id) {
   const v = db.vehicles.find((x) => x.id === id);
   return v ? v.reg : id || "";
 }
+function paymentStageLabel(stage) {
+  if (stage === "in_process") return "In Process";
+  if (stage === "completed") return "Completed";
+  if (stage === "approved") return "Approved";
+  return "";
+}
 function driverNameServer(id) {
   const d = db.drivers.find((x) => x.id === id);
   return d ? d.name : "";
@@ -3005,9 +3051,10 @@ function buildReport(dataset, user, query) {
       { label: "Category", key: "category" },
       { label: "Amount", key: "amount" },
       { label: "Description", key: "description" },
-      { label: "Vehicle", key: (e) => (e.vehicleId ? vehicleReg(e.vehicleId) : "") },
-      { label: "Status", key: "status" },
-      { label: "Decision Comment", key: "comment" },
+      { label: "Vehicle", key: (e) => (e.vehicleId ? vehicleReg(e.vehicleId) : e.isOfficeExpenditure ? "Office Expenditure" : "") },
+      { label: "Status", key: (e) => (e.status === "rejected" ? "Rejected" : e.status === "approved" ? paymentStageLabel(e.paymentStage) : "Pending") },
+      { label: "Rejection Reason / Note", key: "comment" },
+      { label: "UTR Number", key: (e) => e.utrNumber || "" },
       { label: "Covered For Driver", key: (e) => e.coveredForDriverName || "" },
     ];
     return { rows, columns };
