@@ -672,6 +672,12 @@ function attendanceCardHtml(){
 }
 function accountInfoCardHtml(){
   const dot = locationOk ? "" : " off";
+  const shiftOpen = shift && (shift.status==="awaiting_odometer" || shift.status==="on_trip");
+  const logoutNote = shift && shift.status==="ready_to_logout"
+    ? "Your closing odometer reading is saved - tap Log Out below to finish."
+    : shiftOpen
+      ? "Your shift is still open today (closing odometer reading not submitted yet). Tapping Log Out will sign you out of this device - your shift stays open so you (or the office) can finish closing it later. To fully end your day, go to the Current Trip tab and save your closing odometer reading first."
+      : "";
   return `
   <div class="card">
     <h2 class="section-title">Account Info</h2>
@@ -680,8 +686,26 @@ function accountInfoCardHtml(){
     <div class="doc-row"><div>License Number</div><div>${driver.licenseNumber || "-"}</div></div>
     <div class="doc-row"><div>Driving Level</div><div>${driver.drivingLevel || "-"}</div></div>
     <div class="doc-row"><div>Location Tracking</div><div class="status-pill"><span class="dot${dot}"></span>${locationOk?"On":"Off"}</div></div>
-    <p class="muted" style="margin-top:12px;">These details are set by the office and can't be edited here. To log out, use the swipe control in the Current Trip tab.</p>
+    ${logoutNote ? `<p class="muted" style="margin-top:12px;">${logoutNote}</p>` : ""}
+    <button class="big-btn danger" style="margin-top:14px;" ${busy?"disabled":""} onclick="handleAccountLogout()">${busy?'<span class="spinner"></span>Logging out...':"Log Out"}</button>
   </div>`;
+}
+// Always-available Logout from the Profile tab. If the shift is already
+// closed out (or there's no shift), this fully signs the driver out via the
+// backend, same as the swipe control. If the shift is still open (odometer
+// not yet closed), we can't silently end it - the office needs that closing
+// reading for mileage/fuel tracking - so this just clears the session on
+// this device; the driver's shift stays active and boot() will pick right
+// back up where they left off next time they log in (any device).
+async function handleAccountLogout(){
+  if(busy) return;
+  if(shift && shift.status==="ready_to_logout"){ await doDriverLogout(); return; }
+  if(shift && (shift.status==="awaiting_odometer" || shift.status==="on_trip")){
+    const ok = confirm("Your shift is still open today (closing odometer reading not submitted). Sign out of this device now? Your shift will stay open so you can finish it later.");
+    if(!ok) return;
+  }
+  resetSession();
+  render();
 }
 function profileTabHtml(){
   return payslipCardHtml() + attendanceCardHtml() + accountInfoCardHtml();
