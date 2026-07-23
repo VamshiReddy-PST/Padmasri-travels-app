@@ -179,9 +179,16 @@ function roleLabel(r){
   return {site_supervisor:"Site Supervisor", area_supervisor:"Area Supervisor", ops_manager:"Operations Manager", data_team:"Data Team", owner:"Owner", hr:"HR", bookings:"Bookings Department"}[r] || r;
 }
 function userName(id){ const u = meta.users.find(x=>x.id===id); return u? u.name : "-"; }
+function userPhone(id){ const u = meta.users.find(x=>x.id===id); return u? (u.phone||"-") : "-"; }
 function siteName(id){ const s = meta.sites.find(x=>x.id===id); return s? s.name : "Unassigned"; }
 function driverName(id){ const d = meta.drivers.find(x=>x.id===id); return d? d.name : "Unassigned"; }
 function clientName(id){ const c = meta.clients.find(x=>x.id===id); return c? c.name : "-"; }
+function vehicleRouteStartingPoint(v){
+  if(!v.routeId || !v.clientId) return "-";
+  const c = meta.clients.find(x=>x.id===v.clientId);
+  const r = c ? (c.routes||[]).find(x=>x.id===v.routeId) : null;
+  return r ? (r.name||"-") : "-";
+}
 
 // ---------- bootstrap ----------
 async function boot(){
@@ -406,11 +413,11 @@ async function submitVoluntaryPasswordChange(){
 function tabsFor(role){
   if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["payroll","Payroll"]];
   if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["payroll","Payroll"]];
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
-  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["people","People"],["audit","Audit Log"],["payroll","Payroll"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["people","People"],["audit","Audit Log"],["payroll","Payroll"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["payroll","Payroll"]];
   if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
-  if(role==="bookings") return [["usage","Vehicle Usage"],["payroll","Payroll"]];
+  if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"]];
   return [];
 }
 
@@ -473,6 +480,7 @@ async function routeView(){
     if(tab==="operations") return operationsScreen();
     if(tab==="expenses") return expensesScreen(true);
     if(tab==="assignments") return assignmentsScreen();
+    if(tab==="trips") return tripsScreen();
     if(tab==="people") return peopleScreen();
     if(tab==="reports") return reportsScreen();
     if(tab==="backup") return backupDownloadsScreen();
@@ -481,6 +489,7 @@ async function routeView(){
     if(tab==="corrections") return correctionsScreen();
     if(tab==="expenses_view") return expensesScreen(false);
     if(tab==="assignments") return assignmentsScreen();
+    if(tab==="trips") return tripsScreen();
     if(tab==="people") return peopleScreen();
     if(tab==="audit") return auditScreen();
   }
@@ -501,6 +510,7 @@ async function routeView(){
   }
   if(role==="bookings"){
     if(tab==="usage") return vehicleUsageScreen();
+    if(tab==="trips") return tripsScreen();
   }
   return "<div class='empty'>Nothing here.</div>";
 }
@@ -1280,12 +1290,14 @@ async function assignmentsDateViewCardHtml(){
   const recordsForDate = await fetchRecordsForDate(date);
   const rows = vehicles.map(v=>`
     <tr>
-      <td><b>${v.reg}</b></td>
+      <td><b>${v.reg}</b>${vehicleAssignmentWarningHtml(v)}</td>
       <td>${v.clientId? clientName(v.clientId) : 'Internal / Fixed Route'}</td>
       <td>${areaSupervisorNameForVehicle(v)}</td>
       <td>${v.supervisorId? userName(v.supervisorId) : '-'}</td>
+      <td>${v.supervisorId? userPhone(v.supervisorId) : '-'}</td>
       ${driverCellsHtml(v, recordsForDate)}
-      <td>${v.route || siteName(v.siteId)}</td>
+      <td>${v.route || (v.clientId ? '-' : siteName(v.siteId))}</td>
+      <td>${v.routeId ? vehicleRouteStartingPoint(v) : '-'}</td>
     </tr>`).join("");
   return `
   <div class="card">
@@ -1299,8 +1311,8 @@ async function assignmentsDateViewCardHtml(){
         <button class="btn small secondary" onclick="downloadVehiclesRunning('xlsx')">Download Excel</button>
       </div>
     </div>
-    <table><tr><th>Vehicle</th><th>Company</th><th>Area Supervisor</th><th>Site Supervisor</th><th>Driver</th><th>Driver Mobile</th><th>Route</th></tr>
-    ${rows || "<tr><td colspan='7' class='empty'>No vehicles yet.</td></tr>"}
+    <table><tr><th>Vehicle</th><th>Company</th><th>Area Supervisor</th><th>Site Supervisor</th><th>Supervisor Mobile</th><th>Driver</th><th>Driver Mobile</th><th>Route ID</th><th>Route Starting Point</th></tr>
+    ${rows || "<tr><td colspan='9' class='empty'>No vehicles yet.</td></tr>"}
     </table>
   </div>`;
 }
@@ -1427,15 +1439,32 @@ async function unlockOwnerAssignmentEditing(){
     await renderMain();
   }catch(e){ alert(e.message || "Incorrect password."); }
 }
+function vehicleAssignmentWarningHtml(v){
+  const missing = [];
+  if(v.clientId && !v.routeId) missing.push("Route");
+  if(!v.clientId) missing.push("Company");
+  if(!missing.length) return "";
+  return `<div style="margin-top:2px;"><span class="badge low" title="Required for this vehicle to be fully recognised">${missing.join(" & ")} not set</span></div>`;
+}
 async function assignmentsEditorHtml(){
-  const rows = vehicles.map(v=>`
+  const rows = vehicles.map(v=>{
+    const client = v.clientId ? meta.clients.find(c=>c.id===v.clientId) : null;
+    const clientRoutes = client ? (client.routes||[]) : [];
+    return `
     <tr>
-      <td><b>${v.reg}</b></td>
+      <td><b>${v.reg}</b>${vehicleAssignmentWarningHtml(v)}</td>
       <td>${v.vehicleType||'-'} / ${v.fuelType||'-'}</td>
       <td><select onchange="assignField('${v.id}','clientId', this.value||null)">
         <option value="">- none (internal route) -</option>
         ${meta.clients.map(c=>`<option value="${c.id}" ${v.clientId===c.id?'selected':''}>${c.name}</option>`).join("")}
       </select></td>
+      <td>
+        <select ${!client?'disabled title="Select a company first"':''} onchange="assignField('${v.id}','routeId', this.value||null)">
+          <option value="">${client? '- select route -' : '- select company first -'}</option>
+          ${clientRoutes.map(r=>`<option value="${r.id}" ${v.routeId===r.id?'selected':''}>${r.routeNumber||'(no number)'} - ${r.name}</option>`).join("")}
+        </select>
+        ${v.routeId ? `<div class="muted" style="margin-top:2px;">Starting point: ${vehicleRouteStartingPoint(v)}</div>` : ""}
+      </td>
       <td><select onchange="assignField('${v.id}','siteId', this.value||null)">
         <option value="">- unassigned -</option>
         ${meta.sites.map(s=>`<option value="${s.id}" ${v.siteId===s.id?'selected':''}>${s.name}</option>`).join("")}
@@ -1443,11 +1472,13 @@ async function assignmentsEditorHtml(){
       <td><select onchange="assignField('${v.id}','supervisorId', this.value||null)">
         <option value="">- unassigned -</option>
         ${meta.users.filter(u=>u.role==='site_supervisor').map(u=>`<option value="${u.id}" ${v.supervisorId===u.id?'selected':''}>${u.name}</option>`).join("")}
-      </select></td>
+      </select>
+      ${v.supervisorId ? `<div class="muted" style="margin-top:2px;">${userPhone(v.supervisorId)}</div>` : ""}</td>
       <td><select onchange="assignField('${v.id}','driverId', this.value||null)">
         <option value="">- unassigned -</option>
         ${meta.drivers.map(d=>`<option value="${d.id}" ${v.driverId===d.id?'selected':''}>${d.name}</option>`).join("")}
-      </select></td>
+      </select>
+      ${v.driverId ? `<div class="muted" style="margin-top:2px;">${driverPhone(v.driverId)}</div>` : ""}</td>
       <td><input type="date" value="${v.driverAssignedDate||''}" title="Date this driver was assigned to this vehicle" onchange="assignField('${v.id}','driverAssignedDate', this.value||null)" /></td>
       <td><select onchange="assignField('${v.id}','usage', this.value)">
         <option value="fixed_route" ${v.usage==='fixed_route'?'selected':''}>Fixed Route</option>
@@ -1455,17 +1486,16 @@ async function assignmentsEditorHtml(){
         <option value="booking" ${v.usage==='booking'?'selected':''}>Booking</option>
       </select></td>
       <td><button class="btn small secondary" onclick="toggleVehicleDetails('${v.id}')">${editingVehicleId===v.id?'Close':'Vehicle Details'}</button></td>
-    </tr>`).join("");
+    </tr>`;}).join("");
   return `
   <h1 class="page-title">Overview</h1>
-  <div class="banner">Assign each vehicle to a site, a site supervisor, and a driver here. Only Operations Manager, Data Team and Owner can make these changes - every change is logged.</div>
+  <div class="banner">Assign each vehicle to a company and one of its Route IDs, a site supervisor, and a driver here. Only Operations Manager, Data Team and Owner can make these changes - every change is logged. A vehicle with a Company but no Route (or vice versa) is flagged below - both are required to fully recognise a vehicle.</div>
   <div class="card">
     <h2 class="section-title">Vehicles (${vehicles.length})</h2>
-    <table><tr><th>Vehicle</th><th>Type / Fuel</th><th>Client</th><th>Site</th><th>Site Supervisor</th><th>Driver</th><th>Driver since</th><th>Usage</th><th></th></tr>${rows}</table>
+    <table><tr><th>Vehicle</th><th>Type / Fuel</th><th>Client</th><th>Route ID</th><th>Site</th><th>Site Supervisor</th><th>Driver</th><th>Driver since</th><th>Usage</th><th></th></tr>${rows}</table>
     <div class="banner">Every field below is required - a vehicle cannot be added without its complete onboarding data.</div>
     <form class="inline-form" onsubmit="return addVehicle(event)">
       <div class="f"><label>New registration number *</label><input type="text" id="newVehicleReg" placeholder="TS 09 XX 1234" required /></div>
-      <div class="f"><label>Route (optional)</label><input type="text" id="newVehicleRoute" placeholder="Route name" /></div>
       <div class="f"><label>Vehicle Type *</label>
         <select id="newVehicleType" required onchange="onNewVehicleTypeChange()">
           <option value="">- select -</option>
@@ -1565,7 +1595,6 @@ async function addVehicle(evt){
   evt.preventDefault();
   const body = {
     reg: document.getElementById("newVehicleReg").value,
-    route: document.getElementById("newVehicleRoute").value,
     vehicleType: document.getElementById("newVehicleType").value,
     fuelType: document.getElementById("newVehicleFuel").value,
     usage: document.getElementById("newVehicleUsage").value,

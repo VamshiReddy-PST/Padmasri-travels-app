@@ -94,6 +94,7 @@ function backfillDefaults() {
     if (v.chassisNo === undefined) v.chassisNo = "";
     if (v.rcDate === undefined) v.rcDate = "";
     if (v.seatingCapacity === undefined) v.seatingCapacity = null;
+    if (v.routeId === undefined) v.routeId = null;
     // Existing fleet is all vans/cabs run on Diesel - safe defaults for
     // records created before vehicle class/fuel type existed as fields.
     if (v.vehicleType === undefined) v.vehicleType = "Cab";
@@ -997,6 +998,15 @@ function visibleVehiclesFor(user) {
   }
   return db.vehicles;
 }
+// A route entry's "name" field is what the route catalog UI labels
+// "Starting Point" - this just looks it up for a given vehicle's routeId.
+function vehicleRouteInfo(v) {
+  if (!v.routeId) return { routeNumber: v.route || "", startingPoint: "" };
+  const client = db.clients.find((c) => c.id === v.clientId);
+  const routeEntry = client ? (client.routes || []).find((r) => r.id === v.routeId) : null;
+  if (!routeEntry) return { routeNumber: v.route || "", startingPoint: "" };
+  return { routeNumber: routeEntry.routeNumber || "", startingPoint: routeEntry.name || "" };
+}
 
 app.get("/api/vehicles", requireAuth, (req, res) => {
   res.json(visibleVehiclesFor(req.user));
@@ -1035,6 +1045,7 @@ app.post(
       id: uid("v"),
       reg,
       route: route || "",
+      routeId: null,
       usage: usage || "fixed_route",
       clientId: null,
       siteId: null,
@@ -1137,8 +1148,8 @@ app.patch(
   h(async (req, res) => {
     const vehicle = db.vehicles.find((v) => v.id === req.params.id);
     if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
-    const before = { siteId: vehicle.siteId, supervisorId: vehicle.supervisorId, driverId: vehicle.driverId, clientId: vehicle.clientId, driverAssignedDate: vehicle.driverAssignedDate };
-    const { siteId, supervisorId, driverId, clientId, usage, standardMileage, driverAssignedDate } = req.body || {};
+    const before = { siteId: vehicle.siteId, supervisorId: vehicle.supervisorId, driverId: vehicle.driverId, clientId: vehicle.clientId, routeId: vehicle.routeId, driverAssignedDate: vehicle.driverAssignedDate };
+    const { siteId, supervisorId, driverId, clientId, routeId, usage, standardMileage, driverAssignedDate } = req.body || {};
     if (siteId !== undefined) vehicle.siteId = siteId || null;
     if (supervisorId !== undefined) vehicle.supervisorId = supervisorId || null;
     if (driverId !== undefined) {
@@ -1152,13 +1163,37 @@ app.patch(
       // Manual edit of the date only, without changing the driver.
       vehicle.driverAssignedDate = driverAssignedDate || null;
     }
-    if (clientId !== undefined) vehicle.clientId = clientId || null;
+    if (clientId !== undefined) {
+      const clientChanged = vehicle.clientId !== (clientId || null);
+      vehicle.clientId = clientId || null;
+      // A route belongs to a single client's catalog - switching the
+      // client invalidates whatever route was picked before, unless the
+      // caller also sent a new routeId in this same request (handled below).
+      if (clientChanged && routeId === undefined) {
+        vehicle.routeId = null;
+        vehicle.route = "";
+      }
+    }
+    if (routeId !== undefined) {
+      if (!routeId) {
+        vehicle.routeId = null;
+        vehicle.route = "";
+      } else {
+        const client = db.clients.find((c) => c.id === vehicle.clientId);
+        const routeEntry = client ? (client.routes || []).find((r) => r.id === routeId) : null;
+        if (!routeEntry) {
+          return res.status(400).json({ error: "Select a company for this vehicle first, then choose one of its Route IDs." });
+        }
+        vehicle.routeId = routeEntry.id;
+        vehicle.route = routeEntry.routeNumber || "";
+      }
+    }
     if (usage !== undefined) vehicle.usage = usage;
     if (standardMileage !== undefined) vehicle.standardMileage = Number(standardMileage) || vehicle.standardMileage;
     await audit(
       req.user,
       "assign_vehicle",
-      `${req.user.name} reassigned ${vehicle.reg}: ${JSON.stringify(before)} -> ${JSON.stringify({ siteId: vehicle.siteId, supervisorId: vehicle.supervisorId, driverId: vehicle.driverId, clientId: vehicle.clientId, driverAssignedDate: vehicle.driverAssignedDate })}`
+      `${req.user.name} reassigned ${vehicle.reg}: ${JSON.stringify(before)} -> ${JSON.stringify({ siteId: vehicle.siteId, supervisorId: vehicle.supervisorId, driverId: vehicle.driverId, clientId: vehicle.clientId, routeId: vehicle.routeId, driverAssignedDate: vehicle.driverAssignedDate })}`
     );
     res.json(vehicle);
   })
@@ -1372,14 +1407,18 @@ function computeVehiclesRunningRows(user, date) {
     const temp = r && r.attendance && r.attendance.tempDriver && r.attendance.tempDriver.arranged ? r.attendance.tempDriver : null;
     const site = v.siteId ? db.sites.find((s) => s.id === v.siteId) : null;
     const regularDriver = v.driverId ? db.drivers.find((d) => d.id === v.driverId) : null;
+    const supervisorUser = v.supervisorId ? db.users.find((u) => u.id === v.supervisorId) : null;
+    const routeInfo = vehicleRouteInfo(v);
     return {
       reg: v.reg,
       company: v.clientId ? clientNameServer(v.clientId) : "Internal / Fixed Route",
       areaSupervisor: site && site.areaSupervisorId ? userNameServer(site.areaSupervisorId) : "",
       siteSupervisor: v.supervisorId ? userNameServer(v.supervisorId) : "",
+      siteSupervisorMobile: supervisorUser ? supervisorUser.phone || "" : "",
       driver: temp ? temp.name : (r && r.attendance && r.attendance.driver) || (regularDriver ? regularDriver.name : ""),
       driverMobile: temp ? temp.phone : regularDriver ? regularDriver.phone || "" : "",
-      route: v.route || (site ? site.name : ""),
+      route: routeInfo.routeNumber || (site ? site.name : ""),
+      routeStartingPoint: routeInfo.startingPoint,
       isTemporary: !!temp ? "YES" : "",
       tempAmount: temp ? temp.amount : "",
     };
@@ -1393,9 +1432,11 @@ app.get("/api/reports/vehicles-running", requireAuth, requireRole(...FUEL_OVERVI
     { label: "Company", key: "company" },
     { label: "Area Supervisor", key: "areaSupervisor" },
     { label: "Site Supervisor", key: "siteSupervisor" },
+    { label: "Site Supervisor Mobile", key: "siteSupervisorMobile" },
     { label: "Driver", key: "driver" },
     { label: "Driver Mobile", key: "driverMobile" },
-    { label: "Route", key: "route" },
+    { label: "Route ID", key: "route" },
+    { label: "Route Starting Point", key: "routeStartingPoint" },
     { label: "Temporary Driver", key: "isTemporary" },
     { label: "Temp Driver Amount", key: "tempAmount" },
   ];
@@ -2258,7 +2299,7 @@ app.get("/api/payroll/approval/:personType/:personId", requireAuth, (req, res) =
 // Trips are allocated to a driver by whichever Site Supervisor runs that
 // driver's vehicle (Owner can also allocate, as an administrative
 // override, same as Owner's override on vehicle Assignments elsewhere).
-const TRIP_ASSIGN_ROLES = ["site_supervisor", "owner"];
+const TRIP_ASSIGN_ROLES = ["site_supervisor", "owner", "ops_manager", "data_team", "bookings"];
 function vehiclesForTripAssignment(user) {
   // What vehicles (and therefore drivers) this user is allowed to allocate
   // trips for - identical scoping rule to Assignments/visibleVehiclesFor.
@@ -2272,7 +2313,7 @@ app.get(
     if (req.user.role === "site_supervisor") {
       const vehicleIds = new Set(vehiclesForTripAssignment(req.user).map((v) => v.id));
       rows = db.trips.filter((t) => vehicleIds.has(t.vehicleId));
-    } else if (["owner", "ops_manager", "hr", "area_supervisor"].includes(req.user.role)) {
+    } else if (["owner", "ops_manager", "hr", "area_supervisor", "data_team", "bookings"].includes(req.user.role)) {
       rows = db.trips.slice();
     } else {
       rows = [];
