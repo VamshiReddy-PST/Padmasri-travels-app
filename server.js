@@ -200,6 +200,30 @@ function backfillDefaults() {
     if (d.pin === undefined) d.pin = "1234";
   });
   if (!Array.isArray(db.driverShifts)) db.driverShifts = [];
+  (db.driverShifts || []).forEach((s) => {
+    // Odometer verification: who actually typed in each reading (the
+    // driver themselves, normally - or a Site Supervisor/Data Team member
+    // doing a PIN-verified manual entry when the driver couldn't), and
+    // whether a Site Supervisor (or Data Team, only when the vehicle has no
+    // Supervisor) has since checked the photo and approved it. Once
+    // verified===true there is deliberately no endpoint anywhere that can
+    // change that reading again - approval is a one-way door.
+    if (s.odometerOpenEnteredBy === undefined) s.odometerOpenEnteredBy = s.odometerOpen != null ? "driver" : null;
+    if (s.odometerOpenVerified === undefined) s.odometerOpenVerified = false;
+    if (s.odometerOpenVerifiedBy === undefined) s.odometerOpenVerifiedBy = null;
+    if (s.odometerOpenVerifiedByName === undefined) s.odometerOpenVerifiedByName = null;
+    if (s.odometerOpenVerifiedAt === undefined) s.odometerOpenVerifiedAt = null;
+    if (s.odometerCloseEnteredBy === undefined) s.odometerCloseEnteredBy = s.odometerClose != null ? "driver" : null;
+    if (s.odometerCloseVerified === undefined) s.odometerCloseVerified = false;
+    if (s.odometerCloseVerifiedBy === undefined) s.odometerCloseVerifiedBy = null;
+    if (s.odometerCloseVerifiedByName === undefined) s.odometerCloseVerifiedByName = null;
+    if (s.odometerCloseVerifiedAt === undefined) s.odometerCloseVerifiedAt = null;
+    // A single dynamic 6-digit code the driver can generate and read out to
+    // whoever is standing in for them - short-lived, single-use, cleared
+    // once consumed by a manual entry (or once it expires).
+    if (s.manualEntryPin === undefined) s.manualEntryPin = null;
+    if (s.manualEntryPinExpiresAt === undefined) s.manualEntryPinExpiresAt = null;
+  });
   if (!Array.isArray(db.trips)) db.trips = [];
   if (!Array.isArray(db.driverLocationLogs)) db.driverLocationLogs = [];
   if (!db.payrollApprovals) db.payrollApprovals = {};
@@ -2195,6 +2219,7 @@ const PAYROLL_ADHOC_CATEGORIES = [
   { key: "traffic_challan", label: "Traffic Challan", type: "deduction" },
   { key: "fuel_theft", label: "Fuel Deduction (Theft)", type: "deduction" },
   { key: "cleanliness_penalty", label: "Vehicle Cleanliness Penalty", type: "deduction" },
+  { key: "missed_odometer_entry", label: "Missed Odometer Entry Penalty", type: "deduction" },
   { key: "other_penalty", label: "Other Penalty", type: "deduction" },
   { key: "bonus", label: "Bonus / Incentive", type: "earning" },
   { key: "other_earning", label: "Other Earning", type: "earning" },
@@ -3005,6 +3030,8 @@ app.get(
 // req.driver, parallel to (but independent from) requireAuth/req.user.
 const driverSessions = new Map(); // token -> driverId
 const DRIVER_ODOMETER_WINDOW_MS = 10 * 60 * 1000; // 10 minutes to enter the opening odometer reading or the shift auto-closes
+const MANUAL_ENTRY_PIN_WINDOW_MS = 10 * 60 * 1000; // 10 minutes to hand the code to a Supervisor before it expires
+const MISSED_ODOMETER_ENTRY_PENALTY = 100; // ₹, charged to the driver each time a Supervisor has to manually enter a reading for them
 const DRIVER_LOCATION_LOG_CAP = 50000; // oldest pings drop off so this file doesn't grow forever
 
 function publicDriverAuth(d) {
@@ -3078,6 +3105,18 @@ app.post(
         logoutLat: null,
         logoutLng: null,
         autoClosedReason: null,
+        odometerOpenEnteredBy: null,
+        odometerOpenVerified: false,
+        odometerOpenVerifiedBy: null,
+        odometerOpenVerifiedByName: null,
+        odometerOpenVerifiedAt: null,
+        odometerCloseEnteredBy: null,
+        odometerCloseVerified: false,
+        odometerCloseVerifiedBy: null,
+        odometerCloseVerifiedByName: null,
+        odometerCloseVerifiedAt: null,
+        manualEntryPin: null,
+        manualEntryPinExpiresAt: null,
       };
       db.driverShifts.push(shift);
     }
@@ -3124,6 +3163,7 @@ app.post(
     shift.odometerOpenAt = nowIso();
     shift.odometerOpenLat = typeof lat === "number" ? lat : null;
     shift.odometerOpenLng = typeof lng === "number" ? lng : null;
+    shift.odometerOpenEnteredBy = "driver";
     shift.status = "on_trip";
     await audit({ id: req.driver.id, name: req.driver.name }, "driver_odometer_open", `Driver ${req.driver.name} recorded opening odometer ${shift.odometerOpen}`);
     res.json(shift);
@@ -3232,10 +3272,33 @@ app.post(
     shift.odometerCloseAt = nowIso();
     shift.odometerCloseLat = typeof lat === "number" ? lat : null;
     shift.odometerCloseLng = typeof lng === "number" ? lng : null;
+    shift.odometerCloseEnteredBy = "driver";
     shift.status = "ready_to_logout";
     accrueKmIncomeIfNeeded(shift);
     await audit({ id: req.driver.id, name: req.driver.name }, "driver_odometer_close", `Driver ${req.driver.name} recorded closing odometer ${shift.odometerClose}`);
     res.json(shift);
+  })
+);
+
+// If the driver genuinely can't enter a reading themselves (phone trouble,
+// injury, app issue, etc.), their Supervisor can key it in for them - but
+// only after the driver reads out this fresh 6-digit code, so the
+// Supervisor can't just make up a number unchallenged. Dynamic and
+// short-lived (10 minutes) rather than reusing the driver's static login
+// PIN, and single-use - consumed the moment a manual entry succeeds.
+app.post(
+  "/api/driver-auth/manual-entry-code",
+  driverAuth,
+  h(async (req, res) => {
+    const shift = currentDriverShift(req.driver.id);
+    if (!shift || shift.status === "closed") {
+      return res.status(400).json({ error: "No active shift found. Please log in again." });
+    }
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    shift.manualEntryPin = code;
+    shift.manualEntryPinExpiresAt = new Date(Date.now() + MANUAL_ENTRY_PIN_WINDOW_MS).toISOString();
+    await audit({ id: req.driver.id, name: req.driver.name }, "driver_manual_entry_code", `Driver ${req.driver.name} generated a verification code for a Supervisor to manually enter an odometer reading`);
+    res.json({ code, expiresAt: shift.manualEntryPinExpiresAt });
   })
 );
 
@@ -3434,6 +3497,224 @@ app.get(
       })
       .sort((a, b) => b.loginAt.localeCompare(a.loginAt));
     res.json({ month, rows });
+  })
+);
+
+// ---------- ODOMETER VERIFICATION (Site Supervisor / Data Team / Ops / Owner) ----------
+// Every odometer reading a driver enters needs a human to actually look at
+// the photo and confirm it's real before it's trusted - that's the
+// Supervisor of whichever vehicle the driver is on. Vehicles don't always
+// have a Supervisor assigned though, so Data Team is the fallback for
+// those. Once a reading is verified, it's locked forever - there is no
+// endpoint anywhere (this file included) that can change a verified
+// reading, by design.
+const ODOMETER_VERIFY_ROLES = ["site_supervisor", "data_team", "ops_manager", "owner"];
+function shiftVehicleFor(shift) {
+  return db.vehicles.find((v) => v.driverId === shift.driverId) || null;
+}
+// Owner/Ops Manager: everything. Site Supervisor: only shifts for drivers
+// currently assigned to one of their own vehicles. Data Team: everything,
+// but full detail (reading + photo) only for vehicles with no Supervisor -
+// see publicDriverShiftRow for how the "status only" redaction works for
+// the rest.
+function driverShiftsVisibleTo(user) {
+  return db.driverShifts
+    .map((s) => ({ shift: s, vehicle: shiftVehicleFor(s) }))
+    .filter(({ vehicle }) => {
+      if (["owner", "ops_manager", "data_team"].includes(user.role)) return true;
+      if (user.role === "site_supervisor") return vehicle && vehicle.supervisorId === user.id;
+      return false;
+    });
+}
+function odometerPointHtmlSafe(point) {
+  return ["open", "close"].includes(point);
+}
+function publicDriverShiftRow(entry, user) {
+  const { shift: s, vehicle } = entry;
+  const driver = db.drivers.find((d) => d.id === s.driverId);
+  const supervisor = vehicle && vehicle.supervisorId ? db.users.find((u) => u.id === vehicle.supervisorId) : null;
+  const hasSupervisor = !!supervisor;
+  // Data Team only gets the raw reading/photo for orphan (no-Supervisor)
+  // vehicles - for everything else they see verification status only, per
+  // the Owner's explicit call on scope.
+  const fullAccess = user.role !== "data_team" || !hasSupervisor;
+  function pointView(prefix) {
+    const enteredAt = s[`odometer${prefix}At`];
+    const hasReading = s[`odometer${prefix}`] != null;
+    const base = {
+      hasReading,
+      enteredBy: s[`odometer${prefix}EnteredBy`] || null,
+      enteredAt: enteredAt || null,
+      verified: !!s[`odometer${prefix}Verified`],
+      verifiedByName: s[`odometer${prefix}VerifiedByName`] || null,
+      verifiedAt: s[`odometer${prefix}VerifiedAt`] || null,
+    };
+    if (!fullAccess) return base; // no odometer value or photo leaks to Data Team for a supervised vehicle
+    return Object.assign(base, {
+      odometer: s[`odometer${prefix}`],
+      photoUrl: s[`odometer${prefix}Photo`] || null,
+    });
+  }
+  return {
+    id: s.id,
+    driverId: s.driverId,
+    driverName: driver ? driver.name : "Unknown driver",
+    driverPhone: driver ? driver.phone : "",
+    vehicleReg: vehicle ? vehicle.reg : null,
+    vehicleId: vehicle ? vehicle.id : null,
+    hasSupervisor,
+    supervisorName: supervisor ? supervisor.name : null,
+    status: s.status,
+    date: s.loginAt ? s.loginAt.slice(0, 10) : null,
+    loginAt: s.loginAt,
+    open: pointView("Open"),
+    close: pointView("Close"),
+    // Only meaningful to whoever can actually act on this shift - never
+    // handed to a Data Team member looking at someone else's supervised
+    // vehicle, since it's not their call to make a manual entry there.
+    canAct: user.role === "owner" || user.role === "ops_manager" || (user.role === "site_supervisor" && vehicle && vehicle.supervisorId === user.id) || (user.role === "data_team" && !hasSupervisor),
+  };
+}
+app.get(
+  "/api/driver-shifts",
+  requireAuth,
+  requireRole(...ODOMETER_VERIFY_ROLES),
+  h(async (req, res) => {
+    const rows = driverShiftsVisibleTo(req.user)
+      .map((e) => publicDriverShiftRow(e, req.user))
+      .sort((a, b) => (b.loginAt || "").localeCompare(a.loginAt || ""));
+    res.json(rows);
+  })
+);
+
+// Approve a driver-entered reading after checking the photo. One-way -
+// there's no un-verify endpoint. Can only verify a reading that's actually
+// there, and only once.
+app.patch(
+  "/api/driver-shifts/:id/verify",
+  requireAuth,
+  requireRole(...ODOMETER_VERIFY_ROLES),
+  h(async (req, res) => {
+    const shift = db.driverShifts.find((s) => s.id === req.params.id);
+    if (!shift) return res.status(404).json({ error: "Shift not found." });
+    const vehicle = shiftVehicleFor(shift);
+    const hasSupervisor = !!(vehicle && vehicle.supervisorId);
+    const canAct =
+      req.user.role === "owner" ||
+      req.user.role === "ops_manager" ||
+      (req.user.role === "site_supervisor" && vehicle && vehicle.supervisorId === req.user.id) ||
+      (req.user.role === "data_team" && !hasSupervisor);
+    if (!canAct) return res.status(403).json({ error: "You don't have access to verify this driver's readings." });
+    const { point } = req.body || {};
+    if (!odometerPointHtmlSafe(point)) return res.status(400).json({ error: "point must be 'open' or 'close'." });
+    const prefix = point === "open" ? "Open" : "Close";
+    if (shift[`odometer${prefix}`] == null) return res.status(400).json({ error: "There's no reading to verify yet." });
+    if (shift[`odometer${prefix}Verified`]) return res.status(400).json({ error: "This reading is already verified." });
+    shift[`odometer${prefix}Verified`] = true;
+    shift[`odometer${prefix}VerifiedBy`] = req.user.id;
+    shift[`odometer${prefix}VerifiedByName`] = req.user.name;
+    shift[`odometer${prefix}VerifiedAt`] = nowIso();
+    const driver = db.drivers.find((d) => d.id === shift.driverId);
+    await audit(req.user, "verify_odometer", `${req.user.name} verified the ${point==="open"?"opening":"closing"} odometer reading for ${driver ? driver.name : shift.driverId} (${shift[`odometer${prefix}`]} km)`);
+    res.json(publicDriverShiftRow({ shift, vehicle }, req.user));
+  })
+);
+
+// A Supervisor (or Data Team, for a vehicle with no Supervisor) keying in a
+// reading the driver couldn't enter themselves - gated behind the fresh
+// 6-digit code the driver reads out to them, single-use. Auto-verified the
+// moment it's entered (the code exchange already establishes that this
+// really is the driver, standing there), and automatically raises a ₹100
+// penalty against the driver for the missed entry.
+app.post(
+  "/api/driver-shifts/:id/manual-odometer",
+  requireAuth,
+  requireRole(...ODOMETER_VERIFY_ROLES),
+  h(async (req, res) => {
+    const shift = db.driverShifts.find((s) => s.id === req.params.id);
+    if (!shift) return res.status(404).json({ error: "Shift not found." });
+    const vehicle = shiftVehicleFor(shift);
+    const hasSupervisor = !!(vehicle && vehicle.supervisorId);
+    const canAct =
+      req.user.role === "owner" ||
+      req.user.role === "ops_manager" ||
+      (req.user.role === "site_supervisor" && vehicle && vehicle.supervisorId === req.user.id) ||
+      (req.user.role === "data_team" && !hasSupervisor);
+    if (!canAct) return res.status(403).json({ error: "You don't have access to enter a reading for this driver." });
+    if (shift.status === "closed") return res.status(400).json({ error: "This shift is already closed." });
+    const { point, odometer, pin, photo } = req.body || {};
+    if (!odometerPointHtmlSafe(point)) return res.status(400).json({ error: "point must be 'open' or 'close'." });
+    const prefix = point === "open" ? "Open" : "Close";
+    if (point === "open" && shift.status !== "awaiting_odometer") {
+      return res.status(400).json({ error: "The opening reading has already been recorded for this shift." });
+    }
+    if (point === "close" && shift.status !== "on_trip") {
+      return res.status(400).json({ error: "The closing reading can only be entered once the trip is underway and hasn't already been closed." });
+    }
+    if (odometer === undefined || odometer === null || isNaN(Number(odometer))) {
+      return res.status(400).json({ error: "An odometer reading is required." });
+    }
+    if (point === "close" && Number(odometer) < Number(shift.odometerOpen)) {
+      return res.status(400).json({ error: "Closing odometer reading can't be less than the opening reading." });
+    }
+    if (!pin || !String(pin).trim()) {
+      return res.status(400).json({ error: "Enter the 6-digit code the driver read out to you." });
+    }
+    if (!shift.manualEntryPin || String(shift.manualEntryPin) !== String(pin).trim()) {
+      return res.status(400).json({ error: "That code is incorrect. Ask the driver to check it, or generate a new one." });
+    }
+    if (!shift.manualEntryPinExpiresAt || new Date(shift.manualEntryPinExpiresAt).getTime() < Date.now()) {
+      return res.status(400).json({ error: "That code has expired - ask the driver to generate a new one." });
+    }
+    let photoUrl = null;
+    if (photo) {
+      photoUrl = await savePhoto(photo, `driver_odo_${point}_manual_` + shift.driverId);
+    }
+    shift[`odometer${prefix}`] = Number(odometer);
+    shift[`odometer${prefix}Photo`] = photoUrl;
+    shift[`odometer${prefix}At`] = nowIso();
+    shift[`odometer${prefix}EnteredBy`] = "supervisor";
+    shift[`odometer${prefix}Verified`] = true;
+    shift[`odometer${prefix}VerifiedBy`] = req.user.id;
+    shift[`odometer${prefix}VerifiedByName`] = req.user.name;
+    shift[`odometer${prefix}VerifiedAt`] = nowIso();
+    if (point === "open") shift.status = "on_trip";
+    if (point === "close") {
+      shift.status = "ready_to_logout";
+      accrueKmIncomeIfNeeded(shift);
+    }
+    // The code is single-use - consumed the moment it's successfully used,
+    // whether for the opening or closing reading.
+    shift.manualEntryPin = null;
+    shift.manualEntryPinExpiresAt = null;
+
+    // Automatic ₹100 penalty on the driver for the missed entry - not a
+    // manually-typed HR adjustment, so it goes straight into
+    // payrollAdhocEntries the same way the temp-driver auto-expense does.
+    const month = nowIso().slice(0, 7);
+    const penalty = {
+      id: uid("payadh"),
+      personType: "driver",
+      personId: shift.driverId,
+      month,
+      category: "missed_odometer_entry",
+      label: `Missed Odometer Entry (${point === "open" ? "Opening" : "Closing"} reading, ${vehicle ? vehicle.reg : "vehicle"} on ${shift.loginAt ? shift.loginAt.slice(0, 10) : "-"}) - entered by ${req.user.name}`,
+      type: "deduction",
+      amount: MISSED_ODOMETER_ENTRY_PENALTY,
+      addedBy: req.user.id,
+      addedByName: req.user.name,
+      addedAt: nowIso(),
+      autoGenerated: true,
+    };
+    db.payrollAdhocEntries.unshift(penalty);
+
+    const driver = db.drivers.find((d) => d.id === shift.driverId);
+    await audit(
+      req.user,
+      "manual_odometer_entry",
+      `${req.user.name} manually entered the ${point === "open" ? "opening" : "closing"} odometer reading (${odometer} km) for ${driver ? driver.name : shift.driverId} after code verification - ₹${MISSED_ODOMETER_ENTRY_PENALTY} penalty applied`
+    );
+    res.json({ shift: publicDriverShiftRow({ shift, vehicle }, req.user), penalty });
   })
 );
 

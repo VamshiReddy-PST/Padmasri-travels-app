@@ -425,12 +425,12 @@ async function submitVoluntaryPasswordChange(){
 
 // ---------- shell ----------
 function tabsFor(role){
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["payroll","Payroll"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["payroll","Payroll"]];
   if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["payroll","Payroll"]];
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
-  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["people","People"],["audit","Audit Log"],["payroll","Payroll"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["people","People"],["audit","Audit Log"],["payroll","Payroll"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["payroll","Payroll"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"]];
   return [];
 }
@@ -473,6 +473,7 @@ async function routeView(){
   const tab = view.tab;
   if(view.name==="change_password") return changePasswordScreen();
   if(tab==="payroll") return payrollScreen();
+  if(tab==="odometer_verify") return odometerVerificationScreen();
   if(role==="site_supervisor"){
     if(tab==="my_vehicles") return view.name==="vehicle_detail" ? vehicleChecklistScreen(view.vehicleId) : supervisorHome();
     if(tab==="my_attendance") return myAttendanceScreen();
@@ -1916,6 +1917,7 @@ let editingClientRoutesId = null;
 let ownerAssignUnlocked = false;
 let subvendors = [];
 let editingSubvendorId = null;
+let odometerVerifyPendingOnly = true;
 const ROLE_OPTIONS = [
   ["site_supervisor","Site Supervisor"],["area_supervisor","Area Supervisor"],["ops_manager","Operations Manager"],
   ["data_team","Data Team"],["hr","HR"],["owner","Owner"],["bookings","Bookings Department"],
@@ -3381,6 +3383,89 @@ async function recordMySubvendorPayment(subvendorId, vehicleId, evt){
   return false;
 }
 
+// ================= ODOMETER VERIFICATION =================
+// Site Supervisor (their own vehicles), Data Team (fallback for vehicles
+// with no Supervisor - status-only for everyone else's), and Ops
+// Manager/Owner (everything) all land on the same screen; the backend does
+// the actual scoping/redaction, this just renders whatever it hands back.
+// Once a reading shows VERIFIED there is no edit/undo control anywhere -
+// that's enforced server-side, not just hidden here.
+async function odometerVerificationScreen(){
+  const allRows = await api("/driver-shifts");
+  const pendingCount = allRows.filter(isShiftPending).length;
+  const rows = odometerVerifyPendingOnly ? allRows.filter(isShiftPending) : allRows;
+  const cards = rows.map(odometerShiftCardHtml).join("");
+  return `
+  <h1 class="page-title">Odometer Verification</h1>
+  <div class="banner">Check each driver's odometer photo before approving - once approved, a reading can never be edited again. If a driver genuinely couldn't enter a reading themselves, use Manual Entry after they read out their 6-digit code to you (this applies a ₹100 penalty on the driver for the missed entry).</div>
+  <div class="card">
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
+      <input type="checkbox" ${odometerVerifyPendingOnly?"checked":""} onchange="toggleOdometerVerifyFilter(this.checked)" />
+      Show only shifts with something pending (${pendingCount} of ${allRows.length})
+    </label>
+  </div>
+  ${rows.length===0 ? `<div class="card"><div class="empty">${odometerVerifyPendingOnly ? "Nothing pending verification." : "No driver shifts yet."}</div></div>` : cards}
+  `;
+}
+function isShiftPending(r){
+  const openPending = r.open.hasReading ? !r.open.verified : true;
+  const closePending = r.status!=="closed" && r.status!=="awaiting_odometer" ? (r.close.hasReading ? !r.close.verified : (r.status==="ready_to_logout")) : false;
+  return openPending || closePending;
+}
+async function toggleOdometerVerifyFilter(checked){
+  odometerVerifyPendingOnly = checked;
+  await renderMain();
+}
+function odometerShiftCardHtml(r){
+  return `
+  <div class="card">
+    <h2 class="section-title">${r.driverName}${r.driverPhone? ' &middot; '+r.driverPhone:''} - ${r.vehicleReg||'No vehicle assigned'} <span class="muted" style="font-weight:400;">(${r.date||'-'})</span></h2>
+    <div class="muted" style="margin-bottom:8px;">${r.hasSupervisor ? `Supervisor: ${r.supervisorName}` : '<span class="badge rejected">No Supervisor Assigned</span>'}</div>
+    ${odometerPointBlockHtml(r.id,'open',r.open,r.canAct)}
+    ${odometerPointBlockHtml(r.id,'close',r.close,r.canAct)}
+  </div>`;
+}
+function odometerPointBlockHtml(shiftId, point, p, canAct){
+  const label = point==='open' ? 'Opening Reading' : 'Closing Reading';
+  // Data Team, supervised vehicle: status-only, no odometer/photo leaked.
+  if(p.odometer===undefined){
+    if(!p.hasReading) return `<div class="doc-row" style="display:block;"><b>${label}</b>: <span class="muted">Not entered yet</span></div>`;
+    return `<div class="doc-row" style="display:block;"><b>${label}</b>: ${p.verified ? `<span class="badge approved">VERIFIED</span> by ${p.verifiedByName}` : `<span class="badge pending">PENDING VERIFICATION</span>`}</div>`;
+  }
+  if(!p.hasReading){
+    return `<div class="doc-row" style="display:block;">
+      <b>${label}</b>: <span class="muted">Not entered yet</span>
+      ${canAct ? `<button class="btn small secondary" style="margin-left:8px;" onclick="manualOdometerEntry('${shiftId}','${point}')">Manual Entry (driver's code required)</button>` : ""}
+    </div>`;
+  }
+  return `<div class="doc-row" style="display:block;">
+    <b>${label}</b>: ${p.odometer} km ${p.enteredBy==='supervisor' ? '<span class="badge pending">MANUAL ENTRY</span>' : ''}
+    ${p.photoUrl ? ` &middot; <a href="${p.photoUrl}" target="_blank">View photo</a>` : ''}
+    <br/>
+    ${p.verified
+      ? `<span class="badge approved">VERIFIED</span> <span class="muted">by ${p.verifiedByName}${p.verifiedAt? ' at '+new Date(p.verifiedAt).toLocaleString():''}</span>`
+      : (canAct ? `<span class="badge pending">PENDING</span> <button class="btn small" onclick="verifyOdometerReading('${shiftId}','${point}')">Approve</button>` : `<span class="badge pending">PENDING</span>`)}
+  </div>`;
+}
+async function verifyOdometerReading(shiftId, point){
+  if(!confirm(`Have you checked the photo? Approve this ${point==='open'?'opening':'closing'} odometer reading - this can't be undone.`)) return;
+  try{
+    await api(`/driver-shifts/${shiftId}/verify`, {method:"PATCH", body: JSON.stringify({point})});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function manualOdometerEntry(shiftId, point){
+  const odometer = prompt(`${point==='open'?'Opening':'Closing'} odometer reading (km):`);
+  if(odometer===null || odometer==="") return;
+  const pin = prompt("Enter the 6-digit code the driver read out to you:");
+  if(pin===null || pin==="") return;
+  try{
+    await api(`/driver-shifts/${shiftId}/manual-odometer`, {method:"POST", body: JSON.stringify({point, odometer:Number(odometer), pin})});
+    alert("Reading recorded and verified. A ₹100 penalty has been applied to the driver for this month.");
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+
 // ================= PAYROLL =================
 // Two pieces per person, mirroring the server: a recurring profile (base
 // salary + components like ESI/PF/Gratuity - set up once by HR, applies
@@ -3659,6 +3744,7 @@ Object.assign(window, {
   createTrip, cancelTrip, deleteTrip,
   toggleSubvendorDetail, addSubvendor, linkSubvendorVehicle, reviseSubvendorBilling, unlinkSubvendorVehicle,
   recordSubvendorPayment, settleSubvendorAdvance, recordMySubvendorPayment,
+  toggleOdometerVerifyFilter, verifyOdometerReading, manualOdometerEntry,
 });
 
 boot();

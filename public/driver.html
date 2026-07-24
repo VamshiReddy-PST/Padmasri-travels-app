@@ -612,7 +612,39 @@ function odometerOpenCardHtml(){
       <button type="button" class="big-btn secondary" style="margin-top:${capturedOpenPhoto?'10px':'0'};" onclick="captureOpenPhoto()">${capturedOpenPhoto? "📷 Retake Photo" : "📷 Take Odometer Photo"}</button>
     </div>
     <button class="big-btn" ${busy?"disabled":""} onclick="submitOdometerOpen()">${busy?'<span class="spinner"></span>Starting...':"Start Trip"}</button>
+  </div>
+  ${manualEntryCodeCardHtml()}`;
+}
+// If a driver genuinely can't enter a reading themselves, they generate this
+// short-lived 6-digit code here and read it out to their Supervisor, who
+// keys the reading in on their behalf after checking it. A ₹100 penalty is
+// applied automatically the moment the Supervisor uses the code, since it
+// means the driver didn't log the reading themselves.
+function manualEntryCodeCardHtml(){
+  const hasCode = shift.manualEntryPin && shift.manualEntryPinExpiresAt && new Date(shift.manualEntryPinExpiresAt).getTime() > Date.now();
+  return `
+  <div class="card">
+    <h2 class="section-title">Can't Enter This Yourself?</h2>
+    <p class="muted">If you genuinely can't enter the reading (phone trouble, injury, etc.), generate a code below and read it out to your Site Supervisor - they can enter it for you. Note: this applies a ₹100 penalty for the missed entry.</p>
+    ${hasCode ? `
+    <div class="countdown" id="manualCodeDisplay" style="letter-spacing:6px;">${shift.manualEntryPin}</div>
+    <p class="muted" style="text-align:center;">Valid until ${fmtTime(shift.manualEntryPinExpiresAt)} - share this with your Supervisor only.</p>
+    <button class="big-btn secondary" ${busy?"disabled":""} onclick="generateManualEntryCode()">Generate a New Code</button>
+    ` : `
+    <button class="big-btn secondary" ${busy?"disabled":""} onclick="generateManualEntryCode()">${busy?'<span class="spinner"></span>Generating...':"Generate Code for Supervisor"}</button>
+    `}
   </div>`;
+}
+async function generateManualEntryCode(){
+  if(busy) return;
+  lastError = "";
+  busy = true; render();
+  try{
+    const res = await api("/driver-auth/manual-entry-code", {method:"POST"});
+    shift.manualEntryPin = res.code;
+    shift.manualEntryPinExpiresAt = res.expiresAt;
+  }catch(e){ lastError = e.message; }
+  busy = false; render();
 }
 
 // ---------- Upcoming Trips tab ----------
@@ -779,7 +811,8 @@ function closingOdometerCardHtml(){
       <button type="button" class="big-btn secondary" style="margin-top:${capturedClosePhoto?'10px':'0'};" onclick="captureClosePhoto()">${capturedClosePhoto? "📷 Retake Photo" : "📷 Take Odometer Photo"}</button>
     </div>
     <button class="big-btn" ${busy?"disabled":""} onclick="submitOdometerClose()">${busy?'<span class="spinner"></span>Saving...':"Save Closing Reading"}</button>
-  </div>`;
+  </div>
+  ${manualEntryCodeCardHtml()}`;
 }
 
 function logoutCardHtml(){
