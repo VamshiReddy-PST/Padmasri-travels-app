@@ -751,7 +751,7 @@ async function routeView(){
     if(tab==="expenses_view") return expensesScreen(false);
     if(tab==="usage") return vehicleUsageScreen();
     if(tab==="assignments") return supervisorAssignmentsScreen();
-    if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : reportsScreen();
+    if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : (view.name==="vehicle_detail" ? vehicleExpenditureScreen(view.vehicleId) : reportsScreen());
     if(tab==="routes") return routesViewScreen();
   }
   if(role==="ops_manager"){
@@ -761,7 +761,7 @@ async function routeView(){
     if(tab==="trips") return tripsScreen();
     if(tab==="subvendors") return subvendorsScreen();
     if(tab==="people") return peopleScreen();
-    if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : reportsScreen();
+    if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : (view.name==="vehicle_detail" ? vehicleExpenditureScreen(view.vehicleId) : reportsScreen());
     if(tab==="backup") return backupDownloadsScreen();
   }
   if(role==="data_team"){
@@ -785,7 +785,7 @@ async function routeView(){
     if(tab==="people") return peopleScreen();
     if(tab==="attendance") return hrAttendanceScreen();
     if(tab==="audit") return auditScreen();
-    if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : reportsScreen();
+    if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : (view.name==="vehicle_detail" ? vehicleExpenditureScreen(view.vehicleId) : reportsScreen());
     if(tab==="backup") return backupDownloadsScreen();
   }
   if(role==="bookings"){
@@ -1314,7 +1314,9 @@ function myExpensesScreen(){
     <form class="inline-form" onsubmit="return submitExpense(event)">
       <div class="f"><label>Category</label><select id="expCategory">
         <option>Toll</option><option>Parking</option><option>Vehicle repair (minor)</option>
-        <option>Driver food / allowance</option><option>Cleaning</option><option>Other</option>
+        <option>Driver food / allowance</option><option>Cleaning</option>
+        <option>Road Tax</option><option>Insurance Amount</option><option>EMI</option><option>Office Expenses</option>
+        <option>Other</option>
       </select></div>
       <div class="f"><label>Amount (₹)</label><input type="number" id="expAmount" style="width:100px" required /></div>
       <div class="f"><label>Vehicle</label><select id="expVehicle"><option value="">Select vehicle...</option>${vehicles.map(v=>`<option value="${v.id}">${v.reg}</option>`).join("")}</select></div>
@@ -3068,8 +3070,8 @@ async function costAnalysisScreen(){
     <td>Rs ${s.officeExpenditureShare.toLocaleString('en-IN')}</td>
     <td><strong>Rs ${s.totalOperationalCost.toLocaleString('en-IN')}</strong></td>
   </tr>`).join("") || `<tr><td colspan="4" class="empty">No sites configured yet.</td></tr>`;
-  const vehicleRows = d.vehicles.map(v => `<tr>
-    <td>${v.reg}</td>
+  const vehicleRows = d.vehicles.map(v => `<tr style="cursor:pointer" onclick="goto('vehicle_detail',{vehicleId:'${v.vehicleId}'})" title="Click for this vehicle's full expenditure history">
+    <td><strong>${v.reg}</strong></td>
     <td>${v.siteName || "-"}</td>
     <td>${v.clientName || "-"}</td>
     <td>${v.count}</td>
@@ -3094,11 +3096,107 @@ async function costAnalysisScreen(){
   </div>
   <div class="card">
     <h2 class="section-title">Vehicle-wise Expenditure</h2>
+    <p class="muted">Click any vehicle for its full expenditure history, bifurcated by category.</p>
     <table><tr><th>Vehicle</th><th>Site</th><th>Client</th><th>Expense Count</th><th>Total</th></tr>
     ${vehicleRows}
     </table>
   </div>`;
 }
+
+// ---------- Vehicle Expenditure History (per-vehicle drill-down) ----------
+// Reached by clicking a vehicle in the Cost Analysis screen. Bifurcates
+// everything ever spent on this one vehicle into 8 clickable category
+// buttons - clicking one expands the itemized history behind that number,
+// so the Owner can see at a glance which vehicles are cheap vs. expensive
+// to run and why.
+const EXPENDITURE_BUCKETS = [
+  ["fuel","Fuel"], ["salary","Salary"], ["roadTax","Road Tax"], ["insurance","Insurance Amount"],
+  ["maintenance","Maintenance"], ["officeExpenses","Office Expenses"], ["emi","EMI"], ["mileage","Mileage"],
+];
+let expandedExpenditureBucket = null;
+async function vehicleExpenditureScreen(vehicleId){
+  let d;
+  try{
+    const headers = {};
+    if(authToken) headers["Authorization"] = "Bearer " + authToken;
+    const res = await fetch(`${API}/vehicles/${vehicleId}/expenditure-history`, {headers});
+    if(!res.ok) throw new Error((await res.json().catch(()=>({}))).error || "Could not load this vehicle's expenditure history.");
+    d = await res.json();
+  }catch(e){
+    return `<h1 class="page-title">Vehicle Expenditure History</h1>
+    <button class="btn small secondary" onclick="goto('cost_analysis')">&larr; Back to Cost Analysis</button>
+    <div class="banner error" style="margin-top:12px;">${e.message}</div>`;
+  }
+  const b = d.buckets;
+  const bucketValueHtml = (key) => key==="mileage"
+    ? (b.mileage.avgMileage!=null ? `${b.mileage.avgMileage} km/l` : "No data")
+    : money(b[key].total);
+  const buttons = EXPENDITURE_BUCKETS.map(([key,label]) => `
+    <button type="button" class="btn ${expandedExpenditureBucket===key?'':'secondary'}" style="text-align:left;padding:14px;height:auto;white-space:normal;" onclick="toggleExpenditureBucket('${vehicleId}','${key}')">
+      <div style="font-size:11.5px;opacity:.85;">${label}</div>
+      <div style="font-size:17px;font-weight:700;margin-top:2px;">${bucketValueHtml(key)}</div>
+    </button>`).join("");
+  return `
+  <h1 class="page-title">${d.reg} - Expenditure History</h1>
+  <button class="btn small secondary" onclick="goto('cost_analysis')">&larr; Back to Cost Analysis</button>
+  <div class="banner" style="margin-top:12px;">Click any category below to see the itemized history behind that number - use this to spot which vehicles are cheap vs. expensive to run.</div>
+  <div class="card"><div class="grid cols-4" style="gap:10px;">${buttons}</div></div>
+  ${expenditureBucketDetailHtml(d)}
+  `;
+}
+async function toggleExpenditureBucket(vehicleId, key){
+  expandedExpenditureBucket = expandedExpenditureBucket===key ? null : key;
+  await renderMain();
+}
+function expenditureStatusBadge(status){
+  return `<span class="badge ${status}">${(status||'').toUpperCase()}</span>`;
+}
+function expenditureBucketDetailHtml(d){
+  const key = expandedExpenditureBucket;
+  if(!key) return "";
+  const b = d.buckets;
+  let title, inner;
+  if(key==="fuel" || key==="mileage"){
+    title = key==="fuel" ? "Fuel - Fill-up History" : "Mileage History";
+    const rows = (b.fuel.items||[]).map(r=>`<tr>
+      <td>${r.date}</td><td>${r.distance||0} km</td><td>${r.mileage? r.mileage+' km/l' : '-'}</td>
+      <td>${r.litres!=null? r.litres+' L' : '-'}</td><td>${r.fuelPrice!=null? money(r.fuelPrice) : '-'}</td>
+      <td>${r.totalCost!=null? money(r.totalCost): '-'}</td><td>${r.station||'-'}</td><td>${r.paymentMode||'-'}</td>
+      <td>${r.belowStandard? '<span class="badge low">Below Standard</span>' : '<span class="badge ok">OK</span>'}</td>
+    </tr>`).join("");
+    inner = (key==="mileage" ? `<p class="muted">Average mileage: <strong>${b.mileage.avgMileage!=null? b.mileage.avgMileage+' km/l' : 'No data yet'}</strong> (standard: ${b.mileage.standardMileage} km/l) &middot; Total distance: ${(b.mileage.totalDistance||0).toLocaleString('en-IN')} km &middot; ${b.mileage.belowStandardCount} below-standard fill-up(s)</p>` : "")
+      + `<table><tr><th>Date</th><th>Distance</th><th>Mileage</th><th>Litres</th><th>Price/L</th><th>Cost</th><th>Station</th><th>Payment</th><th>Status</th></tr>
+      ${rows || `<tr><td colspan="9" class="empty">No fuel records for this vehicle yet.</td></tr>`}</table>`;
+  } else if(key==="salary"){
+    title = "Salary - Driver Cost History";
+    const histRows = (b.salary.driverHistory||[]).map(s=>`<tr>
+      <td>${s.driverName||'-'}</td><td>${s.assignedFrom}</td><td>${s.assignedTo || '<span class="muted">Present</span>'}</td>
+      <td>${s.days}</td><td>${money(s.estimatedCost)}</td>
+    </tr>`).join("");
+    const tempRows = (b.salary.tempDriverItems||[]).map(e=>`<tr>
+      <td>${e.date}</td><td>${e.description||'-'}</td><td>${money(e.amount)}</td><td>${expenditureStatusBadge(e.status)}</td>
+    </tr>`).join("");
+    inner = `
+      <p class="muted">The assigned-driver rows are estimated from each driver's recurring payroll, prorated by days on this vehicle - accurate only from whenever assignment history started being tracked, not retroactively before that. Temporary/stand-in driver costs below are real, logged expenses.</p>
+      <table><tr><th>Driver</th><th>From</th><th>To</th><th>Days</th><th>Estimated Cost</th></tr>
+        ${histRows || `<tr><td colspan="5" class="empty">No driver assignment history recorded yet.</td></tr>`}</table>
+      <h3 style="margin:16px 0 8px;">Temporary / Stand-in Driver Costs</h3>
+      <table><tr><th>Date</th><th>Description</th><th>Amount</th><th>Status</th></tr>
+        ${tempRows || `<tr><td colspan="4" class="empty">No temporary driver costs logged for this vehicle.</td></tr>`}</table>`;
+  } else {
+    const labels = {roadTax:"Road Tax", insurance:"Insurance Amount", maintenance:"Maintenance", officeExpenses:"Office Expenses", emi:"EMI"};
+    title = labels[key] + " - History";
+    const rows = (b[key].items||[]).map(e=>`<tr>
+      <td>${e.date}</td><td>${e.category}</td><td>${e.description||'-'}</td><td>${money(e.amount)}</td>
+      <td>${expenditureStatusBadge(e.status)}</td>
+      <td>${e.billUrl? `<a href="${e.billUrl}" target="_blank">View</a>` : '-'}</td>
+    </tr>`).join("");
+    inner = `<table><tr><th>Date</th><th>Category</th><th>Description</th><th>Amount</th><th>Status</th><th>Bill</th></tr>
+      ${rows || `<tr><td colspan="6" class="empty">No ${labels[key].toLowerCase()} expenses logged for this vehicle yet.</td></tr>`}</table>`;
+  }
+  return `<div class="card"><h2 class="section-title">${title}</h2>${inner}</div>`;
+}
+
 async function downloadReport(dataset, format){
   const fromEl = document.getElementById(`rep_from_${dataset}`);
   const toEl = document.getElementById(`rep_to_${dataset}`);
@@ -4536,6 +4634,7 @@ Object.assign(window, {
   openCompleteRepairForm, addPartRow, submitCompleteRepair,
   addPurchaseItemRow, handleWorkshopInvoiceFile, submitWorkshopPurchase,
   openDocumentScanner, handleScannerFile, closeScannerModal, retakeScan, confirmScan, onWorkshopInvoiceScanned,
+  toggleExpenditureBucket,
 });
 
 boot();

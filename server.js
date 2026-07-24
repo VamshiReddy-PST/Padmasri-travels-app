@@ -88,6 +88,22 @@ function backfillDefaults() {
   if (!Array.isArray(db.payrollAdhocEntries)) db.payrollAdhocEntries = [];
   (db.vehicles || []).forEach((v) => {
     if (v.driverAssignedDate === undefined) v.driverAssignedDate = null;
+    if (!Array.isArray(v.driverAssignmentHistory)) {
+      // Best-effort backfill for vehicles that predate this tracking: a
+      // single still-open stint for whoever is currently assigned, starting
+      // from driverAssignedDate if we have it. Anything before this moment
+      // was never captured, so the Salary breakdown will only be accurate
+      // going forward from here - that's an accepted, known limitation.
+      v.driverAssignmentHistory = v.driverId
+        ? [{
+            driverId: v.driverId,
+            driverName: (db.drivers || []).find((d) => d.id === v.driverId)?.name || "",
+            assignedFrom: v.driverAssignedDate || todayStr(),
+            assignedTo: null,
+            recordedAt: nowIso(),
+          }]
+        : [];
+    }
     if (v.make === undefined) v.make = "";
     if (v.model === undefined) v.model = "";
     if (v.engineNo === undefined) v.engineNo = "";
@@ -1408,6 +1424,11 @@ app.post(
       supervisorId: null,
       driverId: null,
       driverAssignedDate: null,
+      // Every driver this vehicle has ever had, as a stint list (mirrors the
+      // driver.employmentHistory pattern) - {assignedTo: null} means the
+      // stint is still open (this is the current driver). Powers the
+      // per-vehicle Salary breakdown on the Owner's expenditure screen.
+      driverAssignmentHistory: [],
       make: make || "",
       model: model || "",
       engineNo: engineNo || "",
@@ -1516,7 +1537,25 @@ app.patch(
       // A new driver being put on this vehicle - stamp the date it happened
       // (today, unless the caller explicitly sent a date in the same request,
       // e.g. to backdate a correction) so "Driver since" has something to show.
-      if (driverChanged) vehicle.driverAssignedDate = driverAssignedDate || (vehicle.driverId ? todayStr() : null);
+      if (driverChanged) {
+        const changeDate = driverAssignedDate || todayStr();
+        vehicle.driverAssignedDate = vehicle.driverId ? changeDate : null;
+        if (!Array.isArray(vehicle.driverAssignmentHistory)) vehicle.driverAssignmentHistory = [];
+        // Close out whichever stint was still open (the outgoing driver).
+        const openStint = vehicle.driverAssignmentHistory.find((s) => s.assignedTo === null);
+        if (openStint) openStint.assignedTo = changeDate;
+        // Open a new stint for the incoming driver, if there is one.
+        if (vehicle.driverId) {
+          const newDriver = db.drivers.find((d) => d.id === vehicle.driverId);
+          vehicle.driverAssignmentHistory.push({
+            driverId: vehicle.driverId,
+            driverName: newDriver ? newDriver.name : "",
+            assignedFrom: changeDate,
+            assignedTo: null,
+            recordedAt: nowIso(),
+          });
+        }
+      }
     } else if (driverAssignedDate !== undefined) {
       // Manual edit of the date only, without changing the driver.
       vehicle.driverAssignedDate = driverAssignedDate || null;
@@ -4290,6 +4329,25 @@ app.get(
     res.json(rows);
   })
 );
+// Full maintenance history for whichever vehicle the driver is CURRENTLY
+// assigned to - every repair request ever raised for it, by anyone (a
+// supervisor, a previous driver, Workshop itself), not just the ones this
+// driver happened to raise themselves. Helps a driver recognize a
+// recurring problem ("this same noise was fixed twice before") even if
+// someone else logged it.
+app.get(
+  "/api/driver-auth/vehicle-repair-history",
+  driverAuth,
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.driverId === req.driver.id);
+    if (!vehicle) return res.status(400).json({ error: "No vehicle is currently assigned to you." });
+    const rows = db.repairRequests
+      .filter((r) => r.vehicleId === vehicle.id)
+      .map(publicRepairRequest)
+      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+    res.json({ vehicleReg: vehicle.reg, requests: rows });
+  })
+);
 
 // ---------- Workshop bulk purchases (stock intake + invoice for Finance) ----------
 // Distinct from a repair's per-vehicle parts expense: this is Workshop
@@ -4978,6 +5036,124 @@ app.get(
       noSiteVehicleCost,
       pendingTotal: Math.round(pending.reduce((s, e) => s + e.amount, 0) * 100) / 100,
       grandTotal: Math.round((vehicleExpenses.reduce((s, e) => s + e.amount, 0) + officeTotal) * 100) / 100,
+    });
+  }
+);
+
+// ---------- Per-vehicle expenditure history (Owner drill-down) ----------
+// Clicking a vehicle from the Cost Analysis screen lands here - the whole
+// history of that ONE vehicle's costs, bucketed the way the Owner asked
+// for: Fuel, Salary, Road Tax, Insurance Amount, Maintenance, Office
+// Expenses, EMI, plus Mileage alongside them as a performance metric. Each
+// bucket returns a total (approved spend only, matching the Cost Analysis
+// convention) and an itemized list so the numbers are never just a black box.
+const MAINTENANCE_EXPENSE_CATEGORIES = ["Workshop / Maintenance", "Vehicle repair (minor)"];
+const SALARY_EXPENSE_CATEGORIES = ["Temporary Driver"];
+const NAMED_EXPENSE_CATEGORIES = new Set([...MAINTENANCE_EXPENSE_CATEGORIES, ...SALARY_EXPENSE_CATEGORIES, "Road Tax", "Insurance Amount", "EMI"]);
+// A driver's estimated daily cost, from their recurring payroll profile
+// only (base salary + recurring earning components). Adhoc entries
+// (bonuses/penalties) are tied to a specific month and don't prorate
+// sensibly across an arbitrary date range, so they're deliberately left out.
+function driverMonthlyGross(driverId) {
+  const profile = getPayrollProfile("driver", driverId);
+  if (!profile) return 0;
+  const base = Number(profile.baseSalary) || 0;
+  let gross = base;
+  (profile.components || []).forEach((c) => {
+    if (!c.enabled || c.type !== "earning") return;
+    gross += c.mode === "percent" ? Math.round(base * (Number(c.value) || 0)) / 100 : Number(c.value) || 0;
+  });
+  return gross;
+}
+function daysBetweenDates(fromStr, toStr) {
+  const from = new Date(fromStr + "T00:00:00Z").getTime();
+  const to = new Date(toStr + "T00:00:00Z").getTime();
+  return Math.max(0, Math.round((to - from) / 86400000));
+}
+app.get(
+  "/api/vehicles/:id/expenditure-history",
+  requireAuth,
+  requireRole(...REPORT_ROLES),
+  (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+
+    const allExpenses = db.expenses.filter((e) => e.vehicleId === vehicle.id);
+    const approvedTotal = (list) => Math.round(list.filter((e) => e.status === "approved").reduce((s, e) => s + e.amount, 0) * 100) / 100;
+    const itemize = (list) =>
+      list
+        .slice()
+        .sort((a, b) => (b.submittedAt || "").localeCompare(a.submittedAt || ""))
+        .map((e) => ({ id: e.id, date: (e.submittedAt || "").slice(0, 10), amount: e.amount, category: e.category, description: e.description, status: e.status, billUrl: e.billUrl }));
+
+    const maintenanceExpenses = allExpenses.filter((e) => MAINTENANCE_EXPENSE_CATEGORIES.includes(e.category));
+    const roadTaxExpenses = allExpenses.filter((e) => e.category === "Road Tax");
+    const insuranceExpenses = allExpenses.filter((e) => e.category === "Insurance Amount");
+    const emiExpenses = allExpenses.filter((e) => e.category === "EMI");
+    const tempDriverExpenses = allExpenses.filter((e) => SALARY_EXPENSE_CATEGORIES.includes(e.category));
+    // Catch-all: any vehicle-tagged expense that isn't one of the named
+    // buckets above (Toll, Parking, Cleaning, Driver food/allowance,
+    // "Office Expenses", Other, or any future free-text category) rolls up
+    // here rather than being lost.
+    const officeExpenses = allExpenses.filter((e) => !NAMED_EXPENSE_CATEGORIES.has(e.category));
+
+    // Salary: temp-driver stand-in costs (real, logged expenses) PLUS an
+    // estimate of the regularly-assigned driver's cost, prorated day-by-day
+    // from driverAssignmentHistory - only accurate from whenever that
+    // tracking started (see backfillDefaults), not retroactively before that.
+    const assignmentRows = (vehicle.driverAssignmentHistory || [])
+      .map((s) => {
+        const toDate = s.assignedTo || todayStr();
+        const days = daysBetweenDates(s.assignedFrom, toDate);
+        const monthlyGross = driverMonthlyGross(s.driverId);
+        const estimatedCost = Math.round((monthlyGross / 30) * days * 100) / 100;
+        return { driverId: s.driverId, driverName: s.driverName, assignedFrom: s.assignedFrom, assignedTo: s.assignedTo, days, estimatedCost };
+      })
+      .sort((a, b) => (b.assignedFrom || "").localeCompare(a.assignedFrom || ""));
+    const estimatedDriverSalaryTotal = Math.round(assignmentRows.reduce((s, r) => s + r.estimatedCost, 0) * 100) / 100;
+    const tempDriverTotal = approvedTotal(tempDriverExpenses);
+
+    // Fuel + Mileage, straight from this vehicle's daily records.
+    const vehicleRecords = Object.values(db.records)
+      .filter((r) => r.vehicleId === vehicle.id && r.fuel && r.fuel.litres > 0)
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    const fuelRows = vehicleRecords.map((r) => ({
+      date: r.date,
+      litres: r.fuel.litres,
+      fuelPrice: r.fuel.fuelPrice,
+      totalCost: r.fuel.totalCost,
+      station: r.fuel.station,
+      paymentMode: r.fuel.paymentMode,
+      distance: r.fuel.distance,
+      mileage: r.fuel.mileage,
+      belowStandard: r.fuel.belowStandard,
+    }));
+    const fuelTotal = Math.round(fuelRows.reduce((s, r) => s + (r.totalCost || 0), 0) * 100) / 100;
+    const mileageRows = vehicleRecords.filter((r) => r.fuel.mileage > 0);
+    const totalDistance = fuelRows.reduce((s, r) => s + (r.distance || 0), 0);
+    const avgMileage = mileageRows.length ? Math.round((mileageRows.reduce((s, r) => s + r.fuel.mileage, 0) / mileageRows.length) * 10) / 10 : null;
+    const belowStandardCount = mileageRows.filter((r) => r.fuel.belowStandard).length;
+
+    res.json({
+      vehicleId: vehicle.id,
+      reg: vehicle.reg,
+      standardMileage: vehicle.standardMileage,
+      buckets: {
+        fuel: { total: fuelTotal, items: fuelRows },
+        salary: {
+          total: Math.round((tempDriverTotal + estimatedDriverSalaryTotal) * 100) / 100,
+          estimatedDriverSalaryTotal,
+          tempDriverTotal,
+          driverHistory: assignmentRows,
+          tempDriverItems: itemize(tempDriverExpenses),
+        },
+        roadTax: { total: approvedTotal(roadTaxExpenses), items: itemize(roadTaxExpenses) },
+        insurance: { total: approvedTotal(insuranceExpenses), items: itemize(insuranceExpenses) },
+        maintenance: { total: approvedTotal(maintenanceExpenses), items: itemize(maintenanceExpenses) },
+        officeExpenses: { total: approvedTotal(officeExpenses), items: itemize(officeExpenses) },
+        emi: { total: approvedTotal(emiExpenses), items: itemize(emiExpenses) },
+        mileage: { avgMileage, standardMileage: vehicle.standardMileage, totalDistance, fillCount: mileageRows.length, belowStandardCount, items: fuelRows },
+      },
     });
   }
 );

@@ -172,6 +172,7 @@ function resetSession(){
   driverTab = "current"; currentTrip = null;
   monthTrips = { upcoming: [], completed: [] }; myLeaveRequests = [];
   attendanceRows = []; documentsData = null; payslip = null;
+  vehicleRepairHistory = null; vehicleRepairHistoryReg = ""; showVehicleHistory = false;
   portalType = null;
   localStorage.removeItem("driverAuthToken");
   localStorage.removeItem("portalType");
@@ -668,7 +669,7 @@ function driverTabContentHtml(){
 // so the driver can check Documents/Profile/Upcoming Trips while that
 // countdown is still running if they want to.
 function currentTripTabHtml(){
-  if(shift.status==="awaiting_odometer") return odometerOpenCardHtml() + repairRequestCardHtml();
+  if(shift.status==="awaiting_odometer") return odometerOpenCardHtml() + repairRequestCardHtml() + vehicleHistoryCardHtml();
   let tripHtml;
   if(!currentTrip){
     tripHtml = `<div class="card"><h2 class="section-title">Current Trip</h2><div class="empty">No trip currently running. Start one from the Upcoming Trips tab.</div></div>`;
@@ -703,7 +704,7 @@ function currentTripTabHtml(){
     </div>`;
   }
   const shiftHtml = shift.status==="ready_to_logout" ? logoutCardHtml() : closingOdometerCardHtml();
-  return tripHtml + shiftHtml + repairRequestCardHtml();
+  return tripHtml + shiftHtml + repairRequestCardHtml() + vehicleHistoryCardHtml();
 }
 // Report a vehicle problem straight to Workshop - lands with the Workshop
 // Manager, who assigns it to a Mechanic/Electrician/Helper. Available any
@@ -752,6 +753,42 @@ async function submitDriverRepairRequest(){
 }
 async function fetchMyRepairRequests(){
   try{ repairRequestsMine = await api("/driver-auth/repair-requests"); }catch(e){}
+}
+// Full maintenance history for the driver's CURRENT vehicle - every repair
+// request ever raised for it by anyone, not just the driver's own. Loaded
+// on demand (not on every tab visit) since it's a "look this up when I
+// need it" reference, not something that needs to stay live-refreshed.
+let vehicleRepairHistory = null; // null = not loaded yet
+let vehicleRepairHistoryReg = "";
+let showVehicleHistory = false;
+const REPAIR_STATUS_BADGE_CLASS = {requested:"pending", assigned:"upcoming", in_progress:"in_progress", completed:"completed", cancelled:"rejected"};
+function vehicleHistoryCardHtml(){
+  const statusLabel = {requested:"Requested", assigned:"Assigned", in_progress:"In Progress", completed:"Completed", cancelled:"Cancelled"};
+  const rows = (vehicleRepairHistory||[]).map(r=>`
+    <div class="doc-row" style="display:block;">
+      <b>${r.issueDescription}</b> <span class="badge ${REPAIR_STATUS_BADGE_CLASS[r.status]||''}">${statusLabel[r.status]||r.status}</span><br/>
+      <span class="muted">Raised by ${r.raisedByName}${r.raisedByRole? ' ('+r.raisedByRole+')':''} on ${fmtDate((r.createdAt||'').slice(0,10))}</span>
+      ${r.status==='completed' ? `<br/><span class="muted">Fixed: ${r.workDone||'-'}${r.totalCost!=null? ' &middot; '+money(r.totalCost):''}</span>` : ''}
+    </div>`).join("");
+  return `
+  <div class="card">
+    <h2 class="section-title">Vehicle Maintenance History${vehicleRepairHistoryReg? ' - '+vehicleRepairHistoryReg:''}</h2>
+    <p class="muted">See what's gone wrong with this vehicle before, and how it was fixed - helps you recognize a repeat problem.</p>
+    <button class="big-btn secondary" ${busy?"disabled":""} onclick="toggleVehicleHistory()">${showVehicleHistory ? "Hide history" : "View maintenance history"}</button>
+    ${showVehicleHistory ? (rows || `<div class="empty" style="margin-top:10px;">No maintenance history recorded for this vehicle yet.</div>`) : ""}
+  </div>`;
+}
+async function toggleVehicleHistory(){
+  showVehicleHistory = !showVehicleHistory;
+  if(showVehicleHistory && vehicleRepairHistory===null){
+    render(); // show something immediately while it loads
+    try{
+      const r = await api("/driver-auth/vehicle-repair-history");
+      vehicleRepairHistory = r.requests;
+      vehicleRepairHistoryReg = r.vehicleReg;
+    }catch(e){ vehicleRepairHistory = []; lastError = e.message; }
+  }
+  render();
 }
 function odometerOpenCardHtml(){
   const { remainMs, text } = odometerCountdownParts();
