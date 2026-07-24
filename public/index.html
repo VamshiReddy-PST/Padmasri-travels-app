@@ -425,7 +425,7 @@ async function submitVoluntaryPasswordChange(){
 
 // ---------- shell ----------
 function tabsFor(role){
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["payroll","Payroll"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["payroll","Payroll"]];
   if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["payroll","Payroll"]];
   if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["people","People"],["audit","Audit Log"],["payroll","Payroll"]];
@@ -481,6 +481,7 @@ async function routeView(){
     if(tab==="assignments") return supervisorAssignmentsScreen();
     if(tab==="routes") return routesViewScreen();
     if(tab==="trips") return tripsScreen();
+    if(tab==="subvendor_expenses") return mySubvendorVehiclesScreen();
   }
   if(role==="area_supervisor"){
     if(tab==="queue") return areaQueueScreen();
@@ -2156,6 +2157,12 @@ function driverEditorHtml(d){
       <div class="f"><label>Bank Account Number</label><input type="text" id="ed_bankacc_${d.id}" value="${d.bankAccountNumber||''}" style="width:150px" /></div>
       <div class="f"><label>Bank IFSC</label><input type="text" id="ed_ifsc_${d.id}" value="${d.bankIfsc||''}" style="width:120px" /></div>
       <div class="f"><label>Account Holder Name</label><input type="text" id="ed_bankname_${d.id}" value="${d.bankAccountHolderName||''}" style="width:160px" /></div>
+      <div class="f"><label>Health Record No./Ref</label><input type="text" id="ed_healthno_${d.id}" value="${d.healthRecordNumber||''}" style="width:150px" /></div>
+      <div class="f"><label>Health Record Date</label><input type="date" id="ed_healthdate_${d.id}" value="${d.healthRecordDate||''}" style="width:140px" /></div>
+      <div class="f"><label>Training Cert No.</label><input type="text" id="ed_trainingno_${d.id}" value="${d.trainingCertNumber||''}" style="width:150px" /></div>
+      <div class="f"><label>Training Cert Date</label><input type="date" id="ed_trainingdate_${d.id}" value="${d.trainingCertDate||''}" style="width:140px" /></div>
+      <div class="f"><label>Police Verification No.</label><input type="text" id="ed_policeno_${d.id}" value="${d.policeVerificationNumber||''}" style="width:150px" /></div>
+      <div class="f"><label>Police Verification Date</label><input type="date" id="ed_policedate_${d.id}" value="${d.policeVerificationDate||''}" style="width:140px" /></div>
       <button class="btn small" type="submit">Save</button>
       <button type="button" class="btn small secondary" onclick="toggleDriverDetails('${d.id}')">Close</button>
     </form>
@@ -2197,6 +2204,24 @@ function driverEditorHtml(d){
         <input type="file" accept="image/*,application/pdf" id="ed_pfcert_${d.id}" style="width:220px" />
         <button type="button" class="btn small secondary" onclick="saveDriverCertificate('${d.id}','pf')">Upload</button>
       </div>
+      <div>
+        <label class="muted">Health Record</label><br/>
+        ${d.healthRecordCopyUrl ? `<a href="${d.healthRecordCopyUrl}" target="_blank">View current record</a><br/>` : `<span class="muted">Not uploaded yet</span><br/>`}
+        <input type="file" accept="image/*,application/pdf" id="ed_healthcopy_${d.id}" style="width:220px" />
+        <button type="button" class="btn small secondary" onclick="saveDriverCertificate('${d.id}','health')">Upload</button>
+      </div>
+      <div>
+        <label class="muted">Driver Training Certificate</label><br/>
+        ${d.trainingCertCopyUrl ? `<a href="${d.trainingCertCopyUrl}" target="_blank">View current certificate</a><br/>` : `<span class="muted">Not uploaded yet</span><br/>`}
+        <input type="file" accept="image/*,application/pdf" id="ed_trainingcopy_${d.id}" style="width:220px" />
+        <button type="button" class="btn small secondary" onclick="saveDriverCertificate('${d.id}','training')">Upload</button>
+      </div>
+      <div>
+        <label class="muted">Police Verification Certificate</label><br/>
+        ${d.policeVerificationCopyUrl ? `<a href="${d.policeVerificationCopyUrl}" target="_blank">View current certificate</a><br/>` : `<span class="muted">Not uploaded yet</span><br/>`}
+        <input type="file" accept="image/*,application/pdf" id="ed_policecopy_${d.id}" style="width:220px" />
+        <button type="button" class="btn small secondary" onclick="saveDriverCertificate('${d.id}','police')">Upload</button>
+      </div>
     </div>
   </div>`;
 }
@@ -2220,6 +2245,12 @@ async function saveDriverDetails(evt, id){
     bankAccountNumber: document.getElementById(`ed_bankacc_${id}`).value,
     bankIfsc: document.getElementById(`ed_ifsc_${id}`).value,
     bankAccountHolderName: document.getElementById(`ed_bankname_${id}`).value,
+    healthRecordNumber: document.getElementById(`ed_healthno_${id}`).value,
+    healthRecordDate: document.getElementById(`ed_healthdate_${id}`).value,
+    trainingCertNumber: document.getElementById(`ed_trainingno_${id}`).value,
+    trainingCertDate: document.getElementById(`ed_trainingdate_${id}`).value,
+    policeVerificationNumber: document.getElementById(`ed_policeno_${id}`).value,
+    policeVerificationDate: document.getElementById(`ed_policedate_${id}`).value,
   };
   try{
     const updated = await api(`/drivers/${id}`, {method:"PATCH", body: JSON.stringify(body)});
@@ -2229,8 +2260,8 @@ async function saveDriverDetails(evt, id){
   }catch(e){ alert(e.message); }
   return false;
 }
-const DRIVER_CERT_FIELD_IDS = { esi:"ed_esicert_", pf:"ed_pfcert_", license:"ed_licensecopy_", aadhar:"ed_aadharcopy_", pan:"ed_pancopy_", cheque:"ed_cheque_" };
-const DRIVER_CERT_BODY_KEYS = { esi:"esiCertificate", pf:"pfCertificate", license:"licenseCopy", aadhar:"aadharCopy", pan:"panCopy", cheque:"bankCheque" };
+const DRIVER_CERT_FIELD_IDS = { esi:"ed_esicert_", pf:"ed_pfcert_", license:"ed_licensecopy_", aadhar:"ed_aadharcopy_", pan:"ed_pancopy_", cheque:"ed_cheque_", health:"ed_healthcopy_", training:"ed_trainingcopy_", police:"ed_policecopy_" };
+const DRIVER_CERT_BODY_KEYS = { esi:"esiCertificate", pf:"pfCertificate", license:"licenseCopy", aadhar:"aadharCopy", pan:"panCopy", cheque:"bankCheque", health:"healthRecordCopy", training:"trainingCertCopy", police:"policeVerificationCopy" };
 async function saveDriverCertificate(id, kind){
   const input = document.getElementById(DRIVER_CERT_FIELD_IDS[kind] + id);
   const dataUrl = await readFileAsDataUrl(input);
@@ -3290,6 +3321,66 @@ async function settleSubvendorAdvance(id, advanceId, maxAmount){
   }catch(e){ alert(e.message); }
 }
 
+// ---- Site Supervisor: file expenses for their own Subvendor vehicles ----
+// A cut-down view of the same "record a payment" flow above - a Site
+// Supervisor only sees their own vehicles that are linked to a Subvendor
+// (Diesel/Advance/Repair/Other running costs paid on that subvendor's
+// behalf), never the full company-wide subvendor list, income, or other
+// sites' payments. The backend enforces this scoping too.
+async function mySubvendorVehiclesScreen(){
+  const [myVehicles, mySubvendors] = await Promise.all([api("/vehicles"), api("/subvendors")]);
+  const svById = Object.fromEntries(mySubvendors.map(sv=>[sv.id, sv]));
+  const svVehicles = myVehicles.filter(v=>v.subvendorId && svById[v.subvendorId]);
+  if(svVehicles.length===0){
+    return `
+    <h1 class="page-title">Subvendor Expenses</h1>
+    <div class="banner">None of your vehicles are currently linked to a Subvendor (external vehicle owner/operator). Nothing to file here yet.</div>`;
+  }
+  const cards = await Promise.all(svVehicles.map(v=>subvendorExpenseCardHtml(v, svById[v.subvendorId])));
+  return `
+  <h1 class="page-title">Subvendor Expenses</h1>
+  <div class="banner">Record what we've paid on behalf of the Subvendor running each vehicle below - Diesel, Advance, Repair Costs, or Other. An "Advance" automatically starts accruing interest (36% p.a., simple, monthly) until it's settled by Operations/Owner.</div>
+  ${cards.join("")}`;
+}
+async function subvendorExpenseCardHtml(v, sv){
+  let payments = [];
+  try{ payments = await api(`/subvendors/${sv.id}/payments`); }catch(e){}
+  const myPayments = payments.filter(p=>p.vehicleId===v.id).slice(0,10);
+  const rows = myPayments.map(p=>`
+    <tr><td>${p.date}</td><td>${p.type}</td><td>₹${p.amount}</td><td>${p.note||''}</td></tr>`).join("");
+  return `
+  <div class="card">
+    <h2 class="section-title">${v.reg} - ${sv.name}</h2>
+    <div class="muted" style="margin-bottom:10px;">Billing: ${subvendorBillingLabel(v.billing)}</div>
+    <form class="inline-form" onsubmit="return recordMySubvendorPayment('${sv.id}','${v.id}', event)">
+      <div class="f"><label>Type</label><select id="svExpType_${v.id}">
+        <option>Diesel</option><option>Advance</option><option>Repair</option><option>Other</option>
+      </select></div>
+      <div class="f"><label>Amount (₹)</label><input type="number" step="0.01" min="0.01" id="svExpAmount_${v.id}" style="width:100px" required /></div>
+      <div class="f"><label>Date</label><input type="date" id="svExpDate_${v.id}" value="${todayStr()}" /></div>
+      <div class="f" style="min-width:200px;"><label>Note</label><input type="text" id="svExpNote_${v.id}" /></div>
+      <button class="btn small" type="submit">+ Record Payment</button>
+    </form>
+    <table style="margin-top:12px;"><tr><th>Date</th><th>Type</th><th>Amount</th><th>Note</th></tr>
+    ${rows || "<tr><td colspan='4' class='empty'>No payments filed yet for this vehicle.</td></tr>"}</table>
+  </div>`;
+}
+async function recordMySubvendorPayment(subvendorId, vehicleId, evt){
+  evt.preventDefault();
+  const body = {
+    type: document.getElementById(`svExpType_${vehicleId}`).value,
+    vehicleId,
+    amount: Number(document.getElementById(`svExpAmount_${vehicleId}`).value),
+    date: document.getElementById(`svExpDate_${vehicleId}`).value,
+    note: document.getElementById(`svExpNote_${vehicleId}`).value,
+  };
+  try{
+    await api(`/subvendors/${subvendorId}/payments`, {method:"POST", body: JSON.stringify(body)});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+
 // ================= PAYROLL =================
 // Two pieces per person, mirroring the server: a recurring profile (base
 // salary + components like ESI/PF/Gratuity - set up once by HR, applies
@@ -3567,7 +3658,7 @@ Object.assign(window, {
   addPayrollAdhoc, deletePayrollAdhoc, approvePayslip,
   createTrip, cancelTrip, deleteTrip,
   toggleSubvendorDetail, addSubvendor, linkSubvendorVehicle, reviseSubvendorBilling, unlinkSubvendorVehicle,
-  recordSubvendorPayment, settleSubvendorAdvance,
+  recordSubvendorPayment, settleSubvendorAdvance, recordMySubvendorPayment,
 });
 
 boot();

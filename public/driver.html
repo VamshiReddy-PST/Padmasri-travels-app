@@ -712,10 +712,11 @@ function profileTabHtml(){
 }
 
 // ---------- Documents tab ----------
-function docRowHtml(label, number, url){
+function docRowHtml(label, number, url, date){
+  const meta = [number, date ? fmtDate(date) : ""].filter(Boolean).join(" - ");
   return `
   <div class="doc-row">
-    <div><b>${label}</b>${number ? ` <span class="muted">(${number})</span>` : ""}</div>
+    <div><b>${label}</b>${meta ? ` <span class="muted">(${meta})</span>` : ""}</div>
     ${url ? `<a href="${url}" target="_blank" rel="noopener" class="dl-link">Download</a>` : `<span class="muted">Not uploaded yet</span>`}
   </div>`;
 }
@@ -729,6 +730,9 @@ function documentsTabHtml(){
     docRowHtml("Bank Cancelled Cheque", "", p.bankChequeUrl),
     docRowHtml("UAN / PF Certificate", p.uanNumber, p.pfCertificateUrl),
     docRowHtml("ESI Certificate", p.esiNumber, p.esiCertificateUrl),
+    docRowHtml("Health Record", p.healthRecordNumber, p.healthRecordCopyUrl, p.healthRecordDate),
+    docRowHtml("Driver Training Certificate", p.trainingCertNumber, p.trainingCertCopyUrl, p.trainingCertDate),
+    docRowHtml("Police Verification Certificate", p.policeVerificationNumber, p.policeVerificationCopyUrl, p.policeVerificationDate),
   ].join("");
   const bankHtml = (p.bankAccountNumber || p.bankIfsc || p.bankAccountHolderName) ? `
     <div class="doc-row" style="display:block;">

@@ -175,6 +175,19 @@ function backfillDefaults() {
     if (d.bankIfsc === undefined) d.bankIfsc = "";
     if (d.bankAccountHolderName === undefined) d.bankAccountHolderName = "";
     if (d.bankChequeUrl === undefined) d.bankChequeUrl = null;
+    // Health record, driver training certificate, and police verification
+    // certificate - same view/download-only pattern as the docs above, each
+    // with an optional reference number, the date it was done/issued, and a
+    // copy upload (all set by HR/Ops Manager/Owner/Data Team via Staff).
+    if (d.healthRecordNumber === undefined) d.healthRecordNumber = "";
+    if (d.healthRecordDate === undefined) d.healthRecordDate = "";
+    if (d.healthRecordCopyUrl === undefined) d.healthRecordCopyUrl = null;
+    if (d.trainingCertNumber === undefined) d.trainingCertNumber = "";
+    if (d.trainingCertDate === undefined) d.trainingCertDate = "";
+    if (d.trainingCertCopyUrl === undefined) d.trainingCertCopyUrl = null;
+    if (d.policeVerificationNumber === undefined) d.policeVerificationNumber = "";
+    if (d.policeVerificationDate === undefined) d.policeVerificationDate = "";
+    if (d.policeVerificationCopyUrl === undefined) d.policeVerificationCopyUrl = null;
     if (d.dateOfJoining === undefined) d.dateOfJoining = "";
     if (d.drivingLevel === undefined) d.drivingLevel = "";
     if (d.performanceScore === undefined) d.performanceScore = null;
@@ -868,6 +881,15 @@ app.post(
       uanNumber: "",
       esiCertificateUrl: null,
       pfCertificateUrl: null,
+      healthRecordNumber: "",
+      healthRecordDate: "",
+      healthRecordCopyUrl: null,
+      trainingCertNumber: "",
+      trainingCertDate: "",
+      trainingCertCopyUrl: null,
+      policeVerificationNumber: "",
+      policeVerificationDate: "",
+      policeVerificationCopyUrl: null,
       dateOfJoining: dateOfJoining || "",
       drivingLevel: drivingLevel || "",
       performanceScore: null,
@@ -899,6 +921,9 @@ app.patch(
       dateOfJoining, drivingLevel, esiCertificate, pfCertificate,
       panNumber, bankAccountNumber, bankIfsc, bankAccountHolderName,
       licenseCopy, aadharCopy, panCopy, bankCheque,
+      healthRecordNumber, healthRecordDate, healthRecordCopy,
+      trainingCertNumber, trainingCertDate, trainingCertCopy,
+      policeVerificationNumber, policeVerificationDate, policeVerificationCopy,
     } = req.body || {};
     if (drivingLevel !== undefined && drivingLevel && !DRIVING_LEVELS.includes(drivingLevel)) {
       return res.status(400).json({ error: `Driving level must be one of: ${DRIVING_LEVELS.join(", ")}.` });
@@ -944,6 +969,26 @@ app.patch(
     if (bankCheque) {
       const url = await savePhoto(bankCheque, "driver_cheque_" + driver.id);
       if (url) { driver.bankChequeUrl = url; changed = true; }
+    }
+    // Health record, driver training certificate, police verification -
+    // same number/date/copy-upload pattern as the docs above.
+    if (healthRecordNumber !== undefined) { driver.healthRecordNumber = healthRecordNumber || ""; changed = true; }
+    if (healthRecordDate !== undefined) { driver.healthRecordDate = healthRecordDate || ""; changed = true; }
+    if (healthRecordCopy) {
+      const url = await savePhoto(healthRecordCopy, "driver_health_" + driver.id);
+      if (url) { driver.healthRecordCopyUrl = url; changed = true; }
+    }
+    if (trainingCertNumber !== undefined) { driver.trainingCertNumber = trainingCertNumber || ""; changed = true; }
+    if (trainingCertDate !== undefined) { driver.trainingCertDate = trainingCertDate || ""; changed = true; }
+    if (trainingCertCopy) {
+      const url = await savePhoto(trainingCertCopy, "driver_training_" + driver.id);
+      if (url) { driver.trainingCertCopyUrl = url; changed = true; }
+    }
+    if (policeVerificationNumber !== undefined) { driver.policeVerificationNumber = policeVerificationNumber || ""; changed = true; }
+    if (policeVerificationDate !== undefined) { driver.policeVerificationDate = policeVerificationDate || ""; changed = true; }
+    if (policeVerificationCopy) {
+      const url = await savePhoto(policeVerificationCopy, "driver_police_" + driver.id);
+      if (url) { driver.policeVerificationCopyUrl = url; changed = true; }
     }
     if (changed) {
       await audit(req.user, "update_driver", `${req.user.name} updated driver ${driver.name} (${driver.id})`);
@@ -2443,6 +2488,15 @@ app.delete(
 // vehicles, trip counts, income earned running for us, and the payments
 // (Diesel/Advance/Repair/Other) and interest we've recorded against them.
 const SUBVENDOR_MANAGE_ROLES = ["owner", "ops_manager"];
+// Recording a payment (Diesel/Advance/Repair/Other) TO a subvendor is a
+// day-to-day site expense, not an account-management action - Site
+// Supervisors file these for whichever of their own subvendor vehicles are
+// running at their site, same scoping as trips/assignments/expenses
+// (vehicle.supervisorId === their own id). Everything else about a
+// Subvendor (creating the account, editing contact details, resetting the
+// password, setting the billing contract, viewing the full income summary)
+// stays owner/ops_manager only.
+const SUBVENDOR_PAYMENT_ROLES = [...SUBVENDOR_MANAGE_ROLES, "site_supervisor"];
 const SUBVENDOR_ADVANCE_INTEREST_RATE_MONTHLY = 0.36 / 12; // 36% per annum, simple interest, accrued monthly
 
 function publicSubvendor(sv) {
@@ -2597,8 +2651,16 @@ function subvendorSummary(subvendorId) {
   };
 }
 
-app.get("/api/subvendors", requireAuth, requireRole(...SUBVENDOR_MANAGE_ROLES), (req, res) => {
-  res.json(db.subvendors.map(publicSubvendor));
+app.get("/api/subvendors", requireAuth, requireRole(...SUBVENDOR_PAYMENT_ROLES), (req, res) => {
+  let list = db.subvendors;
+  if (req.user.role === "site_supervisor") {
+    // Scoped down to just the subvendors running under this supervisor's
+    // own vehicles - not the whole company's subvendor roster - since this
+    // is only here so they can pick who to file a payment against.
+    const mySubvendorIds = new Set(visibleVehiclesFor(req.user).filter((v) => v.subvendorId).map((v) => v.subvendorId));
+    list = list.filter((s) => mySubvendorIds.has(s.id));
+  }
+  res.json(list.map(publicSubvendor));
 });
 
 app.post(
@@ -2751,7 +2813,7 @@ app.patch(
 app.post(
   "/api/subvendors/:id/payments",
   requireAuth,
-  requireRole(...SUBVENDOR_MANAGE_ROLES),
+  requireRole(...SUBVENDOR_PAYMENT_ROLES),
   h(async (req, res) => {
     const sv = db.subvendors.find((s) => s.id === req.params.id);
     if (!sv) return res.status(404).json({ error: "Subvendor not found." });
@@ -2759,6 +2821,18 @@ app.post(
     const validTypes = ["Diesel", "Advance", "Repair", "Other"];
     if (!validTypes.includes(type)) return res.status(400).json({ error: "Payment type must be one of: " + validTypes.join(", ") + "." });
     if (!amount || Number(amount) <= 0) return res.status(400).json({ error: "A valid amount is required." });
+    // Site Supervisors only file expenses for their own subvendor vehicles -
+    // same scoping as trips/assignments (vehicle.supervisorId === them).
+    if (req.user.role === "site_supervisor") {
+      if (!vehicleId) return res.status(400).json({ error: "Select which of your vehicles this expense is for." });
+      const vehicle = db.vehicles.find((v) => v.id === vehicleId);
+      if (!vehicle || vehicle.supervisorId !== req.user.id) {
+        return res.status(403).json({ error: "You can only record payments for your own vehicles." });
+      }
+      if (vehicle.subvendorId !== sv.id) {
+        return res.status(400).json({ error: "That vehicle isn't linked to this subvendor." });
+      }
+    }
     const payment = {
       id: uid("svpay"),
       subvendorId: sv.id,
@@ -2792,6 +2866,27 @@ app.post(
     }
     await audit(req.user, "subvendor_payment", `${req.user.name} recorded a ${type} payment of ₹${payment.amount} to subvendor ${sv.name}`);
     res.json({ payment, advance });
+  })
+);
+
+// Lightweight payments list - lets a Site Supervisor see (and double-check)
+// what they've filed for their own vehicles without exposing the full
+// subvendor summary (company-wide income entries, other sites' payments,
+// advance/interest details) that owner/ops_manager get via /summary.
+app.get(
+  "/api/subvendors/:id/payments",
+  requireAuth,
+  requireRole(...SUBVENDOR_PAYMENT_ROLES),
+  h(async (req, res) => {
+    const sv = db.subvendors.find((s) => s.id === req.params.id);
+    if (!sv) return res.status(404).json({ error: "Subvendor not found." });
+    let payments = db.subvendorPayments.filter((p) => p.subvendorId === sv.id);
+    if (req.user.role === "site_supervisor") {
+      const myVehicleIds = new Set(visibleVehiclesFor(req.user).map((v) => v.id));
+      payments = payments.filter((p) => p.vehicleId && myVehicleIds.has(p.vehicleId));
+    }
+    payments = payments.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    res.json(payments);
   })
 );
 
@@ -3283,6 +3378,15 @@ app.get(
       pfCertificateUrl: d.pfCertificateUrl || null,
       esiNumber: d.esiNumber || "",
       esiCertificateUrl: d.esiCertificateUrl || null,
+      healthRecordNumber: d.healthRecordNumber || "",
+      healthRecordDate: d.healthRecordDate || "",
+      healthRecordCopyUrl: d.healthRecordCopyUrl || null,
+      trainingCertNumber: d.trainingCertNumber || "",
+      trainingCertDate: d.trainingCertDate || "",
+      trainingCertCopyUrl: d.trainingCertCopyUrl || null,
+      policeVerificationNumber: d.policeVerificationNumber || "",
+      policeVerificationDate: d.policeVerificationDate || "",
+      policeVerificationCopyUrl: d.policeVerificationCopyUrl || null,
     };
     const vehicle = db.vehicles.find((v) => v.driverId === req.driver.id);
     const vehicleDocs = vehicle
