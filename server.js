@@ -5806,8 +5806,12 @@ app.post(
 );
 // Rule-based equivalent of the AI Insights cards above - no LLM call, so no
 // need to cache for cost reasons, but the shape matches {generatedAt,
-// insights:[{severity,title,detail}]} exactly so the same frontend card
-// rendering works for either.
+// insights:[{severity,title,detail,type,reg?}]} exactly so the same frontend
+// card rendering works for either. `type` (and `reg` where a single vehicle
+// is the subject) lets the frontend route a click on the card straight to
+// the page that actually lets the Owner act on it - a purely informational
+// "good" state (nothing to fix right now) has no natural action page, so the
+// frontend leaves those non-clickable rather than link somewhere pointless.
 function smartInsights() {
   const ov = aiFleetOverview();
   const topExpense = aiTopExpenseVehicles({ limit: 1 })[0];
@@ -5821,27 +5825,29 @@ function smartInsights() {
       severity: soonest.daysLeft <= 7 ? "critical" : "warning",
       title: `${docAlerts.length} document(s) need attention`,
       detail: `${soonest.reg}'s ${soonest.docType} ${soonest.daysLeft < 0 ? "expired " + Math.abs(soonest.daysLeft) + " day(s) ago" : "expires in " + soonest.daysLeft + " day(s)"}.`,
+      type: "expiring_docs",
     });
   } else {
-    insights.push({ severity: "good", title: "Documents in order", detail: "No vehicle documents are expiring within 15 days." });
+    insights.push({ severity: "good", title: "Documents in order", detail: "No vehicle documents are expiring within 15 days.", type: "docs_ok" });
   }
   if (idle.length) {
     insights.push({
       severity: idle.length > ov.fleet.totalVehicles / 3 ? "critical" : "warning",
       title: `${idle.length} vehicle(s) idle today`,
       detail: `${idle.slice(0, 3).map((r) => r.reg).join(", ")}${idle.length > 3 ? " and more" : ""} haven't logged movement today.`,
+      type: "idle",
     });
   } else if (ov.fleet.totalVehicles) {
-    insights.push({ severity: "good", title: "Full fleet activity today", detail: "Every vehicle has logged movement today." });
+    insights.push({ severity: "good", title: "Full fleet activity today", detail: "Every vehicle has logged movement today.", type: "fleet_ok" });
   }
   if (topExpense) {
-    insights.push({ severity: "info", title: "Highest spend this period", detail: `${topExpense.reg} leads at ${fmtMoney(topExpense.total)} in approved expenses.` });
+    insights.push({ severity: "info", title: "Highest spend this period", detail: `${topExpense.reg} leads at ${fmtMoney(topExpense.total)} in approved expenses.`, type: "top_expense", reg: topExpense.reg });
   }
   if (worstMileage && worstMileage.belowStandard) {
-    insights.push({ severity: "warning", title: "Mileage below standard", detail: `${worstMileage.reg} is averaging ${worstMileage.avgMileage} km/l against a standard of ${worstMileage.standardMileage} km/l.` });
+    insights.push({ severity: "warning", title: "Mileage below standard", detail: `${worstMileage.reg} is averaging ${worstMileage.avgMileage} km/l against a standard of ${worstMileage.standardMileage} km/l.`, type: "mileage_below_standard", reg: worstMileage.reg });
   }
   if (ov.todayCompliance.pending > 0) {
-    insights.push({ severity: "warning", title: `${ov.todayCompliance.pending} verification(s) pending`, detail: "These daily records are still waiting on supervisor sign-off." });
+    insights.push({ severity: "warning", title: `${ov.todayCompliance.pending} verification(s) pending`, detail: "These daily records are still waiting on supervisor sign-off.", type: "pending_verification" });
   }
   return insights.slice(0, 5);
 }

@@ -888,7 +888,7 @@ async function routeView(){
     if(tab==="people") return peopleScreen();
   }
   if(role==="owner"){
-    if(tab==="dashboard") return view.name==="dashboard_detail" ? dashboardDetailScreen(view.metric) : ownerDashboardScreen();
+    if(tab==="dashboard") return view.name==="dashboard_detail" ? dashboardDetailScreen(view.metric) : (view.name==="vehicle_status" ? vehicleTodayStatusScreen(view.vehicleId) : ownerDashboardScreen());
     if(tab==="expenses") return expensesScreen(true);
     if(tab==="assignments") return assignmentsScreen();
     if(tab==="trips") return tripsScreen();
@@ -3259,6 +3259,14 @@ async function toggleExpenditureBucket(vehicleId, key){
   expandedExpenditureBucket = expandedExpenditureBucket===key ? null : key;
   await renderMain();
 }
+// Jumps straight into a vehicle's Expenditure History with the Mileage
+// bucket already expanded - used by dashboard mileage call-outs (worst
+// performers list, "Mileage below standard" insight) so one click lands
+// right on the actionable detail instead of the vehicle's cost overview.
+async function openMileageDetail(vehicleId){
+  expandedExpenditureBucket = "mileage";
+  await goto('vehicle_detail', {tab:'reports', vehicleId});
+}
 function expenditureStatusBadge(status){
   return `<span class="badge ${status}">${(status||'').toUpperCase()}</span>`;
 }
@@ -3368,6 +3376,16 @@ function dashboardMetricRows(metric){
     return rows;
   }
   if(metric==="leaves_pending") return leaves.filter(l=>l.status==='pending');
+  // Same "idle" definition the dashboard cards use: no record submitted at
+  // all yet today, or a record was submitted but zero distance was logged.
+  // Kept as its own metric (rather than reusing not_submitted) so clicking
+  // "Idle vehicles today" shows exactly the same list the card shows.
+  if(metric==="idle") return vehicles.map(v=>{
+    const r = records[v.id];
+    if(!r) return Object.assign(dashboardRowFor(v, null), {idleReason:"Not submitted today"});
+    if(r.fuel && r.fuel.distance===0) return Object.assign(dashboardRowFor(v, r), {idleReason:"Zero distance logged today"});
+    return null;
+  }).filter(Boolean);
   return [];
 }
 const DASHBOARD_METRIC_META = {
@@ -3380,6 +3398,7 @@ const DASHBOARD_METRIC_META = {
   below_mileage: {title:"Below-standard mileage today", empty:"No low-mileage vehicles today."},
   expiring_docs: {title:"Documents expiring within 15 days", empty:"Nothing expiring soon."},
   leaves_pending: {title:"Pending leave requests", empty:"No pending leave requests."},
+  idle: {title:"Idle vehicles today", empty:"Every vehicle has moved today."},
 };
 function dashboardDetailScreen(metric){
   const meta_ = DASHBOARD_METRIC_META[metric] || {title:"Details", empty:"Nothing to show."};
@@ -3402,6 +3421,12 @@ function dashboardDetailScreen(metric){
     tableHtml = `<table><tr><th>Vehicle</th><th>Site</th><th>Client</th><th>Supervisor</th><th>Driver</th></tr>
       ${rows.map(r=>`<tr><td><b>${r.reg}</b></td><td>${r.site}</td><td>${r.client}</td><td>${r.supervisor}</td><td>${r.driver}</td></tr>`).join("")
         || `<tr><td colspan="5" class="empty">${meta_.empty}</td></tr>`}
+      </table>`;
+  } else if(metric==="idle"){
+    tableHtml = `<table><tr><th>Vehicle</th><th>Site</th><th>Client</th><th>Supervisor</th><th>Driver</th><th>Reason</th><th></th></tr>
+      ${rows.map(r=>`<tr style="cursor:pointer" onclick="goto('vehicle_status',{tab:'dashboard',vehicleId:'${r.vehicleId}'})" title="Click to view and act on this vehicle">
+        <td><b>${r.reg}</b></td><td>${r.site}</td><td>${r.client}</td><td>${r.supervisor}</td><td>${r.driver}</td><td>${r.idleReason}</td><td class="muted">View &rsaquo;</td></tr>`).join("")
+        || `<tr><td colspan="7" class="empty">${meta_.empty}</td></tr>`}
       </table>`;
   } else {
     // compliant, pending, breath_fail, absent, uniform, below_mileage - all
@@ -3428,6 +3453,70 @@ function dashboardDetailScreen(metric){
   <button class="btn secondary small" onclick="goto('home')">&larr; Back to Dashboard</button>
   <h1 class="page-title">${meta_.title}</h1>
   <div class="card">${tableHtml}</div>`;
+}
+
+// The one page every clickable dashboard row/card for a specific vehicle
+// lands on: today's verification/fuel/attendance status, with the same
+// Approve/Reject actions available elsewhere, upcoming document expiries,
+// and a link into the full cost history. If nothing is actionable right now
+// (e.g. the driver simply hasn't submitted yet), the page says so plainly -
+// that's the "left unattempted, still pending" state rather than an error.
+function vehicleTodayStatusScreen(vehicleId){
+  const v = vehicles.find(x=>x.id===vehicleId);
+  if(!v){
+    return `<button class="btn secondary small" onclick="goto('home')">&larr; Back to Dashboard</button>
+    <div class="banner error" style="margin-top:12px;">That vehicle could not be found.</div>`;
+  }
+  const r = records[v.id];
+  const statusHtml = !r
+    ? `<span class="badge pending">NOT SUBMITTED TODAY</span>`
+    : `<span class="badge ${r.verification.status}">${r.verification.status.toUpperCase()}</span>`;
+  const expiringDocs = Object.entries(v.docs||{})
+    .filter(([k,doc])=>doc && doc.expiry && daysUntil(doc.expiry)<15)
+    .map(([k,doc])=>({docType:k, daysLeft:daysUntil(doc.expiry), expiry:doc.expiry}));
+
+  let actionHtml = `<p class="muted">The driver hasn't submitted today's record yet - nothing to approve until they do. This will keep showing as idle until it's submitted.</p>`;
+  if(r){
+    if(r.verification.status==="pending"){
+      actionHtml = `<p class="muted">This record is waiting on your sign-off.</p>
+        <button class="btn small" onclick="verify('${v.id}','${r.date}','approved')">Approve</button>
+        <button class="btn small danger" onclick="verify('${v.id}','${r.date}','rejected')">Reject</button>`;
+    } else if(r.verification.status==="approved"){
+      actionHtml = `<p class="muted">Already approved - nothing left to act on for today's record.</p>`;
+    } else if(r.verification.status==="rejected"){
+      actionHtml = `<p class="muted">This record was rejected and is waiting on the supervisor/driver to recheck and resubmit - nothing further for you to do until they do.</p>`;
+    }
+  }
+
+  return `
+  <button class="btn secondary small" onclick="goto('home')">&larr; Back to Dashboard</button>
+  <h1 class="page-title">${v.reg} - Today's Status</h1>
+  <div class="card">
+    <table>
+      <tr><td class="muted">Site</td><td>${siteName(v.siteId)}</td></tr>
+      <tr><td class="muted">Client</td><td>${v.clientId? clientName(v.clientId) : "Internal / Fixed Route"}</td></tr>
+      <tr><td class="muted">Supervisor</td><td>${userName(v.supervisorId)}</td></tr>
+      <tr><td class="muted">Driver</td><td>${(r && r.attendance && r.attendance.driver) || driverName(v.driverId)}</td></tr>
+      <tr><td class="muted">Verification status</td><td>${statusHtml}</td></tr>
+      ${r && r.fuel ? `<tr><td class="muted">Distance today</td><td>${r.fuel.distance||0} km${r.fuel.distance===0? ' <span class="badge low">ZERO - IDLE</span>' : ''}</td></tr>` : ''}
+      ${r && r.fuel && r.fuel.mileage!=null ? `<tr><td class="muted">Mileage today</td><td>${r.fuel.mileage} km/l ${r.fuel.belowStandard? '<span class="badge low">BELOW STANDARD</span>' : ''}</td></tr>` : ''}
+      ${r && r.breathalyzer ? `<tr><td class="muted">Breathalyzer</td><td>${r.breathalyzer.result==='fail'? '<span class="badge low">FAIL</span>' : '<span class="badge ok">PASS</span>'} (${r.breathalyzer.reading} mg/L)</td></tr>` : ''}
+      ${r && r.attendance ? `<tr><td class="muted">Attendance</td><td>${(r.attendance.status||'-').toUpperCase()}</td></tr>` : ''}
+    </table>
+  </div>
+  <div class="card">
+    <h2 class="section-title">Action</h2>
+    ${actionHtml}
+  </div>
+  <div class="card">
+    <h2 class="section-title">Documents expiring within 15 days</h2>
+    <table><tr><th>Document</th><th>Expiry</th><th>Status</th></tr>
+    ${expiringDocs.map(d=>`<tr><td>${d.docType}</td><td>${d.expiry}</td><td><span class="badge low">${d.daysLeft<0? 'EXPIRED': d.daysLeft+' days left'}</span></td></tr>`).join("")
+      || `<tr><td colspan="3" class="empty">Nothing expiring soon for this vehicle.</td></tr>`}
+    </table>
+  </div>
+  <button class="btn secondary" onclick="goto('vehicle_detail',{tab:'reports',vehicleId:'${v.id}'})">View full expenditure &amp; maintenance history &rsaquo;</button>
+  `;
 }
 
 async function ownerDashboardScreen(){
@@ -3543,14 +3632,17 @@ async function priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpen
   // Type category, and only the worst-performing vehicles in each category
   // are listed (not the full fleet) to keep this compact and actionable.
   const mileageCategoryCards = (mileage.categories||[]).map(cat=>{
-    const worstRows = (cat.worst||[]).map(m=>`
-      <tr>
+    const worstRows = (cat.worst||[]).map(m=>{
+      const mv = vehicles.find(x=>x.reg===m.reg);
+      return `
+      <tr ${mv?`style="cursor:pointer" onclick="openMileageDetail('${mv.id}')" title="Click for this vehicle's full mileage history"`:''}>
         <td>${m.reg}</td>
         <td>${m.avgMileage} km/l</td>
         <td>${m.standardMileage!=null? m.standardMileage+' km/l' : '-'}</td>
         <td>${m.belowStandard? '<span class="badge low">BELOW STANDARD</span>' : '<span class="badge ok">OK</span>'}</td>
         <td>${m.fillCount}</td>
-      </tr>`).join("");
+      </tr>`;
+    }).join("");
     return `
     <div class="card" style="margin:0;">
       <h3 class="section-title" style="margin-bottom:4px;">${cat.label}</h3>
@@ -3562,8 +3654,8 @@ async function priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpen
   }).join("");
 
   const idleRows = idleVehicles.map(({vehicle,reason})=>`
-    <tr>
-      <td>${vehicle.reg}</td>
+    <tr style="cursor:pointer" onclick="goto('vehicle_status',{tab:'dashboard',vehicleId:'${vehicle.id}'})" title="Click to view and act on this vehicle">
+      <td><b>${vehicle.reg}</b></td>
       <td>${vehicle.route || siteName(vehicle.siteId)}</td>
       <td>${userName(vehicle.supervisorId)}</td>
       <td>${reason}</td>
@@ -3606,7 +3698,11 @@ async function priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpen
   </div>
 
   <div class="card">
-    <h2 class="section-title">Idle vehicles today (${idleVehicles.length})</h2>
+    <div class="flex-between">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:6px;">Idle vehicles today (${idleVehicles.length})</h2>
+      ${idleVehicles.length ? `<span class="muted" style="cursor:pointer" onclick="goto('dashboard_detail',{metric:'idle'})">See full list &rsaquo;</span>` : ''}
+    </div>
+    <p class="muted" style="margin:2px 0 12px;">Click a vehicle to view and act on it.</p>
     <table><tr><th>Vehicle</th><th>Route/Site</th><th>Supervisor</th><th>Reason</th></tr>
     ${idleRows || "<tr><td colspan='4' class='empty'>Every vehicle has moved today.</td></tr>"}
     </table>
@@ -3695,6 +3791,26 @@ async function loadAiInsights(force){
   aiInsightsLoading = false;
   await renderMain();
 }
+// Insight types that actually have a page to act on. "Good news" types
+// (docs_ok, fleet_ok) have nothing to fix right now, so they're deliberately
+// left non-clickable rather than link somewhere pointless.
+const AI_INSIGHT_CLICKABLE_TYPES = ["expiring_docs","idle","top_expense","mileage_below_standard","pending_verification"];
+async function openInsight(type, reg){
+  if(type==="expiring_docs") return goto('dashboard_detail',{tab:'dashboard',metric:'expiring_docs'});
+  if(type==="idle") return goto('dashboard_detail',{tab:'dashboard',metric:'idle'});
+  if(type==="pending_verification") return goto('dashboard_detail',{tab:'dashboard',metric:'pending'});
+  if(type==="top_expense"){
+    const v = reg && vehicles.find(x=>x.reg===reg);
+    if(!v) return;
+    expandedExpenditureBucket = null;
+    return goto('vehicle_detail',{tab:'reports', vehicleId:v.id});
+  }
+  if(type==="mileage_below_standard"){
+    const v = reg && vehicles.find(x=>x.reg===reg);
+    if(!v) return;
+    return openMileageDetail(v.id);
+  }
+}
 function aiInsightsSectionHtml(){
   let body;
   if(aiInsightsLoading && !aiInsights){
@@ -3702,11 +3818,15 @@ function aiInsightsSectionHtml(){
   } else if(aiInsightsError){
     body = `<div class="banner error">${aiInsightsError}</div>`;
   } else if(aiInsights && aiInsights.insights && aiInsights.insights.length){
-    body = `<div class="ai-insights-grid">${aiInsights.insights.map(i=>`
-      <div class="ai-insight-card ${i.severity}">
-        <div class="ai-insight-title">${aiEscapeHtml(i.title)}</div>
+    body = `<div class="ai-insights-grid">${aiInsights.insights.map(i=>{
+      const clickable = AI_INSIGHT_CLICKABLE_TYPES.includes(i.type);
+      return `
+      <div class="ai-insight-card ${i.severity}" ${clickable?`style="cursor:pointer" onclick="openInsight('${i.type}',${i.reg?`'${String(i.reg).replace(/'/g,"\\'")}'`:'null'})" title="Click to view and act on this"`:''}>
+        <div class="ai-insight-title">${aiEscapeHtml(i.title)}${clickable? ' &rsaquo;' : ''}</div>
         <div class="ai-insight-detail">${aiEscapeHtml(i.detail)}</div>
-      </div>`).join("")}</div>`;
+        ${!clickable ? `<div class="ai-insight-detail muted" style="margin-top:4px;">Nothing to act on right now.</div>` : ''}
+      </div>`;
+    }).join("")}</div>`;
   } else {
     body = `<div class="empty">No insights yet - click Refresh to look over today's fleet data.</div>`;
   }
@@ -4881,7 +5001,7 @@ Object.assign(window, {
   openCompleteRepairForm, addPartRow, submitCompleteRepair,
   addPurchaseItemRow, handleWorkshopInvoiceFile, submitWorkshopPurchase,
   openDocumentScanner, handleScannerFile, closeScannerModal, retakeScan, confirmScan, onWorkshopInvoiceScanned,
-  toggleExpenditureBucket,
+  toggleExpenditureBucket, openMileageDetail, openInsight,
   askAiSuggested, sendAiChatMessage, loadAiInsights,
 });
 
