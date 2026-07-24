@@ -4444,6 +4444,29 @@ app.post(
   })
 );
 
+// Fleet Assistant for the Workshop portal - same free, rule-based lookup
+// functions the regular staff app uses (smartAssistantAnswer/smartInsights,
+// defined further below), just reached through the separate workshop-auth
+// token since Workshop staff never sign in through the main staff session.
+app.post(
+  "/api/workshop-auth/smart-assistant/query",
+  workshopAuth,
+  h(async (req, res) => {
+    const { message } = req.body || {};
+    if (!message || !String(message).trim()) return res.status(400).json({ error: "Type a question first." });
+    const result = smartAssistantAnswer(message, req.workshopUser);
+    await audit(req.workshopUser, "smart_assistant_query", `${req.workshopUser.name} asked the Fleet Assistant: "${String(message).slice(0, 140)}"`);
+    res.json(result);
+  })
+);
+app.get(
+  "/api/workshop-auth/smart-assistant/insights",
+  workshopAuth,
+  (req, res) => {
+    res.json({ generatedAt: nowIso(), insights: smartInsights() });
+  }
+);
+
 // Lets the Workshop Manager/Supervisor's assign-dropdown in the mobile
 // portal populate without needing a full /api/users (staff-only) call.
 app.get(
@@ -5697,8 +5720,14 @@ app.get(
 function fmtMoney(n) {
   return "Rs " + Math.round(n || 0).toLocaleString("en-IN");
 }
-function smartAssistantAnswer(message) {
+function smartAssistantAnswer(message, askingUser) {
   const text = String(message || "").toLowerCase();
+  // The free assistant is open to every role now, but the Salary line below
+  // is derived from a driver's payroll profile (driverMonthlyGross) - that
+  // stays limited to whoever can already see payroll elsewhere in the app
+  // (Owner/HR), same boundary as PAYROLL_EDIT_ROLES/canViewPayroll, so
+  // opening this tab up doesn't quietly leak payroll data to everyone else.
+  const canSeeSalary = askingUser && (askingUser.role === "owner" || askingUser.role === "hr");
   const regHit = db.vehicles.find((v) => v.reg && text.includes(v.reg.toLowerCase()));
   if (regHit) {
     const data = aiVehicleExpenditure({ reg: regHit.reg });
@@ -5706,7 +5735,7 @@ function smartAssistantAnswer(message) {
     const lines = [
       `${data.reg} - cost breakdown:`,
       `Fuel: ${fmtMoney(b.fuel.total)}`,
-      `Salary: ${fmtMoney(b.salary.total)}`,
+      ...(canSeeSalary ? [`Salary: ${fmtMoney(b.salary.total)}`] : []),
       `Maintenance: ${fmtMoney(b.maintenance.total)}`,
       `Road Tax: ${fmtMoney(b.roadTax.total)}`,
       `Insurance: ${fmtMoney(b.insurance.total)}`,
@@ -5761,14 +5790,16 @@ function smartAssistantAnswer(message) {
   ].join("\n");
   return { reply, tool: "fleet_overview" };
 }
+// Available to every signed-in role (all staff + the Workshop team) - it's
+// free to run, and useful across the board (a mechanic checking a vehicle's
+// mileage, a supervisor checking idle vehicles, etc.), not just for Owner.
 app.post(
   "/api/smart-assistant/query",
   requireAuth,
-  requireRole(...AI_ROLES),
   h(async (req, res) => {
     const { message } = req.body || {};
     if (!message || !String(message).trim()) return res.status(400).json({ error: "Type a question first." });
-    const result = smartAssistantAnswer(message);
+    const result = smartAssistantAnswer(message, req.user);
     await audit(req.user, "smart_assistant_query", `${req.user.name} asked the Fleet Assistant: "${String(message).slice(0, 140)}"`);
     res.json(result);
   })
@@ -5817,7 +5848,6 @@ function smartInsights() {
 app.get(
   "/api/smart-assistant/insights",
   requireAuth,
-  requireRole(...AI_ROLES),
   (req, res) => {
     res.json({ generatedAt: nowIso(), insights: smartInsights() });
   }

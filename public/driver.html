@@ -88,6 +88,19 @@
   .dl-row button{flex:1;}
   .spinner{display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px;}
   @keyframes spin{to{transform:rotate(360deg);}}
+  /* ---- Fleet Assistant (workshop portal) ---- */
+  .ws-ai-hero{background:linear-gradient(135deg,var(--purple-light),#fff);border:1px solid var(--border);border-radius:18px;padding:16px 18px;margin-bottom:14px;}
+  .ws-ai-hero h1{font-size:17px;margin:0 0 4px;color:var(--ink);}
+  .ws-ai-hero p{font-size:12.5px;color:var(--grey);margin:0;}
+  .ws-ai-chat-window{max-height:340px;overflow-y:auto;margin-bottom:12px;}
+  .ws-ai-msg{padding:10px 12px;border-radius:12px;font-size:13px;line-height:1.5;margin-bottom:8px;white-space:pre-wrap;}
+  .ws-ai-msg.user{background:var(--accent-light);color:var(--ink);margin-left:20%;}
+  .ws-ai-msg.assistant{background:#F4F2FF;border:1px solid var(--purple-light);}
+  .ws-ai-tag{display:block;font-size:10.5px;font-weight:700;color:var(--purple);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;}
+  .ws-ai-tools-used{font-size:10.5px;color:var(--grey);margin-top:5px;}
+  .ws-ai-suggest-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;}
+  .ws-ai-suggest-chip{background:#fff;border:1px solid var(--purple-light);color:var(--purple);padding:7px 12px;border-radius:16px;font-size:11.5px;font-weight:600;cursor:pointer;}
+  .ws-ai-input-row textarea{width:100%;padding:12px;border:1px solid var(--border);border-radius:14px;font-size:14px;resize:vertical;min-height:52px;margin-bottom:10px;font-family:inherit;}
 </style>
 </head>
 <body>
@@ -125,6 +138,14 @@ let workshopPurchases = [];
 let workshopStaffList = [];
 let workshopBusy = false;
 let pendingWorkshopInvoice = null;
+// Free, built-in Fleet Assistant (no paid API) - same rule-based backend
+// the main staff app uses, just reached through the Workshop token instead.
+let wsChatHistory = []; // [{role:"user"|"assistant", content:string, tool?:string}]
+let wsChatBusy = false;
+let wsChatError = "";
+function escapeHtmlWs(str){
+  return String(str==null?"":str).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
 let lastError = "";
 // Which sub-tab is showing once the shift is active (on_trip/ready_to_logout).
 let driverTab = "current";
@@ -1070,6 +1091,10 @@ function workshopTabsFor(role){
   if(WORKSHOP_MANAGER_ROLES.includes(role)) tabs.push(["queue","Incoming Queue"]);
   tabs.push(["myrepairs","My Repairs"]);
   tabs.push(["purchases","Bulk Purchases"]);
+  // Free, built-in Fleet Assistant - same zero-cost tool the main staff app
+  // offers every role, available here too so Workshop staff can ask it
+  // basic fleet questions (mileage, idle vehicles, a vehicle's cost, etc.).
+  tabs.push(["assistant","💡 Fleet Assistant"]);
   tabs.push(["account","Account"]);
   return tabs;
 }
@@ -1082,6 +1107,7 @@ function workshopTabBarHtml(){
 function workshopTabContentHtml(){
   if(workshopTab==="queue") return workshopQueueTabHtml();
   if(workshopTab==="purchases") return workshopPurchasesTabHtml();
+  if(workshopTab==="assistant") return workshopAssistantTabHtml();
   if(workshopTab==="account") return workshopAccountTabHtml();
   return workshopMyRepairsTabHtml();
 }
@@ -1280,6 +1306,63 @@ async function submitWorkshopPurchaseMobile(){
     return;
   }catch(e){ lastError = e.message; }
   workshopBusy = false; render();
+}
+
+// ---- Fleet Assistant (everyone in Workshop, free - same backend as staff app) ----
+const WS_AI_SUGGESTED_PROMPTS = [
+  "Any idle vehicles right now?",
+  "Which vehicles have the worst mileage?",
+  "Any documents expiring soon?",
+];
+function workshopAssistantTabHtml(){
+  const messagesHtml = wsChatHistory.length
+    ? wsChatHistory.map(m => `
+      <div class="ws-ai-msg ${m.role}">
+        ${m.role==="assistant" ? '<span class="ws-ai-tag">Fleet Assistant</span>' : ''}${escapeHtmlWs(m.content)}
+        ${m.role==="assistant" && m.tool ? `<div class="ws-ai-tools-used">Checked: ${m.tool.replace(/_/g,' ')}</div>` : ''}
+      </div>`).join("")
+    : `<div class="empty">Ask a basic fleet question - mileage, idle vehicles, documents, costs. Free and built in.</div>`;
+  return `
+  <div class="ws-ai-hero">
+    <h1>💡 Fleet Assistant</h1>
+    <p>Free, built into the app - ask a basic question and it looks up the real numbers.</p>
+  </div>
+  <div class="card">
+    <div class="ws-ai-chat-window" id="wsAiChatWindow">${messagesHtml}${wsChatBusy ? '<div class="ws-ai-msg assistant"><span class="ws-ai-tag">Fleet Assistant</span><span class="spinner"></span> Checking the data...</div>' : ''}</div>
+    ${wsChatError ? `<div class="banner error">${wsChatError}</div>` : ''}
+    ${!wsChatHistory.length ? `<div class="ws-ai-suggest-row">${WS_AI_SUGGESTED_PROMPTS.map(p=>`<button type="button" class="ws-ai-suggest-chip" onclick="askWorkshopAiSuggested(${JSON.stringify(p)})">${p}</button>`).join("")}</div>` : ""}
+    <div class="ws-ai-input-row">
+      <textarea id="wsAiChatInputBox" placeholder="Ask about mileage, documents, idle vehicles..." ${wsChatBusy?"disabled":""} onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); sendWorkshopAiChatMessage();}"></textarea>
+      <button class="big-btn" ${wsChatBusy?"disabled":""} onclick="sendWorkshopAiChatMessage()">${wsChatBusy?'<span class="spinner"></span>':'Send'}</button>
+    </div>
+  </div>`;
+}
+function askWorkshopAiSuggested(text){
+  const box = document.getElementById("wsAiChatInputBox");
+  if(box) box.value = text;
+  sendWorkshopAiChatMessage();
+}
+async function sendWorkshopAiChatMessage(){
+  const box = document.getElementById("wsAiChatInputBox");
+  const text = (box && box.value || "").trim();
+  if(!text || wsChatBusy) return;
+  wsChatHistory.push({role:"user", content:text});
+  wsChatBusy = true; wsChatError = "";
+  render();
+  scrollWorkshopAiChatToBottom();
+  try{
+    const res = await workshopApi("/workshop-auth/smart-assistant/query", {method:"POST", body: JSON.stringify({message:text})});
+    wsChatHistory.push({role:"assistant", content: res.reply, tool: res.tool || ""});
+  }catch(e){
+    wsChatError = e.message;
+  }
+  wsChatBusy = false;
+  render();
+  scrollWorkshopAiChatToBottom();
+}
+function scrollWorkshopAiChatToBottom(){
+  const w = document.getElementById("wsAiChatWindow");
+  if(w) w.scrollTop = w.scrollHeight;
 }
 
 // ---- Account (everyone in Workshop) ----

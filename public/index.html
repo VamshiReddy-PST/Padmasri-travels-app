@@ -755,15 +755,21 @@ async function submitVoluntaryPasswordChange(){
 }
 
 // ---------- shell ----------
+// Every role gets the free Fleet Assistant tab (["smart_assistant", ...]) -
+// it's a zero-cost, built-in tool, not a paid subscription seat, so there's
+// no reason to restrict it to any one role. It's appended last for every
+// role except Owner (whose Dashboard doubles as the natural home screen -
+// the assistant sits right next to it) so each role's actual primary
+// screen stays first/most prominent.
 function tabsFor(role){
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["payroll","Payroll"]];
-  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"]];
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
-  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["people","People"],["audit","Audit Log"],["payroll","Payroll"]];
-  if(role==="hr") return [["attendance","Attendance"],["people","People"],["payroll","Payroll"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["people","People"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="hr") return [["attendance","Attendance"],["people","People"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
-  if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"]];
-  if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"]];
+  if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   return [];
 }
 
@@ -840,6 +846,7 @@ async function routeView(){
   if(tab==="odometer_verify") return odometerVerificationScreen();
   if(tab==="repairs") return repairRequestsScreen();
   if(tab==="workshop") return workshopScreen();
+  if(tab==="smart_assistant") return smartAssistantScreen();
   if(role==="site_supervisor"){
     if(tab==="my_vehicles") return view.name==="vehicle_detail" ? vehicleChecklistScreen(view.vehicleId) : supervisorHome();
     if(tab==="my_attendance") return myAttendanceScreen();
@@ -882,7 +889,6 @@ async function routeView(){
   }
   if(role==="owner"){
     if(tab==="dashboard") return view.name==="dashboard_detail" ? dashboardDetailScreen(view.metric) : ownerDashboardScreen();
-    if(tab==="smart_assistant") return smartAssistantScreen();
     if(tab==="expenses") return expensesScreen(true);
     if(tab==="assignments") return assignmentsScreen();
     if(tab==="trips") return tripsScreen();
