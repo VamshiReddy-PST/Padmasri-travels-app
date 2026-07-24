@@ -25,9 +25,21 @@
   header.topbar .who{font-size:13px;opacity:.9;text-align:right;}
   header.topbar button.logout{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35);color:#fff;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;margin-left:10px;}
   header.topbar button.logout:hover{background:rgba(255,255,255,.28);}
-  nav.tabbar{background:#20241A;display:flex;gap:2px;padding:0 16px;overflow-x:auto;}
+  nav.tabbar{background:#20241A;display:flex;gap:2px;padding:0 16px;flex-wrap:wrap;}
   nav.tabbar button{background:transparent;border:none;color:#c7cba0;padding:11px 16px;font-size:13px;cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;}
   nav.tabbar button.active{color:#fff;border-bottom-color:var(--accent-light);font-weight:600;}
+  /* Related tabs fold into a dropdown (see NAV_GROUPS) so the header never
+     needs horizontal scrolling no matter how many tabs a role has. */
+  nav.tabbar details.nav-group{position:relative;}
+  nav.tabbar details.nav-group summary{list-style:none;cursor:pointer;color:#c7cba0;padding:11px 14px;font-size:13px;border-bottom:3px solid transparent;white-space:nowrap;user-select:none;display:flex;align-items:center;gap:5px;}
+  nav.tabbar details.nav-group summary::-webkit-details-marker{display:none;}
+  nav.tabbar details.nav-group summary.active,nav.tabbar details.nav-group[open] summary{color:#fff;}
+  nav.tabbar details.nav-group summary.active{border-bottom-color:var(--accent-light);font-weight:600;}
+  nav.tabbar .nav-caret{font-size:9px;opacity:.7;}
+  nav.tabbar .nav-group-menu{position:absolute;top:100%;left:0;background:#20241A;border:1px solid rgba(255,255,255,.15);border-radius:0 0 10px 10px;min-width:200px;z-index:20;box-shadow:0 10px 24px rgba(0,0,0,.35);padding:4px;}
+  nav.tabbar .nav-group-menu button{display:block;width:100%;text-align:left;padding:9px 12px;border-radius:6px;border-bottom:none;}
+  nav.tabbar .nav-group-menu button:hover{background:rgba(255,255,255,.08);color:#fff;}
+  nav.tabbar .nav-group-menu button.active{background:rgba(255,255,255,.12);}
   main{padding:18px 20px 60px;}
   .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px 18px;margin-bottom:16px;box-shadow:0 4px 14px rgba(43,46,31,.05);}
   h1.page-title{font-size:20px;margin:4px 0 16px;color:var(--ink);}
@@ -749,12 +761,44 @@ function tabsFor(role){
   if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["people","People"],["audit","Audit Log"],["payroll","Payroll"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["payroll","Payroll"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["ai_assistant","✨ AI Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"]];
   if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"]];
   return [];
 }
 
+// Tabs that belong together get folded into one dropdown so the header
+// never needs horizontal scrolling, no matter how many tabs a role has
+// (Owner has the most - 15 flat tabs used to overflow the bar). Any tab
+// not listed in a group (a role's main/home screen, plus AI Assistant)
+// stays as its own top-level button so it's never buried a click deeper.
+// Built once, shared by every role - a role simply won't render a group
+// that has none of its tabs in it.
+const NAV_GROUPS = [
+  { key:"trips_vehicles", icon:"🚐", label:"Trips & Vehicles", tabs:["trips","usage","assignments","routes","subvendor_expenses"] },
+  { key:"verification", icon:"🛠️", label:"Verification & Repairs", tabs:["odometer_verify","repairs","workshop"] },
+  { key:"money", icon:"💰", label:"Money", tabs:["expenses","expenses_view","my_expenses","payroll","subvendors","reports","backup"] },
+  { key:"people", icon:"👥", label:"People", tabs:["people","attendance","my_attendance"] },
+  { key:"admin", icon:"📋", label:"Admin", tabs:["audit"] },
+];
+function navBarHtml(tabs){
+  const tabMap = new Map(tabs); // key -> label, and lets us know which keys actually exist for this role
+  const grouped = new Set();
+  const groupsHtml = NAV_GROUPS.map(g=>{
+    const items = g.tabs.filter(k=>tabMap.has(k));
+    if(!items.length) return "";
+    items.forEach(k=>grouped.add(k));
+    const isActive = items.includes(view.tab);
+    return `<details class="nav-group" name="ownerNav">
+      <summary class="${isActive?'active':''}">${g.icon} ${g.label} <span class="nav-caret">&#9662;</span></summary>
+      <div class="nav-group-menu">
+        ${items.map(k=>`<button class="${view.tab===k?'active':''}" onclick="switchTab('${k}')">${tabMap.get(k)}</button>`).join("")}
+      </div>
+    </details>`;
+  }).join("");
+  const standaloneHtml = tabs.filter(([k])=>!grouped.has(k)).map(([k,l])=>`<button class="${view.tab===k?'active':''}" onclick="switchTab('${k}')">${l}</button>`).join("");
+  return standaloneHtml + groupsHtml;
+}
 async function render(){
   const app = document.getElementById("app");
   const u = currentUser;
@@ -769,7 +813,7 @@ async function render(){
       </div>
     </header>
     <nav class="tabbar">
-      ${tabs.map(([k,l])=>`<button class="${view.tab===k?'active':''}" onclick="switchTab('${k}')">${l}</button>`).join("")}
+      ${navBarHtml(tabs)}
     </nav>
     <main id="main"><div class="empty">Loading...</div></main>
     <div class="footer-note">Shared data - everyone signed into this app sees the same fleet records.</div>
@@ -838,7 +882,7 @@ async function routeView(){
   }
   if(role==="owner"){
     if(tab==="dashboard") return view.name==="dashboard_detail" ? dashboardDetailScreen(view.metric) : ownerDashboardScreen();
-    if(tab==="ai_assistant") return aiAssistantScreen();
+    if(tab==="smart_assistant") return smartAssistantScreen();
     if(tab==="expenses") return expensesScreen(true);
     if(tab==="assignments") return assignmentsScreen();
     if(tab==="trips") return tripsScreen();
@@ -3570,33 +3614,33 @@ async function priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpen
     </table>
   </div>`;
 }
-// ================= AI ASSISTANT (Owner only) =================
-// Talks to POST /api/ai/chat, which is itself grounded in the real fleet
-// data through server-side tools - this screen just renders the
-// conversation and forwards plain-text history back and forth (never the
-// tool_use/tool_result internals, which stay entirely server-side per
-// request so the frontend history format stays simple).
+// ================= FLEET ASSISTANT (Owner only, free - no paid API) =================
+// Talks to POST /api/smart-assistant/query on the backend, which answers by
+// looking up real fleet data via simple keyword matching - no external AI
+// API, no cost, no signup. (A Claude-powered version exists dormant in the
+// backend behind ANTHROPIC_API_KEY for if/when that becomes worth paying
+// for - this screen intentionally uses the free one instead for now.)
 const AI_SUGGESTED_PROMPTS = [
   "How is the fleet doing today?",
   "Which vehicles cost the most this month?",
   "Any documents expiring soon?",
   "Which vehicles have the worst mileage?",
 ];
-function aiAssistantScreen(){
+function smartAssistantScreen(){
   const messagesHtml = aiChatHistory.length
     ? aiChatHistory.map(m => `
       <div class="ai-msg ${m.role}">
-        ${m.role==="assistant" ? '<span class="ai-tag">AI Assistant</span>' : ''}${aiEscapeHtml(m.content)}
-        ${m.role==="assistant" && m.toolsUsed && m.toolsUsed.length ? `<div class="ai-tools-used">Checked: ${m.toolsUsed.map(t=>t.replace(/_/g,' ')).join(', ')}</div>` : ''}
+        ${m.role==="assistant" ? '<span class="ai-tag">Fleet Assistant</span>' : ''}${aiEscapeHtml(m.content)}
+        ${m.role==="assistant" && m.tool ? `<div class="ai-tools-used">Checked: ${m.tool.replace(/_/g,' ')}</div>` : ''}
       </div>`).join("")
-    : `<div class="empty">Ask anything about your fleet - costs, mileage, documents, idle vehicles, temporary drivers. Every answer is checked against your real data before it's given.</div>`;
+    : `<div class="empty">Ask a basic question about your fleet - costs, mileage, documents, idle vehicles, temporary drivers. Free and built in, no subscription - answers come straight from your real data.</div>`;
   return `
   <div class="ai-hero">
-    <h1>✨ AI Fleet Assistant</h1>
-    <p>Ask a question in plain English - it looks up the real numbers before answering, every time.</p>
+    <h1>💡 Fleet Assistant</h1>
+    <p>Free, built into the app - ask a basic question and it looks up the real numbers. Not a full AI chat (that costs money to run) - just quick, reliable lookups.</p>
   </div>
   <div class="card">
-    <div class="ai-chat-window" id="aiChatWindow">${messagesHtml}${aiChatBusy ? '<div class="ai-msg assistant"><span class="ai-tag">AI Assistant</span><span class="spinner"></span> Checking the data...</div>' : ''}</div>
+    <div class="ai-chat-window" id="aiChatWindow">${messagesHtml}${aiChatBusy ? '<div class="ai-msg assistant"><span class="ai-tag">Fleet Assistant</span><span class="spinner"></span> Checking the data...</div>' : ''}</div>
     ${aiChatError ? `<div class="banner error">${aiChatError}</div>` : ''}
     ${!aiChatHistory.length ? `<div class="ai-suggest-row">${AI_SUGGESTED_PROMPTS.map(p=>`<button type="button" class="ai-suggest-chip" onclick="askAiSuggested(${JSON.stringify(p)})">${p}</button>`).join("")}</div>` : ""}
     <div class="ai-input-row">
@@ -3614,14 +3658,13 @@ async function sendAiChatMessage(){
   const box = document.getElementById("aiChatInputBox");
   const text = (box && box.value || "").trim();
   if(!text || aiChatBusy) return;
-  const historyForRequest = aiChatHistory.map(m => ({role:m.role, content:m.content}));
   aiChatHistory.push({role:"user", content:text});
   aiChatBusy = true; aiChatError = "";
   await renderMain();
   scrollAiChatToBottom();
   try{
-    const res = await api("/ai/chat", {method:"POST", body: JSON.stringify({message:text, history: historyForRequest})});
-    aiChatHistory.push({role:"assistant", content: res.reply, toolsUsed: res.toolsUsed || []});
+    const res = await api("/smart-assistant/query", {method:"POST", body: JSON.stringify({message:text})});
+    aiChatHistory.push({role:"assistant", content: res.reply, tool: res.tool || ""});
   }catch(e){
     aiChatError = e.message;
   }
@@ -3634,12 +3677,12 @@ function scrollAiChatToBottom(){
   if(w) w.scrollTop = w.scrollHeight;
 }
 
-// ---- AI Insights (dashboard card) ----
+// ---- Fleet Insights (dashboard card, same free rule-based backend) ----
 async function loadAiInsights(force){
   aiInsightsLoading = true; aiInsightsError = "";
   await renderMain();
   try{
-    aiInsights = await api("/ai/insights" + (force? "?refresh=1" : ""));
+    aiInsights = await api("/smart-assistant/insights");
   }catch(e){
     aiInsightsError = e.message;
   }
@@ -3649,7 +3692,7 @@ async function loadAiInsights(force){
 function aiInsightsSectionHtml(){
   let body;
   if(aiInsightsLoading && !aiInsights){
-    body = `<div class="empty"><span class="spinner"></span> Asking the AI Assistant to look over the fleet...</div>`;
+    body = `<div class="empty"><span class="spinner"></span> Looking over today's fleet data...</div>`;
   } else if(aiInsightsError){
     body = `<div class="banner error">${aiInsightsError}</div>`;
   } else if(aiInsights && aiInsights.insights && aiInsights.insights.length){
@@ -3659,18 +3702,18 @@ function aiInsightsSectionHtml(){
         <div class="ai-insight-detail">${aiEscapeHtml(i.detail)}</div>
       </div>`).join("")}</div>`;
   } else {
-    body = `<div class="empty">No insights yet - click Refresh to have the AI Assistant look over today's fleet data.</div>`;
+    body = `<div class="empty">No insights yet - click Refresh to look over today's fleet data.</div>`;
   }
   return `
   <div class="card">
     <div class="flex-between">
-      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:2px;">✨ AI Insights</h2>
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:2px;">💡 Fleet Insights</h2>
       <div style="display:flex;align-items:center;gap:8px;">
         ${aiInsights? `<span class="muted">Updated ${new Date(aiInsights.generatedAt).toLocaleTimeString()}</span>` : ''}
         <button class="btn small secondary" ${aiInsightsLoading?"disabled":""} onclick="loadAiInsights(true)">${aiInsightsLoading? '<span class="spinner"></span>' : 'Refresh'}</button>
       </div>
     </div>
-    <p class="muted" style="margin:2px 0 12px;">Auto-generated from today's real fleet data - a fast first read, not a substitute for the details below. <a href="#" onclick="event.preventDefault();switchTab('ai_assistant')">Ask a follow-up in the AI Assistant &rsaquo;</a></p>
+    <p class="muted" style="margin:2px 0 12px;">Free, computed straight from today's real fleet data - a fast first read, not a substitute for the details below. <a href="#" onclick="event.preventDefault();switchTab('smart_assistant')">Ask a follow-up in the Fleet Assistant &rsaquo;</a></p>
     ${body}
   </div>`;
 }

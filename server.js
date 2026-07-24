@@ -5684,6 +5684,145 @@ app.get(
   })
 );
 
+// ================= FREE FLEET ASSISTANT (no external API, zero cost) =================
+// The Claude-powered /api/ai/chat and /api/ai/insights above are fully
+// functional but sit dormant until someone sets ANTHROPIC_API_KEY (which
+// costs money to run) - by explicit request, the app's actual nav points at
+// THIS assistant instead: same underlying real-data lookups
+// (aiFleetOverview, aiVehicleExpenditure, etc. - defined above), just routed
+// by simple keyword matching instead of a paid LLM call. No signup, no API
+// key, no ongoing cost, works the moment the server starts. Answers plainer
+// "basic queries" well; it won't follow multi-step or oddly-phrased
+// questions the way a real LLM would - that's the trade-off for $0 cost.
+function fmtMoney(n) {
+  return "Rs " + Math.round(n || 0).toLocaleString("en-IN");
+}
+function smartAssistantAnswer(message) {
+  const text = String(message || "").toLowerCase();
+  const regHit = db.vehicles.find((v) => v.reg && text.includes(v.reg.toLowerCase()));
+  if (regHit) {
+    const data = aiVehicleExpenditure({ reg: regHit.reg });
+    const b = data.buckets;
+    const lines = [
+      `${data.reg} - cost breakdown:`,
+      `Fuel: ${fmtMoney(b.fuel.total)}`,
+      `Salary: ${fmtMoney(b.salary.total)}`,
+      `Maintenance: ${fmtMoney(b.maintenance.total)}`,
+      `Road Tax: ${fmtMoney(b.roadTax.total)}`,
+      `Insurance: ${fmtMoney(b.insurance.total)}`,
+      `EMI: ${fmtMoney(b.emi.total)}`,
+      `Office Expenses: ${fmtMoney(b.officeExpenses.total)}`,
+      b.mileage.avgMileage != null
+        ? `Mileage: ${b.mileage.avgMileage} km/l (standard ${b.mileage.standardMileage} km/l)${b.mileage.avgMileage < (b.mileage.standardMileage || 0) ? " - BELOW STANDARD" : ""}`
+        : "Mileage: no fuel fills recorded yet.",
+    ];
+    return { reply: lines.join("\n"), tool: "vehicle_expenditure" };
+  }
+  if (/expensive|cost|spend/.test(text)) {
+    const rows = aiTopExpenseVehicles({ limit: 5 });
+    const reply = rows.length ? "Highest-spend vehicles:\n" + rows.map((r, i) => `${i + 1}. ${r.reg} - ${fmtMoney(r.total)}`).join("\n") : "No approved vehicle expenses recorded yet.";
+    return { reply, tool: "top_expense_vehicles" };
+  }
+  if (/mileage|fuel efficiency|km\/?l/.test(text)) {
+    const rows = aiMileageLeaderboard({ order: "worst", limit: 5 });
+    const reply = rows.length
+      ? "Worst average mileage:\n" + rows.map((r) => `${r.reg}: ${r.avgMileage} km/l (standard ${r.standardMileage} km/l)${r.belowStandard ? " - BELOW STANDARD" : ""}`).join("\n")
+      : "No fuel fill-ups with distance recorded yet.";
+    return { reply, tool: "mileage_leaderboard" };
+  }
+  if (/document|expir|insurance|permit|\brc\b|puc|fitness|road tax/.test(text)) {
+    const rows = aiDocumentExpiryAlerts(15);
+    const reply = rows.length
+      ? `${rows.length} document(s) expired or expiring within 15 days:\n` + rows.slice(0, 10).map((r) => `${r.reg} - ${r.docType}: ${r.daysLeft < 0 ? "EXPIRED" : r.daysLeft + " days left"}`).join("\n")
+      : "No documents expiring in the next 15 days.";
+    return { reply, tool: "document_expiry_alerts" };
+  }
+  if (/idle|not moving|not submitted|hasn.t moved/.test(text)) {
+    const rows = aiIdleVehiclesToday();
+    const reply = rows.length ? `${rows.length} vehicle(s) idle today:\n` + rows.slice(0, 15).map((r) => `${r.reg} - ${r.reason}`).join("\n") : "Every vehicle has moved today.";
+    return { reply, tool: "idle_vehicles_today" };
+  }
+  if (/temp(orary)? driver|stand-?in/.test(text)) {
+    const rows = aiTemporaryDriverUsage({ limit: 10 });
+    const reply = rows.length
+      ? "Recent temporary driver usage:\n" + rows.map((r) => `${r.date} - ${r.tempDriverName || "Unknown"} covered ${r.vehicle || "-"} (${fmtMoney(r.amount)}), status: ${r.status}`).join("\n")
+      : "No temporary driver expenses recorded yet.";
+    return { reply, tool: "temporary_driver_usage" };
+  }
+  // Fallback: general fleet snapshot for anything that didn't match a
+  // narrower intent above (e.g. "how's the fleet doing today").
+  const ov = aiFleetOverview();
+  const reply = [
+    `Fleet snapshot for ${ov.today}:`,
+    `${ov.fleet.totalVehicles} vehicles, ${ov.fleet.activeDrivers} active drivers, ${ov.fleet.sites} sites.`,
+    `Today: ${ov.todayCompliance.submitted} submitted, ${ov.todayCompliance.approved} approved, ${ov.todayCompliance.pending} pending, ${ov.todayCompliance.idle} idle.`,
+    `This month's approved spend: ${fmtMoney(ov.monthToDateSpendTotal)}.`,
+    `${ov.documentsExpiringWithin15Days} document(s) expiring within 15 days, ${ov.pendingLeaveRequests} leave request(s) pending.`,
+  ].join("\n");
+  return { reply, tool: "fleet_overview" };
+}
+app.post(
+  "/api/smart-assistant/query",
+  requireAuth,
+  requireRole(...AI_ROLES),
+  h(async (req, res) => {
+    const { message } = req.body || {};
+    if (!message || !String(message).trim()) return res.status(400).json({ error: "Type a question first." });
+    const result = smartAssistantAnswer(message);
+    await audit(req.user, "smart_assistant_query", `${req.user.name} asked the Fleet Assistant: "${String(message).slice(0, 140)}"`);
+    res.json(result);
+  })
+);
+// Rule-based equivalent of the AI Insights cards above - no LLM call, so no
+// need to cache for cost reasons, but the shape matches {generatedAt,
+// insights:[{severity,title,detail}]} exactly so the same frontend card
+// rendering works for either.
+function smartInsights() {
+  const ov = aiFleetOverview();
+  const topExpense = aiTopExpenseVehicles({ limit: 1 })[0];
+  const worstMileage = aiMileageLeaderboard({ order: "worst", limit: 1 })[0];
+  const docAlerts = aiDocumentExpiryAlerts(15);
+  const idle = aiIdleVehiclesToday();
+  const insights = [];
+  if (docAlerts.length) {
+    const soonest = docAlerts[0];
+    insights.push({
+      severity: soonest.daysLeft <= 7 ? "critical" : "warning",
+      title: `${docAlerts.length} document(s) need attention`,
+      detail: `${soonest.reg}'s ${soonest.docType} ${soonest.daysLeft < 0 ? "expired " + Math.abs(soonest.daysLeft) + " day(s) ago" : "expires in " + soonest.daysLeft + " day(s)"}.`,
+    });
+  } else {
+    insights.push({ severity: "good", title: "Documents in order", detail: "No vehicle documents are expiring within 15 days." });
+  }
+  if (idle.length) {
+    insights.push({
+      severity: idle.length > ov.fleet.totalVehicles / 3 ? "critical" : "warning",
+      title: `${idle.length} vehicle(s) idle today`,
+      detail: `${idle.slice(0, 3).map((r) => r.reg).join(", ")}${idle.length > 3 ? " and more" : ""} haven't logged movement today.`,
+    });
+  } else if (ov.fleet.totalVehicles) {
+    insights.push({ severity: "good", title: "Full fleet activity today", detail: "Every vehicle has logged movement today." });
+  }
+  if (topExpense) {
+    insights.push({ severity: "info", title: "Highest spend this period", detail: `${topExpense.reg} leads at ${fmtMoney(topExpense.total)} in approved expenses.` });
+  }
+  if (worstMileage && worstMileage.belowStandard) {
+    insights.push({ severity: "warning", title: "Mileage below standard", detail: `${worstMileage.reg} is averaging ${worstMileage.avgMileage} km/l against a standard of ${worstMileage.standardMileage} km/l.` });
+  }
+  if (ov.todayCompliance.pending > 0) {
+    insights.push({ severity: "warning", title: `${ov.todayCompliance.pending} verification(s) pending`, detail: "These daily records are still waiting on supervisor sign-off." });
+  }
+  return insights.slice(0, 5);
+}
+app.get(
+  "/api/smart-assistant/insights",
+  requireAuth,
+  requireRole(...AI_ROLES),
+  (req, res) => {
+    res.json({ generatedAt: nowIso(), insights: smartInsights() });
+  }
+);
+
 // ---------- fallback to the app shell ----------
 app.get("*", (req, res, next) => {
   if (req.path.startsWith("/api/") || req.path.startsWith("/uploads/")) return next();
