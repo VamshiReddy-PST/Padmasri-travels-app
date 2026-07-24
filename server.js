@@ -35,6 +35,16 @@ const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI || "";
 const USE_MONGO = !!MONGODB_URI;
 
+// AI Assistant (Owner only) - powered by the Claude API. Reads real fleet
+// data through a small set of read-only "tools" so its answers are grounded
+// in what's actually in the database instead of guessed. See AI_SETUP.md for
+// how to get and set ANTHROPIC_API_KEY on Render.
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514";
+// Lets the test suite exercise the full tool-use loop deterministically,
+// without a real API key or an outbound network call - see aiTestStubReply().
+const AI_TEST_STUB = process.env.AI_TEST_STUB === "1";
+
 let db; // the whole app dataset, loaded into memory - all route handlers read/write this exactly as before
 let mongoClient = null;
 let appDataCol = null;
@@ -619,12 +629,17 @@ function requireRole(...roles) {
 }
 
 // Wraps an async route handler so a thrown/rejected error becomes a clean
-// 500 response instead of crashing the process or hanging the request.
+// response instead of crashing the process or hanging the request. If the
+// error was deliberately thrown with a `.status` (e.g. "API key missing" ->
+// 503), that specific status + message is used; otherwise it's an
+// unexpected failure and gets a generic 500 so internals never leak out.
 function h(fn) {
   return (req, res) => {
     Promise.resolve(fn(req, res)).catch((err) => {
       console.error(err);
-      if (!res.headersSent) res.status(500).json({ error: "Something went wrong saving that - please try again." });
+      if (res.headersSent) return;
+      if (err.status) return res.status(err.status).json({ error: err.message });
+      res.status(500).json({ error: "Something went wrong saving that - please try again." });
     });
   };
 }
@@ -4521,7 +4536,10 @@ app.patch(
 // mileage first) are returned, so the dashboard stays a short, actionable
 // list instead of a full per-vehicle table.
 const MILEAGE_WORST_N = 5;
-app.get("/api/dashboard/mileage-summary", requireAuth, requireRole("owner", "ops_manager"), (req, res) => {
+// Shared by the dashboard mileage-summary endpoint AND the AI Assistant's
+// mileage_leaderboard tool (see AI ASSISTANT section near the end of this
+// file) - one place computing per-vehicle running-average mileage.
+function mileagePerVehicleRows() {
   const perVehicle = {};
   Object.values(db.records).forEach((r) => {
     if (!r.fuel || !(r.fuel.litres > 0) || !(r.fuel.mileage > 0)) return;
@@ -4529,7 +4547,7 @@ app.get("/api/dashboard/mileage-summary", requireAuth, requireRole("owner", "ops
     perVehicle[r.vehicleId].totalMileage += r.fuel.mileage;
     perVehicle[r.vehicleId].fillCount += 1;
   });
-  const rows = Object.entries(perVehicle).map(([vehicleId, agg]) => {
+  return Object.entries(perVehicle).map(([vehicleId, agg]) => {
     const vehicle = db.vehicles.find((v) => v.id === vehicleId);
     const avgMileage = Math.round((agg.totalMileage / agg.fillCount) * 10) / 10;
     return {
@@ -4543,6 +4561,9 @@ app.get("/api/dashboard/mileage-summary", requireAuth, requireRole("owner", "ops
       belowStandard: vehicle ? avgMileage < vehicle.standardMileage : false,
     };
   });
+}
+app.get("/api/dashboard/mileage-summary", requireAuth, requireRole("owner", "ops_manager"), (req, res) => {
+  const rows = mileagePerVehicleRows();
 
   const byCategory = {};
   rows.forEach((r) => {
@@ -5070,14 +5091,11 @@ function daysBetweenDates(fromStr, toStr) {
   const to = new Date(toStr + "T00:00:00Z").getTime();
   return Math.max(0, Math.round((to - from) / 86400000));
 }
-app.get(
-  "/api/vehicles/:id/expenditure-history",
-  requireAuth,
-  requireRole(...REPORT_ROLES),
-  (req, res) => {
-    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
-    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
-
+// Shared by the REST endpoint below AND the AI Assistant's vehicle_expenditure
+// tool (see AI ASSISTANT section near the end of this file), so both always
+// agree on the exact same numbers - one source of truth for "what did this
+// vehicle cost."
+function computeVehicleExpenditure(vehicle) {
     const allExpenses = db.expenses.filter((e) => e.vehicleId === vehicle.id);
     const approvedTotal = (list) => Math.round(list.filter((e) => e.status === "approved").reduce((s, e) => s + e.amount, 0) * 100) / 100;
     const itemize = (list) =>
@@ -5134,7 +5152,7 @@ app.get(
     const avgMileage = mileageRows.length ? Math.round((mileageRows.reduce((s, r) => s + r.fuel.mileage, 0) / mileageRows.length) * 10) / 10 : null;
     const belowStandardCount = mileageRows.filter((r) => r.fuel.belowStandard).length;
 
-    res.json({
+    return {
       vehicleId: vehicle.id,
       reg: vehicle.reg,
       standardMileage: vehicle.standardMileage,
@@ -5154,7 +5172,16 @@ app.get(
         emi: { total: approvedTotal(emiExpenses), items: itemize(emiExpenses) },
         mileage: { avgMileage, standardMileage: vehicle.standardMileage, totalDistance, fillCount: mileageRows.length, belowStandardCount, items: fuelRows },
       },
-    });
+    };
+}
+app.get(
+  "/api/vehicles/:id/expenditure-history",
+  requireAuth,
+  requireRole(...REPORT_ROLES),
+  (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+    res.json(computeVehicleExpenditure(vehicle));
   }
 );
 
@@ -5272,6 +5299,389 @@ app.get(
   (req, res) => {
     res.json((db.backupDownloads || []).slice(0, 100));
   }
+);
+
+// ================= AI ASSISTANT (Owner only) =================
+// A conversational assistant + auto-generated dashboard insight cards, both
+// powered by the Claude API and both grounded in the app's own data through
+// a small set of read-only "tools" - the model can't just make up fleet
+// numbers, it has to call a tool to look them up, the same way a new
+// analyst would have to open a report instead of guessing a figure.
+// See AI_SETUP.md for how to get an API key; without one, both endpoints
+// return a clear "not set up yet" error instead of failing mysteriously.
+const AI_ROLES = ["owner"];
+const AI_MAX_TOOL_ITERATIONS = 6;
+const AI_INSIGHTS_CACHE_MS = 60 * 60 * 1000; // 1 hour
+
+// ---- tool implementations (plain functions returning plain JSON) ----
+function aiRecordsForToday() {
+  const today = todayStr();
+  const out = {};
+  Object.values(db.records).forEach((r) => {
+    if (r.date === today) out[r.vehicleId] = r;
+  });
+  return out;
+}
+function aiDocumentExpiryAlerts(withinDays) {
+  const limit = withinDays == null ? 15 : withinDays;
+  const rows = [];
+  db.vehicles.forEach((v) => {
+    Object.entries(v.docs || {}).forEach(([docType, doc]) => {
+      if (!doc.expiry) return;
+      const daysLeft = Math.round((new Date(doc.expiry) - new Date(todayStr())) / 86400000);
+      if (daysLeft <= limit) rows.push({ reg: v.reg, docType, expiry: doc.expiry, daysLeft });
+    });
+  });
+  return rows.sort((a, b) => a.daysLeft - b.daysLeft);
+}
+function aiIdleVehiclesToday() {
+  const todaysByVehicle = aiRecordsForToday();
+  return db.vehicles
+    .map((v) => {
+      const r = todaysByVehicle[v.id];
+      if (!r) return { reg: v.reg, reason: "Not submitted today" };
+      if (r.fuel && r.fuel.distance === 0) return { reg: v.reg, reason: "Zero distance logged today" };
+      return null;
+    })
+    .filter(Boolean);
+}
+function aiFleetOverview() {
+  const vehicles = db.vehicles;
+  const activeDrivers = db.drivers.filter((d) => d.active !== false);
+  const todaysByVehicle = aiRecordsForToday();
+  const todaysRecords = Object.values(todaysByVehicle);
+  const submittedToday = todaysRecords.length;
+  const approvedToday = todaysRecords.filter((r) => r.verification && r.verification.status === "approved").length;
+  const pendingToday = todaysRecords.filter((r) => r.verification && r.verification.status === "pending").length;
+  const idleToday = aiIdleVehiclesToday().length;
+  const monthPrefix = todayStr().slice(0, 7);
+  const approvedThisMonth = db.expenses.filter((e) => e.status === "approved" && (e.submittedAt || "").slice(0, 7) === monthPrefix);
+  const spendByCategory = {};
+  approvedThisMonth.forEach((e) => {
+    spendByCategory[e.category] = Math.round(((spendByCategory[e.category] || 0) + e.amount) * 100) / 100;
+  });
+  return {
+    today: todayStr(),
+    fleet: { totalVehicles: vehicles.length, activeDrivers: activeDrivers.length, sites: db.sites.length, clients: db.clients.length },
+    todayCompliance: { submitted: submittedToday, approved: approvedToday, pending: pendingToday, notSubmitted: vehicles.length - submittedToday, idle: idleToday },
+    monthToDateSpendByCategory: spendByCategory,
+    monthToDateSpendTotal: Math.round(Object.values(spendByCategory).reduce((s, n) => s + n, 0) * 100) / 100,
+    documentsExpiringWithin15Days: aiDocumentExpiryAlerts(15).length,
+    pendingLeaveRequests: db.leaves.filter((l) => l.status === "pending").length,
+  };
+}
+function aiListVehicles(input) {
+  input = input || {};
+  let rows = db.vehicles.slice();
+  if (input.usage) rows = rows.filter((v) => v.usage === input.usage);
+  if (input.vehicleType) rows = rows.filter((v) => v.vehicleType === input.vehicleType);
+  return rows.map((v) => ({
+    reg: v.reg,
+    vehicleType: v.vehicleType,
+    fuelType: v.fuelType,
+    usage: v.usage,
+    site: v.siteId ? siteNameServer(v.siteId) : null,
+    client: v.clientId ? clientNameServer(v.clientId) : "Internal / Fixed Route",
+    driver: v.driverId ? driverNameServer(v.driverId) : null,
+    standardMileage: v.standardMileage,
+    lastOdometer: v.lastOdometer,
+  }));
+}
+function aiVehicleExpenditure(input) {
+  const wantedReg = ((input && input.reg) || "").trim().toLowerCase();
+  const vehicle = db.vehicles.find((v) => v.reg.trim().toLowerCase() === wantedReg);
+  if (!vehicle) return { error: `No vehicle found with registration "${(input && input.reg) || ""}". Call list_vehicles to see valid registrations.` };
+  const data = computeVehicleExpenditure(vehicle);
+  const buckets = {};
+  Object.entries(data.buckets).forEach(([key, b]) => {
+    buckets[key] = { total: b.total };
+    if (key === "mileage") {
+      Object.assign(buckets[key], { avgMileage: b.avgMileage, standardMileage: b.standardMileage, fillCount: b.fillCount, belowStandardCount: b.belowStandardCount });
+    }
+    if (key === "salary") {
+      Object.assign(buckets[key], {
+        estimatedDriverSalaryTotal: b.estimatedDriverSalaryTotal,
+        tempDriverTotal: b.tempDriverTotal,
+        currentDriver: (b.driverHistory || []).find((s) => s.assignedTo === null) || null,
+      });
+    }
+    if (Array.isArray(b.items) && b.items.length) buckets[key].recentItems = b.items.slice(0, 5);
+  });
+  return { reg: data.reg, standardMileage: data.standardMileage, buckets };
+}
+function aiTopExpenseVehicles(input) {
+  input = input || {};
+  const limit = Math.min(Math.max(parseInt(input.limit, 10) || 5, 1), 20);
+  const approved = db.expenses.filter((e) => e.status === "approved" && e.vehicleId);
+  const byVehicle = {};
+  approved.forEach((e) => {
+    if (input.category && e.category !== input.category) return;
+    byVehicle[e.vehicleId] = (byVehicle[e.vehicleId] || 0) + e.amount;
+  });
+  return Object.entries(byVehicle)
+    .map(([vehicleId, total]) => {
+      const v = db.vehicles.find((x) => x.id === vehicleId);
+      return { reg: v ? v.reg : vehicleId, total: Math.round(total * 100) / 100 };
+    })
+    .sort((a, b) => b.total - a.total)
+    .slice(0, limit);
+}
+function aiMileageLeaderboard(input) {
+  input = input || {};
+  const limit = Math.min(Math.max(parseInt(input.limit, 10) || 5, 1), 20);
+  const rows = mileagePerVehicleRows();
+  const sorted = rows.slice().sort((a, b) => (input.order === "best" ? b.avgMileage - a.avgMileage : a.avgMileage - b.avgMileage));
+  return sorted.slice(0, limit).map((r) => ({ reg: r.reg, avgMileage: r.avgMileage, standardMileage: r.standardMileage, belowStandard: r.belowStandard, fillCount: r.fillCount }));
+}
+function aiTemporaryDriverUsage(input) {
+  input = input || {};
+  const limit = Math.min(Math.max(parseInt(input.limit, 10) || 10, 1), 50);
+  return db.expenses
+    .filter((e) => e.category === "Temporary Driver")
+    .sort((a, b) => (b.submittedAt || "").localeCompare(a.submittedAt || ""))
+    .slice(0, limit)
+    .map((e) => {
+      const v = e.vehicleId ? db.vehicles.find((x) => x.id === e.vehicleId) : null;
+      return {
+        date: (e.submittedAt || "").slice(0, 10),
+        tempDriverName: (e.tempDriver && e.tempDriver.name) || null,
+        amount: e.amount,
+        vehicle: v ? v.reg : null,
+        coveredForDriver: e.coveredForDriverName || null,
+        status: e.status,
+      };
+    });
+}
+
+const AI_TOOLS = [
+  {
+    name: "fleet_overview",
+    description: "Get a snapshot of the whole fleet right now: vehicle/driver/site counts, today's compliance numbers (submitted/approved/pending/idle), this month's approved spend by category, document expiry alert count, and pending leave requests. Good first call for any broad question.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "list_vehicles",
+    description: "List vehicles with their site, client, driver, standard mileage and last odometer reading. Optionally filter by usage or vehicle type.",
+    input_schema: { type: "object", properties: { usage: { type: "string", enum: ["fixed_route", "on_call", "booking"] }, vehicleType: { type: "string", enum: ["Bus", "Cab"] } }, additionalProperties: false },
+  },
+  {
+    name: "vehicle_expenditure",
+    description: "Get one vehicle's full cost breakdown by registration number - Fuel, Salary, Road Tax, Insurance, Maintenance, Office Expenses, EMI totals, plus mileage performance. Use for 'why is vehicle X expensive' or 'how is vehicle X performing'.",
+    input_schema: { type: "object", properties: { reg: { type: "string", description: "Vehicle registration number, e.g. TS09BT1002" } }, required: ["reg"], additionalProperties: false },
+  },
+  {
+    name: "top_expense_vehicles",
+    description: "Get the vehicles with the highest approved spend, optionally filtered to one expense category, highest first. Use for 'which vehicles cost the most' style questions.",
+    input_schema: {
+      type: "object",
+      properties: {
+        category: { type: "string", description: 'Optional exact expense category to filter to, e.g. "Workshop / Maintenance", "Road Tax", "Insurance Amount", "EMI", "Temporary Driver".' },
+        limit: { type: "integer", description: "How many vehicles to return, default 5, max 20." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "document_expiry_alerts",
+    description: "Get vehicle documents (RC, Permit, Insurance, Fitness, Tax, PUC, etc.) that are expired or expiring soon, soonest first.",
+    input_schema: { type: "object", properties: { withinDays: { type: "integer", description: "Only include documents expiring within this many days (a negative days-left means already expired). Default 15." } }, additionalProperties: false },
+  },
+  {
+    name: "mileage_leaderboard",
+    description: "Get the vehicles with the best or worst average fuel mileage (km/l), with their standard mileage target for comparison.",
+    input_schema: { type: "object", properties: { order: { type: "string", enum: ["best", "worst"], description: "Default worst." }, limit: { type: "integer", description: "Default 5, max 20." } }, additionalProperties: false },
+  },
+  {
+    name: "idle_vehicles_today",
+    description: "Get vehicles that haven't moved today - either no daily record submitted yet, or a record was submitted but zero distance was logged.",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "temporary_driver_usage",
+    description: "Get recent instances where a temporary/stand-in driver was arranged and paid for an absent regular driver - who, how much, which vehicle.",
+    input_schema: { type: "object", properties: { limit: { type: "integer", description: "Default 10, max 50." } }, additionalProperties: false },
+  },
+];
+function executeAiTool(name, input) {
+  switch (name) {
+    case "fleet_overview":
+      return aiFleetOverview();
+    case "list_vehicles":
+      return aiListVehicles(input);
+    case "vehicle_expenditure":
+      return aiVehicleExpenditure(input);
+    case "top_expense_vehicles":
+      return aiTopExpenseVehicles(input);
+    case "document_expiry_alerts":
+      return { alerts: aiDocumentExpiryAlerts(input && input.withinDays != null ? input.withinDays : 15) };
+    case "mileage_leaderboard":
+      return aiMileageLeaderboard(input);
+    case "idle_vehicles_today":
+      return { idleVehicles: aiIdleVehiclesToday() };
+    case "temporary_driver_usage":
+      return { entries: aiTemporaryDriverUsage(input) };
+    default:
+      return { error: `Unknown tool "${name}".` };
+  }
+}
+function aiSystemPrompt() {
+  return `You are the AI Assistant inside Padmasri Travels' Fleet Operating System, talking directly to the Owner. You have tools that query the real, live fleet database - always use a tool to look up any number, list, or fact before stating it; never invent or estimate fleet data yourself. If a tool returns no data or an error for something, say so plainly rather than guessing. All money amounts are Indian Rupees (Rs). Keep answers concise, concrete and actionable - lead with the direct answer, then a short supporting detail only if it's genuinely useful. Today's date is ${todayStr()}.`;
+}
+// Deterministic stand-in for the real Claude API, used only when
+// AI_TEST_STUB=1 (set by the automated test suite) so the tool-use loop,
+// role gating, and response shaping can all be exercised without a real API
+// key or an outbound network call.
+function aiTestStubReply({ messages, tools }) {
+  const last = messages[messages.length - 1];
+  const isToolResult = last && last.role === "user" && Array.isArray(last.content) && last.content.some((c) => c.type === "tool_result");
+  if (isToolResult) {
+    return { content: [{ type: "text", text: "[AI_TEST_STUB] Based on the tool results above, here is a grounded answer." }], stop_reason: "end_turn" };
+  }
+  const hasTools = Array.isArray(tools) && tools.length > 0;
+  // The most recent plain-text user turn is what's actually being asked
+  // right now (earlier turns are just prior context) - find from the end.
+  const latestUserText = messages.slice().reverse().find((m) => m.role === "user" && typeof m.content === "string");
+  const text = latestUserText ? latestUserText.content : "";
+  if (!hasTools) {
+    // The insights prompt offers no tools and asks for a JSON array back -
+    // reply the same shape so generateAiInsights()'s parsing path is
+    // genuinely exercised by tests too.
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify([{ severity: "warning", title: "[AI_TEST_STUB] Stub insight", detail: "This is a deterministic stub insight, only ever returned when AI_TEST_STUB=1." }]),
+        },
+      ],
+      stop_reason: "end_turn",
+    };
+  }
+  // Registration numbers are often written with spaces ("TS 09 AT 1001"),
+  // so rather than pattern-matching a single word, check whether any real
+  // vehicle's registration appears in the question text at all.
+  const regHit = db.vehicles.find((v) => v.reg && text.toLowerCase().includes(v.reg.toLowerCase()));
+  if (regHit) {
+    return { content: [{ type: "tool_use", id: "toolu_stub1", name: "vehicle_expenditure", input: { reg: regHit.reg } }], stop_reason: "tool_use" };
+  }
+  return { content: [{ type: "tool_use", id: "toolu_stub1", name: "fleet_overview", input: {} }], stop_reason: "tool_use" };
+}
+async function callClaudeMessages({ system, messages, tools }) {
+  if (AI_TEST_STUB) return aiTestStubReply({ messages, tools });
+  if (!ANTHROPIC_API_KEY) {
+    const err = new Error("The AI Assistant isn't set up yet - an ANTHROPIC_API_KEY needs to be added to the server's environment. See AI_SETUP.md for how.");
+    err.status = 503;
+    throw err;
+  }
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 1024, system, messages, tools: tools && tools.length ? tools : undefined }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error((data && data.error && data.error.message) || `The AI Assistant is temporarily unavailable (${res.status}). Please try again.`);
+    err.status = 502;
+    throw err;
+  }
+  return data;
+}
+
+app.post(
+  "/api/ai/chat",
+  requireAuth,
+  requireRole(...AI_ROLES),
+  h(async (req, res) => {
+    const { message, history } = req.body || {};
+    if (!message || !String(message).trim()) return res.status(400).json({ error: "Type a question first." });
+    const rawHistory = Array.isArray(history) ? history : [];
+    const messages = rawHistory
+      .filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
+      .slice(-20)
+      .map((m) => ({ role: m.role, content: m.content }));
+    messages.push({ role: "user", content: String(message).slice(0, 4000) });
+
+    const toolsUsed = [];
+    let iterations = 0;
+    let finalText = "";
+    while (iterations < AI_MAX_TOOL_ITERATIONS) {
+      iterations += 1;
+      const data = await callClaudeMessages({ system: aiSystemPrompt(), messages, tools: AI_TOOLS });
+      const content = data.content || [];
+      const toolUses = content.filter((c) => c.type === "tool_use");
+      const textParts = content.filter((c) => c.type === "text").map((c) => c.text).join("\n").trim();
+      if (!toolUses.length) {
+        finalText = textParts;
+        break;
+      }
+      messages.push({ role: "assistant", content });
+      const toolResults = toolUses.map((tu) => {
+        toolsUsed.push(tu.name);
+        let result;
+        try {
+          result = executeAiTool(tu.name, tu.input || {});
+        } catch (e) {
+          result = { error: e.message };
+        }
+        return { type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(result) };
+      });
+      messages.push({ role: "user", content: toolResults });
+      if (data.stop_reason !== "tool_use") {
+        finalText = textParts;
+        break;
+      }
+    }
+    if (!finalText) finalText = "I wasn't able to put together a full answer that time - please try rephrasing your question.";
+    await audit(req.user, "ai_chat", `${req.user.name} asked the AI Assistant: "${String(message).slice(0, 140)}"`);
+    res.json({ reply: finalText, toolsUsed: [...new Set(toolsUsed)] });
+  })
+);
+
+// ---- dashboard insight cards (cached for AI_INSIGHTS_CACHE_MS, manual refresh via ?refresh=1) ----
+function aiInsightsSnapshotForPrompt() {
+  return {
+    fleetOverview: aiFleetOverview(),
+    topExpenseVehicles: aiTopExpenseVehicles({ limit: 5 }),
+    worstMileageVehicles: aiMileageLeaderboard({ order: "worst", limit: 5 }),
+    documentExpiryAlerts: aiDocumentExpiryAlerts(15).slice(0, 10),
+    idleVehiclesToday: aiIdleVehiclesToday(),
+  };
+}
+async function generateAiInsights() {
+  const snapshot = aiInsightsSnapshotForPrompt();
+  const system =
+    'You are the AI Assistant inside Padmasri Travels\' Fleet Operating System. You will be given a live snapshot of fleet data as JSON. Produce 3 to 5 short insight cards the Owner should see first thing - a mix of warnings (cost overruns, expiring documents, underperforming vehicles) and positive callouts if something is genuinely going well. Reply with ONLY a JSON array, no other text, in this exact shape: [{"severity":"critical"|"warning"|"good"|"info","title":"short headline, under 8 words","detail":"one or two sentences, concrete, citing real numbers from the data"}]. Base every claim strictly on the JSON data given - never invent numbers.';
+  const messages = [{ role: "user", content: `Fleet data snapshot:\n${JSON.stringify(snapshot)}` }];
+  const data = await callClaudeMessages({ system, messages, tools: [] });
+  const text = (data.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n").trim();
+  let insights;
+  try {
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    insights = JSON.parse(jsonMatch ? jsonMatch[0] : text);
+    if (!Array.isArray(insights)) throw new Error("not an array");
+  } catch (e) {
+    insights = [{ severity: "info", title: "Insights unavailable", detail: "The AI Assistant returned something we couldn't read that time - try refreshing." }];
+  }
+  return insights.slice(0, 6).map((i) => ({
+    severity: ["critical", "warning", "good", "info"].includes(i.severity) ? i.severity : "info",
+    title: String(i.title || "").slice(0, 120),
+    detail: String(i.detail || "").slice(0, 400),
+  }));
+}
+app.get(
+  "/api/ai/insights",
+  requireAuth,
+  requireRole(...AI_ROLES),
+  h(async (req, res) => {
+    const forceRefresh = req.query.refresh === "1";
+    const cache = db.aiInsightsCache;
+    if (!forceRefresh && cache && Date.now() - new Date(cache.generatedAt).getTime() < AI_INSIGHTS_CACHE_MS) {
+      return res.json(cache);
+    }
+    const insights = await generateAiInsights();
+    const payload = { generatedAt: nowIso(), insights };
+    db.aiInsightsCache = payload;
+    res.json(payload);
+  })
 );
 
 // ---------- fallback to the app shell ----------

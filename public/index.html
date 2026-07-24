@@ -141,6 +141,51 @@
   .scanner-modal img{max-width:100%;max-height:52vh;border-radius:8px;border:1px solid var(--border);object-fit:contain;background:#eee;}
   .scanner-modal .muted{margin:10px 0;}
   .scanner-modal .btn-row{display:flex;gap:10px;justify-content:center;margin-top:14px;flex-wrap:wrap;}
+  /* ---- AI Assistant + command-center dashboard ---- */
+  .ai-hero{background:linear-gradient(135deg,#20241A 0%,var(--ink) 45%,#3A2F6B 100%);border-radius:20px;padding:26px 26px 22px;margin-bottom:16px;color:#fff;position:relative;overflow:hidden;box-shadow:0 12px 30px rgba(43,46,31,.22);}
+  .ai-hero::before{content:"";position:absolute;top:-50px;right:-50px;width:200px;height:200px;border-radius:50%;background:radial-gradient(circle,rgba(108,99,255,.35),transparent 70%);}
+  .ai-hero::after{content:"";position:absolute;bottom:-70px;left:-30px;width:180px;height:180px;border-radius:50%;background:radial-gradient(circle,rgba(233,237,168,.18),transparent 70%);}
+  .ai-hero h1{margin:0 0 4px;font-size:19px;position:relative;z-index:1;}
+  .ai-hero p{margin:0;color:#dcd9f7;font-size:12.5px;position:relative;z-index:1;}
+  .ai-chat-window{display:flex;flex-direction:column;gap:10px;max-height:480px;overflow-y:auto;padding:4px 2px;margin-bottom:12px;}
+  .ai-msg{max-width:82%;padding:10px 13px;border-radius:14px;font-size:13.5px;line-height:1.55;white-space:pre-wrap;word-break:break-word;}
+  .ai-msg.user{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:4px;}
+  .ai-msg.assistant{align-self:flex-start;background:var(--purple-light);color:var(--ink);border-bottom-left-radius:4px;}
+  .ai-msg .ai-tag{display:block;font-size:10.5px;font-weight:700;color:var(--purple-dark);margin-bottom:3px;letter-spacing:.03em;text-transform:uppercase;}
+  .ai-tools-used{font-size:11px;color:var(--purple-dark);margin-top:6px;opacity:.85;}
+  .ai-suggest-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;}
+  .ai-suggest-chip{background:#fff;border:1px solid var(--purple);color:var(--purple-dark);padding:6px 12px;border-radius:20px;font-size:12px;cursor:pointer;}
+  .ai-suggest-chip:hover{background:var(--purple-light);}
+  .ai-input-row{display:flex;gap:8px;align-items:flex-end;}
+  .ai-input-row textarea{flex:1;padding:10px 12px;border:1px solid var(--border);border-radius:12px;font-size:13.5px;font-family:inherit;resize:none;min-height:44px;max-height:120px;}
+  .ai-input-row .btn{min-width:64px;height:44px;}
+  .ai-insights-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;}
+  .ai-insight-card{border-left:4px solid var(--purple);background:#fff;border:1px solid var(--border);border-left-width:4px;border-radius:12px;padding:12px 14px;}
+  .ai-insight-card.critical{border-left-color:var(--red);}
+  .ai-insight-card.warning{border-left-color:var(--amber);}
+  .ai-insight-card.good{border-left-color:var(--green);}
+  .ai-insight-card.info{border-left-color:var(--purple);}
+  .ai-insight-card .ai-insight-title{font-weight:700;font-size:13px;color:var(--ink);margin-bottom:3px;}
+  .ai-insight-card .ai-insight-detail{font-size:12.5px;color:var(--grey);line-height:1.5;}
+  .cmd-hero{background:linear-gradient(135deg,#20241A 0%,var(--ink) 55%,#3A5220 100%);border-radius:22px;padding:28px 26px 24px;margin-bottom:18px;color:#fff;position:relative;overflow:hidden;box-shadow:0 14px 34px rgba(43,46,31,.25);}
+  .cmd-hero::before{content:"";position:absolute;top:-70px;right:-60px;width:240px;height:240px;border-radius:50%;background:radial-gradient(circle,rgba(233,237,168,.22),transparent 70%);}
+  .cmd-hero::after{content:"";position:absolute;bottom:-90px;left:-50px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(108,99,255,.22),transparent 70%);}
+  .cmd-hero-top{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:14px;position:relative;z-index:1;}
+  .cmd-hero h1{margin:0 0 4px;font-size:21px;}
+  .cmd-hero .cmd-sub{color:#dfe3c2;font-size:12.5px;margin:0;}
+  .cmd-score{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.22);border-radius:16px;padding:12px 18px;text-align:center;min-width:120px;}
+  .cmd-score .cmd-score-num{font-size:30px;font-weight:800;line-height:1;}
+  .cmd-score .cmd-score-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:#cfd3ac;margin-top:4px;}
+  .cmd-kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:20px;position:relative;z-index:1;}
+  @media(max-width:900px){.cmd-kpi-row{grid-template-columns:repeat(2,1fr);}}
+  @media(max-width:600px){.cmd-kpi-row{grid-template-columns:1fr;}}
+  .cmd-kpi{background:rgba(255,255,255,.94);border-radius:14px;padding:12px 14px;cursor:pointer;transition:transform .15s ease;}
+  .cmd-kpi:hover{transform:translateY(-2px);}
+  .cmd-kpi .num{font-size:22px;font-weight:800;color:var(--ink);}
+  .cmd-kpi .label{font-size:11px;color:var(--grey);margin-top:2px;}
+  .cmd-kpi.warn .num{color:var(--amber);}
+  .cmd-kpi.bad .num{color:var(--red);}
+  .cmd-kpi.good .num{color:var(--green);}
 </style>
 </head>
 <body>
@@ -170,6 +215,21 @@ let view = { tab: null, name: "home" };
 let loading = false;
 let lastError = "";
 let loginPortal = null; // null = chooser screen, "staff" = staff/supervisor login form
+
+// ---- AI Assistant (Owner only) ----
+let aiChatHistory = []; // [{role:"user"|"assistant", content:string, toolsUsed?:string[]}]
+let aiChatBusy = false;
+let aiChatError = "";
+let aiInsights = null; // {generatedAt, insights:[...]} once loaded
+let aiInsightsLoading = false;
+let aiInsightsError = "";
+// Deliberately minimal - only used for the AI Assistant's own message
+// bubbles, since that's the one place in the app where text can flow
+// through an LLM (which might be asked to quote back other people's
+// free-text data) before being rendered.
+function aiEscapeHtml(str){
+  return String(str==null?"":str).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
 
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function daysUntil(dateStr){
@@ -689,7 +749,7 @@ function tabsFor(role){
   if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["people","People"],["audit","Audit Log"],["payroll","Payroll"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["payroll","Payroll"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["ai_assistant","✨ AI Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"]];
   if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"]];
   return [];
@@ -778,6 +838,7 @@ async function routeView(){
   }
   if(role==="owner"){
     if(tab==="dashboard") return view.name==="dashboard_detail" ? dashboardDetailScreen(view.metric) : ownerDashboardScreen();
+    if(tab==="ai_assistant") return aiAssistantScreen();
     if(tab==="expenses") return expensesScreen(true);
     if(tab==="assignments") return assignmentsScreen();
     if(tab==="trips") return tripsScreen();
@@ -3350,30 +3411,62 @@ async function ownerDashboardScreen(){
   const tempDriverExpenses = expenses.filter(e=>e.category==="Temporary Driver");
 
   setTimeout(()=>drawCharts(approved,pending,rejected, breathFailList.length, submitted-breathFailList.length), 0);
+  // Kick the AI Insights fetch off in the background so it never blocks the
+  // rest of the dashboard from rendering - the card shows its own loading
+  // state and fills in whenever the response lands. Only auto-fires once
+  // per session (or after a manual Refresh resets it via loadAiInsights).
+  if(aiInsights===null && !aiInsightsLoading && !aiInsightsError) setTimeout(()=>loadAiInsights(false), 0);
 
-  const kpi = (cls, num, label, metric) => `<div class="kpi ${cls}" style="cursor:pointer" onclick="goto('dashboard_detail',{metric:'${metric}'})" title="Click for the full list">
+  const kpi = (cls, num, label, metric) => `<div class="cmd-kpi ${cls}" style="cursor:pointer" onclick="goto('dashboard_detail',{metric:'${metric}'})" title="Click for the full list">
     <div class="num">${num}</div><div class="label">${label} &rsaquo;</div></div>`;
 
+  // A rough, transparent heuristic (not a precise metric) - starts at 100
+  // and loses points for today's compliance gaps, so the Owner gets one
+  // number that moves the way the detail below would suggest it should.
+  const healthPenalty = Math.min(30, total? Math.round(((total-submitted)/total)*30) : 0)
+    + Math.min(20, pending*2)
+    + Math.min(15, breathFailList.length*5)
+    + Math.min(10, absentList.length*2)
+    + Math.min(10, expiringDocs.length)
+    + Math.min(15, idleVehicles.length*2);
+  const healthScore = Math.max(0, 100 - healthPenalty);
+  const healthTier = healthScore>=85 ? 'good' : healthScore>=60 ? 'warn' : 'bad';
+  const healthColor = healthTier==='good' ? '#8fd18f' : healthTier==='warn' ? '#f0c869' : '#f0908a';
+
   return `
-  <h1 class="page-title">Owner Dashboard - Fleet Overview</h1>
-  <p class="muted" style="margin-top:-8px;">Click any number below to see the full list and take action.</p>
+  <div class="cmd-hero">
+    <div class="cmd-hero-top">
+      <div>
+        <h1>Fleet Operating System</h1>
+        <p class="cmd-sub">Padmasri Travels &middot; ${vehicles.length} vehicles across ${meta.sites.length} site${meta.sites.length===1?'':'s'} &middot; live as of ${new Date().toLocaleTimeString()}</p>
+      </div>
+      <div class="cmd-score">
+        <div class="cmd-score-num" style="color:${healthColor}">${healthScore}</div>
+        <div class="cmd-score-label">Fleet Health</div>
+      </div>
+    </div>
+    <div class="cmd-kpi-row">
+      ${kpi('good', compliantPct+'%', 'Fully compliant today', 'compliant')}
+      ${kpi('warn', pending, 'Pending verification', 'pending')}
+      ${kpi(total-submitted>0?'bad':'good', total-submitted, 'Not submitted yet today', 'not_submitted')}
+      ${kpi('bad', expiringDocs.length, 'Documents expiring &lt;15 days', 'expiring_docs')}
+    </div>
+  </div>
 
   ${await backupReminderBannerHtml()}
   ${await attendanceBackupReminderBannerHtml()}
   ${uniformRenewalReminderBannerHtml()}
 
-  ${await priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpenses)}
+  ${aiInsightsSectionHtml()}
 
   <div class="grid cols-4">
-    ${kpi('good', compliantPct+'%', 'Submitted vehicles fully compliant today', 'compliant')}
-    ${kpi('warn', pending, 'Pending verification', 'pending')}
-    ${kpi(total-submitted>0?'bad':'good', total-submitted, 'Not submitted yet today', 'not_submitted')}
-    ${kpi('bad', expiringDocs.length, 'Documents expiring &lt;15 days', 'expiring_docs')}
     ${kpi('bad', breathFailList.length, 'Breathalyzer failures today', 'breath_fail')}
     ${kpi(absentList.length?'bad':'good', absentList.length, 'Drivers absent today', 'absent')}
     ${kpi(uniformList.length?'warn':'good', uniformList.length, 'Uniform non-compliance', 'uniform')}
     ${kpi('', leavesPendingList.length, 'Leave requests pending', 'leaves_pending')}
   </div>
+
+  ${await priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpenses)}
 
   <div class="charts-grid" style="margin-top:18px;">
     <div class="card"><h2 class="section-title">Verification funnel</h2><canvas id="chartFunnel" height="180"></canvas></div>
@@ -3477,6 +3570,111 @@ async function priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpen
     </table>
   </div>`;
 }
+// ================= AI ASSISTANT (Owner only) =================
+// Talks to POST /api/ai/chat, which is itself grounded in the real fleet
+// data through server-side tools - this screen just renders the
+// conversation and forwards plain-text history back and forth (never the
+// tool_use/tool_result internals, which stay entirely server-side per
+// request so the frontend history format stays simple).
+const AI_SUGGESTED_PROMPTS = [
+  "How is the fleet doing today?",
+  "Which vehicles cost the most this month?",
+  "Any documents expiring soon?",
+  "Which vehicles have the worst mileage?",
+];
+function aiAssistantScreen(){
+  const messagesHtml = aiChatHistory.length
+    ? aiChatHistory.map(m => `
+      <div class="ai-msg ${m.role}">
+        ${m.role==="assistant" ? '<span class="ai-tag">AI Assistant</span>' : ''}${aiEscapeHtml(m.content)}
+        ${m.role==="assistant" && m.toolsUsed && m.toolsUsed.length ? `<div class="ai-tools-used">Checked: ${m.toolsUsed.map(t=>t.replace(/_/g,' ')).join(', ')}</div>` : ''}
+      </div>`).join("")
+    : `<div class="empty">Ask anything about your fleet - costs, mileage, documents, idle vehicles, temporary drivers. Every answer is checked against your real data before it's given.</div>`;
+  return `
+  <div class="ai-hero">
+    <h1>✨ AI Fleet Assistant</h1>
+    <p>Ask a question in plain English - it looks up the real numbers before answering, every time.</p>
+  </div>
+  <div class="card">
+    <div class="ai-chat-window" id="aiChatWindow">${messagesHtml}${aiChatBusy ? '<div class="ai-msg assistant"><span class="ai-tag">AI Assistant</span><span class="spinner"></span> Checking the data...</div>' : ''}</div>
+    ${aiChatError ? `<div class="banner error">${aiChatError}</div>` : ''}
+    ${!aiChatHistory.length ? `<div class="ai-suggest-row">${AI_SUGGESTED_PROMPTS.map(p=>`<button type="button" class="ai-suggest-chip" onclick="askAiSuggested(${JSON.stringify(p)})">${p}</button>`).join("")}</div>` : ""}
+    <div class="ai-input-row">
+      <textarea id="aiChatInputBox" placeholder="Ask about costs, mileage, documents, idle vehicles..." ${aiChatBusy?"disabled":""} onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); sendAiChatMessage();}"></textarea>
+      <button class="btn" ${aiChatBusy?"disabled":""} onclick="sendAiChatMessage()">${aiChatBusy?'<span class="spinner"></span>':'Send'}</button>
+    </div>
+  </div>`;
+}
+function askAiSuggested(text){
+  const box = document.getElementById("aiChatInputBox");
+  if(box) box.value = text;
+  sendAiChatMessage();
+}
+async function sendAiChatMessage(){
+  const box = document.getElementById("aiChatInputBox");
+  const text = (box && box.value || "").trim();
+  if(!text || aiChatBusy) return;
+  const historyForRequest = aiChatHistory.map(m => ({role:m.role, content:m.content}));
+  aiChatHistory.push({role:"user", content:text});
+  aiChatBusy = true; aiChatError = "";
+  await renderMain();
+  scrollAiChatToBottom();
+  try{
+    const res = await api("/ai/chat", {method:"POST", body: JSON.stringify({message:text, history: historyForRequest})});
+    aiChatHistory.push({role:"assistant", content: res.reply, toolsUsed: res.toolsUsed || []});
+  }catch(e){
+    aiChatError = e.message;
+  }
+  aiChatBusy = false;
+  await renderMain();
+  scrollAiChatToBottom();
+}
+function scrollAiChatToBottom(){
+  const w = document.getElementById("aiChatWindow");
+  if(w) w.scrollTop = w.scrollHeight;
+}
+
+// ---- AI Insights (dashboard card) ----
+async function loadAiInsights(force){
+  aiInsightsLoading = true; aiInsightsError = "";
+  await renderMain();
+  try{
+    aiInsights = await api("/ai/insights" + (force? "?refresh=1" : ""));
+  }catch(e){
+    aiInsightsError = e.message;
+  }
+  aiInsightsLoading = false;
+  await renderMain();
+}
+function aiInsightsSectionHtml(){
+  let body;
+  if(aiInsightsLoading && !aiInsights){
+    body = `<div class="empty"><span class="spinner"></span> Asking the AI Assistant to look over the fleet...</div>`;
+  } else if(aiInsightsError){
+    body = `<div class="banner error">${aiInsightsError}</div>`;
+  } else if(aiInsights && aiInsights.insights && aiInsights.insights.length){
+    body = `<div class="ai-insights-grid">${aiInsights.insights.map(i=>`
+      <div class="ai-insight-card ${i.severity}">
+        <div class="ai-insight-title">${aiEscapeHtml(i.title)}</div>
+        <div class="ai-insight-detail">${aiEscapeHtml(i.detail)}</div>
+      </div>`).join("")}</div>`;
+  } else {
+    body = `<div class="empty">No insights yet - click Refresh to have the AI Assistant look over today's fleet data.</div>`;
+  }
+  return `
+  <div class="card">
+    <div class="flex-between">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:2px;">✨ AI Insights</h2>
+      <div style="display:flex;align-items:center;gap:8px;">
+        ${aiInsights? `<span class="muted">Updated ${new Date(aiInsights.generatedAt).toLocaleTimeString()}</span>` : ''}
+        <button class="btn small secondary" ${aiInsightsLoading?"disabled":""} onclick="loadAiInsights(true)">${aiInsightsLoading? '<span class="spinner"></span>' : 'Refresh'}</button>
+      </div>
+    </div>
+    <p class="muted" style="margin:2px 0 12px;">Auto-generated from today's real fleet data - a fast first read, not a substitute for the details below. <a href="#" onclick="event.preventDefault();switchTab('ai_assistant')">Ask a follow-up in the AI Assistant &rsaquo;</a></p>
+    ${body}
+  </div>`;
+}
+
 async function backupsCardHtml(){
   let list = [];
   try{ list = await api("/admin/backups"); }catch(e){ return ""; }
@@ -4635,6 +4833,7 @@ Object.assign(window, {
   addPurchaseItemRow, handleWorkshopInvoiceFile, submitWorkshopPurchase,
   openDocumentScanner, handleScannerFile, closeScannerModal, retakeScan, confirmScan, onWorkshopInvoiceScanned,
   toggleExpenditureBucket,
+  askAiSuggested, sendAiChatMessage, loadAiInsights,
 });
 
 boot();
