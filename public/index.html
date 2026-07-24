@@ -183,8 +183,10 @@ async function api(path, opts={}){
 }
 
 function roleLabel(r){
-  return {site_supervisor:"Site Supervisor", area_supervisor:"Area Supervisor", ops_manager:"Operations Manager", data_team:"Data Team", owner:"Owner", hr:"HR", bookings:"Bookings Department"}[r] || r;
+  return {site_supervisor:"Site Supervisor", area_supervisor:"Area Supervisor", ops_manager:"Operations Manager", data_team:"Data Team", owner:"Owner", hr:"HR", bookings:"Bookings Department",
+    workshop_manager:"Workshop Manager", workshop_supervisor:"Workshop Supervisor", mechanic:"Mechanic", helper:"Helper", electrician:"Electrician"}[r] || r;
 }
+const WORKSHOP_STAFF_ROLES = ["workshop_manager","workshop_supervisor","mechanic","helper","electrician"];
 function userName(id){ const u = meta.users.find(x=>x.id===id); return u? u.name : "-"; }
 function userPhone(id){ const u = meta.users.find(x=>x.id===id); return u? (u.phone||"-") : "-"; }
 function siteName(id){ const s = meta.sites.find(x=>x.id===id); return s? s.name : "Unassigned"; }
@@ -236,6 +238,7 @@ async function boot(){
   }
 }
 function defaultTab(role){
+  if(WORKSHOP_STAFF_ROLES.includes(role)) return "workshop";
   return {site_supervisor:"my_vehicles", area_supervisor:"queue", ops_manager:"operations", data_team:"corrections", hr:"attendance", owner:"dashboard", bookings:"usage"}[role];
 }
 async function loadCoreData(){
@@ -442,13 +445,14 @@ async function submitVoluntaryPasswordChange(){
 
 // ---------- shell ----------
 function tabsFor(role){
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["payroll","Payroll"]];
-  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["payroll","Payroll"]];
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["payroll","Payroll"]];
+  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["people","People"],["audit","Audit Log"],["payroll","Payroll"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["payroll","Payroll"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"]];
+  if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"]];
   return [];
 }
 
@@ -491,6 +495,8 @@ async function routeView(){
   if(view.name==="change_password") return changePasswordScreen();
   if(tab==="payroll") return payrollScreen();
   if(tab==="odometer_verify") return odometerVerificationScreen();
+  if(tab==="repairs") return repairRequestsScreen();
+  if(tab==="workshop") return workshopScreen();
   if(role==="site_supervisor"){
     if(tab==="my_vehicles") return view.name==="vehicle_detail" ? vehicleChecklistScreen(view.vehicleId) : supervisorHome();
     if(tab==="my_attendance") return myAttendanceScreen();
@@ -1938,6 +1944,7 @@ let odometerVerifyPendingOnly = true;
 const ROLE_OPTIONS = [
   ["site_supervisor","Site Supervisor"],["area_supervisor","Area Supervisor"],["ops_manager","Operations Manager"],
   ["data_team","Data Team"],["hr","HR"],["owner","Owner"],["bookings","Bookings Department"],
+  ["workshop_manager","Workshop Manager"],["workshop_supervisor","Workshop Supervisor"],["mechanic","Mechanic"],["helper","Helper"],["electrician","Electrician"],
 ];
 // Mirrors the server's rule in server.js (canManageUserRole): Owner can
 // manage anyone. HR - the primary staff onboarder - can manage Site
@@ -1947,8 +1954,8 @@ const ROLE_OPTIONS = [
 // convenience (hide buttons/options that would just get a 403 back) - the
 // server enforces the real rule regardless of what the UI shows.
 const ROLE_MANAGEMENT_ALLOWED = {
-  hr: ["site_supervisor","area_supervisor","ops_manager","data_team","bookings"],
-  ops_manager: ["site_supervisor","area_supervisor","data_team","bookings"],
+  hr: ["site_supervisor","area_supervisor","ops_manager","data_team","bookings",...WORKSHOP_STAFF_ROLES],
+  ops_manager: ["site_supervisor","area_supervisor","data_team","bookings",...WORKSHOP_STAFF_ROLES],
 };
 function canManageRole(actorRole, targetRole){
   if(actorRole==="owner") return true;
@@ -3556,6 +3563,288 @@ async function manualOdometerEntry(shiftId, point){
   }catch(e){ alert(e.message); }
 }
 
+// ================= WORKSHOP / MAINTENANCE MODULE =================
+// Repair requests: raised by Driver/Site Supervisor/Ops Manager/Area
+// Supervisor, always landing with the Workshop Manager first (no
+// self-service claiming - the Owner's explicit call), who assigns each one
+// to a specific Workshop staff member. That staff member starts it, then
+// completes it with an itemized parts/consumables list - completing
+// auto-creates a vehicle-tagged expense so it flows straight into the
+// existing vehicle-cost/site-cost reporting.
+const REPAIR_STATUS_LABEL = {requested:"Requested", assigned:"Assigned", in_progress:"In Progress", completed:"Completed", cancelled:"Cancelled"};
+const REPAIR_STATUS_BADGE_CLASS = {requested:"pending", assigned:"pending", in_progress:"pending", completed:"approved", cancelled:"rejected"};
+function repairStatusBadge(status){
+  return `<span class="badge ${REPAIR_STATUS_BADGE_CLASS[status]||''}">${(REPAIR_STATUS_LABEL[status]||status).toUpperCase()}</span>`;
+}
+async function repairRequestsScreen(){
+  const canRaise = ["site_supervisor","ops_manager","area_supervisor"].includes(currentUser.role);
+  let rows = [];
+  try{ rows = await api("/repair-requests"); }catch(e){}
+  const vehicleOptions = vehicles.map(v=>`<option value="${v.id}">${v.reg}${v.driverId? ' - '+driverName(v.driverId):''}</option>`).join("");
+  const raiseForm = canRaise ? `
+  <div class="card">
+    <h2 class="section-title">Raise a Repair Request</h2>
+    <form class="inline-form" onsubmit="return submitRepairRequest(event)">
+      <div class="f" style="min-width:220px;"><label>Vehicle</label>
+        <select id="rrVehicle" required><option value="">Select...</option>${vehicleOptions}</select>
+      </div>
+      <div class="f"><label>Urgency</label>
+        <select id="rrUrgency"><option value="normal">Normal</option><option value="low">Low</option><option value="high">High</option></select>
+      </div>
+      <div class="f" style="flex:2;min-width:260px;"><label>Describe the issue</label>
+        <input type="text" id="rrIssue" placeholder="e.g. AC not cooling, brake noise, Adblue low" required />
+      </div>
+      <button class="btn" type="submit">Raise Request</button>
+    </form>
+  </div>` : "";
+  const table = rows.length ? `
+  <table><tr><th>Date</th><th>Vehicle</th><th>Issue</th><th>Urgency</th><th>Raised By</th><th>Status</th><th>Assigned To</th><th>Cost</th><th></th></tr>
+  ${rows.map(r=>`<tr>
+    <td>${new Date(r.createdAt).toLocaleDateString()}</td>
+    <td>${r.vehicleReg}</td>
+    <td>${r.issueDescription}</td>
+    <td>${r.urgency}</td>
+    <td>${r.raisedByName}${r.raisedByRole==='driver'?' (Driver)':''}</td>
+    <td>${repairStatusBadge(r.status)}</td>
+    <td>${r.assignedToName||"-"}</td>
+    <td>${r.totalCost!=null? 'Rs '+r.totalCost.toLocaleString('en-IN') : '-'}</td>
+    <td>${["requested","assigned"].includes(r.status) && (r.raisedBy===currentUser.id || ["owner","ops_manager","workshop_manager"].includes(currentUser.role)) ? `<button class="btn small danger" onclick="cancelRepairRequest('${r.id}')">Cancel</button>` : ""}</td>
+  </tr>`).join("")}
+  </table>` : `<div class="empty">No repair requests yet.</div>`;
+  return `
+  <h1 class="page-title">Repair Requests</h1>
+  ${raiseForm}
+  <div class="card"><h2 class="section-title">All Requests</h2>${table}</div>`;
+}
+async function submitRepairRequest(evt){
+  evt.preventDefault();
+  const body = {
+    vehicleId: document.getElementById("rrVehicle").value,
+    urgency: document.getElementById("rrUrgency").value,
+    issueDescription: document.getElementById("rrIssue").value,
+  };
+  try{
+    await api("/repair-requests", {method:"POST", body: JSON.stringify(body)});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function cancelRepairRequest(id){
+  if(!confirm("Cancel this repair request?")) return;
+  try{
+    await api(`/repair-requests/${id}/cancel`, {method:"PATCH"});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+
+// ---- Workshop staff side: incoming queue (Workshop Manager), my assigned
+// repairs (everyone else), and bulk purchase + invoice logging (everyone) ----
+async function workshopScreen(){
+  const role = currentUser.role;
+  const isManagerView = role==="workshop_manager" || role==="owner" || role==="ops_manager";
+  let requests = [], purchases = [];
+  try{ [requests, purchases] = await Promise.all([api("/repair-requests"), api("/workshop-purchases")]); }catch(e){}
+  const incoming = requests.filter(r=>r.status==="requested");
+  const mine = requests.filter(r=>r.assignedTo===currentUser.id && ["assigned","in_progress"].includes(r.status));
+  const staffOptions = meta.users.filter(u=>WORKSHOP_STAFF_ROLES.includes(u.role) && u.active!==false)
+    .map(u=>`<option value="${u.id}">${u.name} (${roleLabel(u.role)})</option>`).join("");
+
+  const incomingHtml = (role==="workshop_manager" || role==="owner") ? `
+  <div class="card">
+    <h2 class="section-title">Incoming Requests ${incoming.length? `<span class="badge pending">${incoming.length}</span>`:''}</h2>
+    ${incoming.length===0 ? `<div class="empty">Nothing waiting on assignment.</div>` : `
+    <table><tr><th>Date</th><th>Vehicle</th><th>Issue</th><th>Urgency</th><th>Raised By</th><th>Assign to</th><th></th></tr>
+    ${incoming.map(r=>`<tr>
+      <td>${new Date(r.createdAt).toLocaleDateString()}</td>
+      <td>${r.vehicleReg}</td>
+      <td>${r.issueDescription}</td>
+      <td>${r.urgency}</td>
+      <td>${r.raisedByName}</td>
+      <td><select id="assignTo_${r.id}"><option value="">Select staff...</option>${staffOptions}</select></td>
+      <td><button class="btn small" onclick="assignRepairRequest('${r.id}')">Assign</button></td>
+    </tr>`).join("")}
+    </table>`}
+  </div>` : "";
+
+  const myRepairsHtml = WORKSHOP_STAFF_ROLES.includes(role) ? `
+  <div class="card">
+    <h2 class="section-title">My Assigned Repairs</h2>
+    ${mine.length===0 ? `<div class="empty">Nothing assigned to you right now.</div>` : mine.map(r=>workshopMyRepairCardHtml(r)).join("")}
+  </div>` : "";
+
+  const allRequestsHtml = isManagerView ? `
+  <div class="card">
+    <h2 class="section-title">All Requests</h2>
+    <table><tr><th>Date</th><th>Vehicle</th><th>Issue</th><th>Status</th><th>Assigned To</th><th>Cost</th></tr>
+    ${requests.map(r=>`<tr>
+      <td>${new Date(r.createdAt).toLocaleDateString()}</td>
+      <td>${r.vehicleReg}</td>
+      <td>${r.issueDescription}</td>
+      <td>${repairStatusBadge(r.status)}</td>
+      <td>${r.assignedToName||"-"}</td>
+      <td>${r.totalCost!=null? 'Rs '+r.totalCost.toLocaleString('en-IN') : '-'}</td>
+    </tr>`).join("") || `<tr><td colspan="6" class="empty">No requests yet.</td></tr>`}
+    </table>
+  </div>` : "";
+
+  const purchaseForm = WORKSHOP_STAFF_ROLES.includes(role) ? `
+  <div class="card">
+    <h2 class="section-title">Log a Bulk Purchase</h2>
+    <p class="muted">Add each item you bought, the total amount, and a photo/scan of the invoice - Finance can print it straight away.</p>
+    <div id="purchaseItemsRows">
+      <div class="inline-form purchase-item-row">
+        <div class="f"><label>Item</label><input type="text" class="wpItemName" placeholder="e.g. Adblue" /></div>
+        <div class="f"><label>Qty</label><input type="number" step="0.1" class="wpItemQty" placeholder="e.g. 4" /></div>
+        <div class="f"><label>Unit</label><input type="text" class="wpItemUnit" placeholder="e.g. Litres" /></div>
+      </div>
+    </div>
+    <button class="btn small secondary" type="button" onclick="addPurchaseItemRow()">+ Add another item</button>
+    <div class="inline-form" style="margin-top:10px;">
+      <div class="f"><label>Total Amount (Rs)</label><input type="number" id="wpTotalAmount" required /></div>
+      <div class="f" style="flex:2;min-width:220px;"><label>Notes (optional)</label><input type="text" id="wpNotes" /></div>
+    </div>
+    <div class="check-row" style="margin-top:8px;">
+      <div class="label">Invoice photo/scan</div>
+      <div class="controls">
+        <input type="file" id="wpInvoiceFile" accept="image/*" style="display:none;" onchange="handleWorkshopInvoiceFile(event)" />
+        <button class="btn small secondary" type="button" onclick="document.getElementById('wpInvoiceFile').click()">Attach Invoice</button>
+        <span id="wpInvoicePreview" class="muted">No invoice attached yet</span>
+      </div>
+    </div>
+    <button class="btn" style="margin-top:10px;" onclick="submitWorkshopPurchase()">Log Purchase</button>
+  </div>
+  <div class="card">
+    <h2 class="section-title">Recent Bulk Purchases</h2>
+    ${purchases.length===0 ? `<div class="empty">No purchases logged yet.</div>` : `
+    <table><tr><th>Date</th><th>By</th><th>Items</th><th>Total</th><th>Invoice</th></tr>
+    ${purchases.slice(0,30).map(p=>`<tr>
+      <td>${new Date(p.createdAt).toLocaleDateString()}</td>
+      <td>${p.purchasedByName}</td>
+      <td>${p.items.map(i=>`${i.qty}${i.unit?' '+i.unit:''} ${i.name}`).join(", ")}</td>
+      <td>Rs ${p.totalAmount.toLocaleString('en-IN')}</td>
+      <td>${p.invoiceUrl? `<a href="${p.invoiceUrl}" target="_blank">View / Print</a>` : "-"}</td>
+    </tr>`).join("")}
+    </table>`}
+  </div>` : "";
+
+  return `
+  <h1 class="page-title">Workshop</h1>
+  ${incomingHtml}
+  ${myRepairsHtml}
+  ${allRequestsHtml}
+  ${purchaseForm}`;
+}
+function workshopMyRepairCardHtml(r){
+  return `
+  <div class="doc-row" style="display:block;padding:10px 0;border-bottom:1px solid var(--border);">
+    <b>${r.vehicleReg}</b> - ${r.issueDescription} <span class="muted">(raised by ${r.raisedByName}, ${r.urgency} urgency)</span><br/>
+    ${repairStatusBadge(r.status)}
+    ${r.status==="assigned" ? `<button class="btn small" onclick="startRepairRequest('${r.id}')">Start Work</button>` : ""}
+    ${r.status==="in_progress" ? `<button class="btn small" onclick="openCompleteRepairForm('${r.id}')">Mark Complete</button>` : ""}
+    <div id="completeForm_${r.id}"></div>
+  </div>`;
+}
+async function startRepairRequest(id){
+  try{
+    await api(`/repair-requests/${id}/start`, {method:"PATCH"});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+function openCompleteRepairForm(id){
+  const el = document.getElementById(`completeForm_${id}`);
+  if(!el) return;
+  el.innerHTML = `
+    <div class="inline-form" style="margin-top:8px;">
+      <div class="f" style="flex:2;min-width:220px;"><label>What was done</label><input type="text" id="wd_${id}" placeholder="e.g. Replaced front brake liners, topped up Adblue" /></div>
+    </div>
+    <div id="partsRows_${id}">
+      <div class="inline-form parts-row">
+        <div class="f"><label>Part/Consumable</label><input type="text" class="partName" placeholder="e.g. Adblue" /></div>
+        <div class="f"><label>Qty</label><input type="number" step="0.1" class="partQty" value="1" /></div>
+        <div class="f"><label>Unit</label><input type="text" class="partUnit" placeholder="e.g. Litres" /></div>
+        <div class="f"><label>Cost (Rs)</label><input type="number" class="partCost" /></div>
+      </div>
+    </div>
+    <button class="btn small secondary" type="button" onclick="addPartRow('${id}')">+ Add another part</button><br/>
+    <button class="btn" style="margin-top:8px;" onclick="submitCompleteRepair('${id}')">Submit &amp; Create Expense</button>`;
+}
+function addPartRow(id){
+  const wrap = document.getElementById(`partsRows_${id}`);
+  const row = document.createElement("div");
+  row.className = "inline-form parts-row";
+  row.innerHTML = `
+    <div class="f"><label>Part/Consumable</label><input type="text" class="partName" /></div>
+    <div class="f"><label>Qty</label><input type="number" step="0.1" class="partQty" value="1" /></div>
+    <div class="f"><label>Unit</label><input type="text" class="partUnit" /></div>
+    <div class="f"><label>Cost (Rs)</label><input type="number" class="partCost" /></div>`;
+  wrap.appendChild(row);
+}
+async function submitCompleteRepair(id){
+  const workDone = document.getElementById(`wd_${id}`).value;
+  const rows = document.querySelectorAll(`#partsRows_${id} .parts-row`);
+  const partsUsed = Array.from(rows).map(row=>({
+    name: row.querySelector(".partName").value,
+    qty: Number(row.querySelector(".partQty").value)||1,
+    unit: row.querySelector(".partUnit").value,
+    cost: Number(row.querySelector(".partCost").value)||0,
+  })).filter(p=>p.name && p.cost>0);
+  if(!workDone || !workDone.trim()){ alert("Describe the work that was done."); return; }
+  if(!partsUsed.length){ alert("Add at least one part/consumable with its cost."); return; }
+  try{
+    await api(`/repair-requests/${id}/complete`, {method:"PATCH", body: JSON.stringify({workDone, partsUsed})});
+    alert("Repair marked complete. A vehicle expense has been created and sent for approval.");
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function assignRepairRequest(id){
+  const sel = document.getElementById(`assignTo_${id}`);
+  const assignedTo = sel ? sel.value : "";
+  if(!assignedTo){ alert("Select a staff member to assign this to."); return; }
+  try{
+    await api(`/repair-requests/${id}/assign`, {method:"PATCH", body: JSON.stringify({assignedTo})});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+function addPurchaseItemRow(){
+  const wrap = document.getElementById("purchaseItemsRows");
+  const row = document.createElement("div");
+  row.className = "inline-form purchase-item-row";
+  row.innerHTML = `
+    <div class="f"><label>Item</label><input type="text" class="wpItemName" /></div>
+    <div class="f"><label>Qty</label><input type="number" step="0.1" class="wpItemQty" /></div>
+    <div class="f"><label>Unit</label><input type="text" class="wpItemUnit" /></div>`;
+  wrap.appendChild(row);
+}
+let pendingWorkshopInvoice = null;
+function handleWorkshopInvoiceFile(e){
+  const file = e.target.files[0];
+  e.target.value = "";
+  if(!file) return;
+  downscaleImage(file, 900, 0.8, (dataUrl)=>{
+    pendingWorkshopInvoice = dataUrl;
+    const prev = document.getElementById("wpInvoicePreview");
+    if(prev) prev.innerHTML = `<img src="${dataUrl}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--border);" /> Invoice attached`;
+  });
+}
+async function submitWorkshopPurchase(){
+  const rows = document.querySelectorAll("#purchaseItemsRows .purchase-item-row");
+  const items = Array.from(rows).map(row=>({
+    name: row.querySelector(".wpItemName").value,
+    qty: Number(row.querySelector(".wpItemQty").value)||1,
+    unit: row.querySelector(".wpItemUnit").value,
+  })).filter(i=>i.name);
+  const totalAmount = Number(document.getElementById("wpTotalAmount").value);
+  const notes = document.getElementById("wpNotes").value;
+  if(!items.length){ alert("Add at least one item purchased."); return; }
+  if(!totalAmount || totalAmount<=0){ alert("Enter a valid total amount."); return; }
+  if(!pendingWorkshopInvoice){ alert("Attach a photo/scan of the invoice before submitting."); return; }
+  try{
+    await api("/workshop-purchases", {method:"POST", body: JSON.stringify({items, totalAmount, notes, invoice: pendingWorkshopInvoice})});
+    pendingWorkshopInvoice = null;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+
 // ================= PAYROLL =================
 // Two pieces per person, mirroring the server: a recurring profile (base
 // salary + components like ESI/PF/Gratuity - set up once by HR, applies
@@ -3835,6 +4124,9 @@ Object.assign(window, {
   toggleSubvendorDetail, addSubvendor, linkSubvendorVehicle, reviseSubvendorBilling, unlinkSubvendorVehicle,
   recordSubvendorPayment, settleSubvendorAdvance, recordMySubvendorPayment,
   toggleOdometerVerifyFilter, verifyOdometerReading, manualOdometerEntry,
+  submitRepairRequest, cancelRepairRequest, assignRepairRequest, startRepairRequest,
+  openCompleteRepairForm, addPartRow, submitCompleteRepair,
+  addPurchaseItemRow, handleWorkshopInvoiceFile, submitWorkshopPurchase,
 });
 
 boot();

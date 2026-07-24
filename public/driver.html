@@ -216,7 +216,7 @@ async function loadActiveTabData(){
   if(driverTab==="upcoming") await Promise.all([fetchMonthTrips(), fetchMyLeaveRequests()]);
   else if(driverTab==="profile") await Promise.all([fetchPayslip(), fetchAttendance()]);
   else if(driverTab==="documents") await fetchDocuments();
-  else await fetchCurrentTrip(); // "current" tab, and the default
+  else await Promise.all([fetchCurrentTrip(), fetchMyRepairRequests()]); // "current" tab, and the default
 }
 async function setDriverTab(tab){
   driverTab = tab;
@@ -273,7 +273,7 @@ async function boot(){
       // to Upcoming Trips / Profile / Documents.
       startLocationPings(); startPolling();
       driverTab = "current";
-      await fetchCurrentTrip();
+      await Promise.all([fetchCurrentTrip(), fetchMyRepairRequests()]);
     }
     render();
   }catch(e){
@@ -559,7 +559,7 @@ function driverTabContentHtml(){
 // so the driver can check Documents/Profile/Upcoming Trips while that
 // countdown is still running if they want to.
 function currentTripTabHtml(){
-  if(shift.status==="awaiting_odometer") return odometerOpenCardHtml();
+  if(shift.status==="awaiting_odometer") return odometerOpenCardHtml() + repairRequestCardHtml();
   let tripHtml;
   if(!currentTrip){
     tripHtml = `<div class="card"><h2 class="section-title">Current Trip</h2><div class="empty">No trip currently running. Start one from the Upcoming Trips tab.</div></div>`;
@@ -594,7 +594,55 @@ function currentTripTabHtml(){
     </div>`;
   }
   const shiftHtml = shift.status==="ready_to_logout" ? logoutCardHtml() : closingOdometerCardHtml();
-  return tripHtml + shiftHtml;
+  return tripHtml + shiftHtml + repairRequestCardHtml();
+}
+// Report a vehicle problem straight to Workshop - lands with the Workshop
+// Manager, who assigns it to a Mechanic/Electrician/Helper. Available any
+// time there's an active shift, regardless of trip/odometer state.
+let repairRequestsMine = [];
+let repairSubmitting = false;
+function repairRequestCardHtml(){
+  const recent = repairRequestsMine.slice(0,5);
+  const statusLabel = {requested:"Requested", assigned:"Assigned", in_progress:"In Progress", completed:"Completed", cancelled:"Cancelled"};
+  return `
+  <div class="card">
+    <h2 class="section-title">Report a Vehicle Problem</h2>
+    <p class="muted">Raise a repair request for your vehicle - Workshop will pick it up and assign a mechanic.</p>
+    <div class="field">
+      <label>Urgency</label>
+      <select id="rrUrgencyDriver">
+        <option value="normal">Normal</option>
+        <option value="low">Low</option>
+        <option value="high">High</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>What's wrong?</label>
+      <input type="text" id="rrIssueDriver" placeholder="e.g. Brake noise, AC not cooling, Adblue low" />
+    </div>
+    <button class="big-btn secondary" ${repairSubmitting?"disabled":""} onclick="submitDriverRepairRequest()">${repairSubmitting?'<span class="spinner"></span>Sending...':"Send to Workshop"}</button>
+    ${recent.length ? `
+    <div style="margin-top:12px;">
+      <p class="muted" style="margin-bottom:6px;">Your recent requests:</p>
+      ${recent.map(r=>`<div class="doc-row" style="display:block;"><b>${r.issueDescription}</b><br/><span class="muted">${statusLabel[r.status]||r.status}${r.assignedToName? ' - '+r.assignedToName:''}</span></div>`).join("")}
+    </div>` : ""}
+  </div>`;
+}
+async function submitDriverRepairRequest(){
+  if(repairSubmitting) return;
+  const issueDescription = document.getElementById("rrIssueDriver").value;
+  const urgency = document.getElementById("rrUrgencyDriver").value;
+  if(!issueDescription || !issueDescription.trim()){ lastError = "Describe the problem before sending it to Workshop."; render(); return; }
+  lastError = "";
+  repairSubmitting = true; render();
+  try{
+    const r = await api("/driver-auth/repair-requests", {method:"POST", body: JSON.stringify({issueDescription, urgency})});
+    repairRequestsMine.unshift(r);
+  }catch(e){ lastError = e.message; }
+  repairSubmitting = false; render();
+}
+async function fetchMyRepairRequests(){
+  try{ repairRequestsMine = await api("/driver-auth/repair-requests"); }catch(e){}
 }
 function odometerOpenCardHtml(){
   const { remainMs, text } = odometerCountdownParts();

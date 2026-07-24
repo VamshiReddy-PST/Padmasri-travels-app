@@ -264,6 +264,23 @@ function backfillDefaults() {
       e.siteId = v ? v.siteId || null : null;
     }
   });
+  // ---------- Workshop / Maintenance module ----------
+  if (!Array.isArray(db.repairRequests)) db.repairRequests = [];
+  if (!Array.isArray(db.workshopPurchases)) db.workshopPurchases = [];
+  (db.repairRequests || []).forEach((r) => {
+    if (r.assignedTo === undefined) r.assignedTo = null;
+    if (r.assignedToName === undefined) r.assignedToName = null;
+    if (r.assignedBy === undefined) r.assignedBy = null;
+    if (r.assignedByName === undefined) r.assignedByName = null;
+    if (r.assignedAt === undefined) r.assignedAt = null;
+    if (r.startedAt === undefined) r.startedAt = null;
+    if (r.completedAt === undefined) r.completedAt = null;
+    if (r.workDone === undefined) r.workDone = "";
+    if (r.partsUsed === undefined) r.partsUsed = [];
+    if (r.totalCost === undefined) r.totalCost = null;
+    if (r.expenseId === undefined) r.expenseId = null;
+    if (r.urgency === undefined) r.urgency = "normal";
+  });
 }
 
 // MongoDB Atlas's free (M0) tier doesn't include automatic cloud backups -
@@ -403,9 +420,21 @@ function roleLabelServer(role) {
       owner: "Owner",
       hr: "HR",
       bookings: "Bookings Department",
+      workshop_manager: "Workshop Manager",
+      workshop_supervisor: "Workshop Supervisor",
+      mechanic: "Mechanic",
+      helper: "Helper",
+      electrician: "Electrician",
     }[role] || role
   );
 }
+// Everyone on the workshop/maintenance side, as distinct from field staff.
+const WORKSHOP_STAFF_ROLES = ["workshop_manager", "workshop_supervisor", "mechanic", "helper", "electrician"];
+// Staff roles allowed to raise a repair request, per the Owner's explicit
+// list ("Driver, Supervisor, Operations Supervisor and Area Supervisor").
+// Drivers raise theirs through the separate driver-auth endpoint below,
+// since drivers authenticate on a different token system entirely.
+const REPAIR_REQUEST_ROLES = ["site_supervisor", "ops_manager", "area_supervisor"];
 
 async function audit(user, action, detail) {
   db.auditLog.unshift({
@@ -617,15 +646,25 @@ app.get("/api/meta", requireAuth, (req, res) => {
 
 // ---------- USERS (People admin) ----------
 const ADMIN_ROLES = ["ops_manager", "owner", "data_team"];
-const VALID_ROLES = ["site_supervisor", "area_supervisor", "ops_manager", "data_team", "owner", "hr", "bookings"];
+const VALID_ROLES = [
+  "site_supervisor",
+  "area_supervisor",
+  "ops_manager",
+  "data_team",
+  "owner",
+  "hr",
+  "bookings",
+  ...WORKSHOP_STAFF_ROLES,
+];
 
 // People-management permission tiers:
 // - Owner can create/edit anyone, including other Owner/Ops Manager/HR accounts.
 // - HR is the primary staff onboarder: can create/edit Site Supervisor, Area
-//   Supervisor, Operations Manager, Data Team and Bookings Department
-//   accounts (everyone except Owner and other HR accounts).
+//   Supervisor, Operations Manager, Data Team, Bookings Department and every
+//   Workshop role (everyone except Owner and other HR accounts).
 // - Ops Manager can create/edit everyone EXCEPT Owner, Ops Manager, and HR
-//   accounts (so they can't touch their own tier or promote themselves).
+//   accounts (so they can't touch their own tier or promote themselves) -
+//   this includes the Workshop roles, since Ops Manager oversees Workshop too.
 // - Data Team can view the People screen (needed for corrections/audit
 //   context) but cannot create or edit anyone - enforced by simply not being
 //   in PEOPLE_EDITOR_ROLES below.
@@ -633,8 +672,8 @@ const VALID_ROLES = ["site_supervisor", "area_supervisor", "ops_manager", "data_
 const PEOPLE_EDITOR_ROLES = ["ops_manager", "owner", "hr"];
 const PEOPLE_VIEWER_ROLES = ["ops_manager", "owner", "hr", "data_team"];
 const ROLE_MANAGEMENT_ALLOWED = {
-  hr: ["site_supervisor", "area_supervisor", "ops_manager", "data_team", "bookings"],
-  ops_manager: ["site_supervisor", "area_supervisor", "data_team", "bookings"],
+  hr: ["site_supervisor", "area_supervisor", "ops_manager", "data_team", "bookings", ...WORKSHOP_STAFF_ROLES],
+  ops_manager: ["site_supervisor", "area_supervisor", "data_team", "bookings", ...WORKSHOP_STAFF_ROLES],
 };
 function canManageUserRole(actorRole, targetRole) {
   if (actorRole === "owner") return true;
@@ -3749,6 +3788,288 @@ app.post(
       `${req.user.name} manually entered the ${point === "open" ? "opening" : "closing"} odometer reading (${odometer} km) for ${driver ? driver.name : shift.driverId} after code verification - ₹${MISSED_ODOMETER_ENTRY_PENALTY} penalty applied`
     );
     res.json({ shift: publicDriverShiftRow({ shift, vehicle }, req.user), penalty });
+  })
+);
+
+// ---------- WORKSHOP / MAINTENANCE MODULE ----------
+// Repair request lifecycle: requested -> assigned -> in_progress -> completed
+// (or cancelled at any point before completion). Per the Owner's explicit
+// call, requests always land with the Workshop Manager first, who assigns
+// each one to a specific staff member - there's no open-queue self-claiming.
+const REPAIR_REQUEST_STATUSES = ["requested", "assigned", "in_progress", "completed", "cancelled"];
+function repairRequestVehicle(r) {
+  return db.vehicles.find((v) => v.id === r.vehicleId) || null;
+}
+// Same visibility shape as driverShiftsVisibleTo/visibleVehiclesFor - a
+// Site Supervisor only sees requests for their own vehicles, an Area
+// Supervisor sees requests for vehicles under the supervisors they manage,
+// everyone else who has any business with Workshop (Ops Manager, Owner, and
+// every Workshop role) sees all of it, since it's a small central team.
+function repairRequestsVisibleTo(user) {
+  if (user.role === "site_supervisor") {
+    const myVehicleIds = new Set(visibleVehiclesFor(user).map((v) => v.id));
+    return db.repairRequests.filter((r) => myVehicleIds.has(r.vehicleId));
+  }
+  if (user.role === "area_supervisor") {
+    const myVehicleIds = new Set(visibleVehiclesFor(user).map((v) => v.id));
+    return db.repairRequests.filter((r) => myVehicleIds.has(r.vehicleId));
+  }
+  return db.repairRequests.slice();
+}
+function publicRepairRequest(r) {
+  const vehicle = repairRequestVehicle(r);
+  return Object.assign({}, r, {
+    vehicleReg: vehicle ? vehicle.reg : "Unknown vehicle",
+    siteId: vehicle ? vehicle.siteId || null : null,
+    siteName: vehicle && vehicle.siteId ? siteNameServer(vehicle.siteId) : "",
+  });
+}
+async function createRepairRequest({ vehicleId, issueDescription, urgency }, raisedBy, raisedByRole, raisedByName) {
+  const vehicle = db.vehicles.find((v) => v.id === vehicleId);
+  if (!vehicle) return { error: "Vehicle not found." };
+  if (!issueDescription || !issueDescription.trim()) return { error: "Please describe the issue." };
+  const req_ = {
+    id: uid("rr"),
+    vehicleId,
+    raisedBy,
+    raisedByRole,
+    raisedByName,
+    issueDescription: issueDescription.trim(),
+    urgency: ["low", "normal", "high"].includes(urgency) ? urgency : "normal",
+    status: "requested",
+    assignedTo: null,
+    assignedToName: null,
+    assignedBy: null,
+    assignedByName: null,
+    assignedAt: null,
+    startedAt: null,
+    completedAt: null,
+    workDone: "",
+    partsUsed: [],
+    totalCost: null,
+    expenseId: null,
+    createdAt: nowIso(),
+  };
+  db.repairRequests.unshift(req_);
+  await save();
+  await audit({ id: raisedBy, name: raisedByName }, "repair_request_raised", `${raisedByName} raised a repair request for ${vehicle.reg}: ${req_.issueDescription}`);
+  return { repairRequest: req_ };
+}
+
+app.get(
+  "/api/repair-requests",
+  requireAuth,
+  requireRole(...REPAIR_REQUEST_ROLES, ...WORKSHOP_STAFF_ROLES, "owner"),
+  h(async (req, res) => {
+    const rows = repairRequestsVisibleTo(req.user)
+      .map(publicRepairRequest)
+      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+    res.json(rows);
+  })
+);
+
+app.post(
+  "/api/repair-requests",
+  requireAuth,
+  requireRole(...REPAIR_REQUEST_ROLES),
+  h(async (req, res) => {
+    const { vehicleId, issueDescription, urgency } = req.body || {};
+    if (req.user.role === "site_supervisor") {
+      const vehicle = db.vehicles.find((v) => v.id === vehicleId);
+      if (!vehicle || vehicle.supervisorId !== req.user.id) {
+        return res.status(403).json({ error: "You can only raise repair requests for your own vehicles." });
+      }
+    }
+    const result = await createRepairRequest({ vehicleId, issueDescription, urgency }, req.user.id, req.user.role, req.user.name);
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json(publicRepairRequest(result.repairRequest));
+  })
+);
+
+// Workshop Manager assigns a requested repair to a specific staff member -
+// the only way a request moves off the incoming queue, per the Owner's
+// explicit choice over an open self-service queue.
+app.patch(
+  "/api/repair-requests/:id/assign",
+  requireAuth,
+  requireRole("workshop_manager", "owner"),
+  h(async (req, res) => {
+    const r = db.repairRequests.find((x) => x.id === req.params.id);
+    if (!r) return res.status(404).json({ error: "Repair request not found." });
+    if (r.status !== "requested") return res.status(400).json({ error: "This request has already been assigned or is no longer open." });
+    const { assignedTo } = req.body || {};
+    const staffUser = db.users.find((u) => u.id === assignedTo && WORKSHOP_STAFF_ROLES.includes(u.role));
+    if (!staffUser) return res.status(400).json({ error: "Select a valid Workshop staff member to assign this to." });
+    r.assignedTo = staffUser.id;
+    r.assignedToName = staffUser.name;
+    r.assignedBy = req.user.id;
+    r.assignedByName = req.user.name;
+    r.assignedAt = nowIso();
+    r.status = "assigned";
+    await save();
+    await audit(req.user, "repair_request_assigned", `${req.user.name} assigned a repair request (${repairRequestVehicle(r) ? repairRequestVehicle(r).reg : r.vehicleId}) to ${staffUser.name}`);
+    res.json(publicRepairRequest(r));
+  })
+);
+
+app.patch(
+  "/api/repair-requests/:id/start",
+  requireAuth,
+  requireRole(...WORKSHOP_STAFF_ROLES),
+  h(async (req, res) => {
+    const r = db.repairRequests.find((x) => x.id === req.params.id);
+    if (!r) return res.status(404).json({ error: "Repair request not found." });
+    if (r.assignedTo !== req.user.id && req.user.role !== "workshop_manager") {
+      return res.status(403).json({ error: "Only the assigned staff member can start work on this." });
+    }
+    if (r.status !== "assigned") return res.status(400).json({ error: "This request isn't in an assigned state." });
+    r.status = "in_progress";
+    r.startedAt = nowIso();
+    await save();
+    res.json(publicRepairRequest(r));
+  })
+);
+
+// Completing a repair logs exactly what was done and what parts/consumables
+// were used (each with its own cost, so "3-4 Litres of Adblue" is its own
+// line item) and auto-creates a vehicle-tagged expense for the total - the
+// same expense pipeline everything else's vehicle-cost/site-cost reporting
+// already reads from. This bypasses the normal POST /api/expenses bill-photo
+// requirement, mirroring the existing pattern for other system-generated
+// financial records (temp-driver auto-expense, missed-odometer penalty).
+app.patch(
+  "/api/repair-requests/:id/complete",
+  requireAuth,
+  requireRole(...WORKSHOP_STAFF_ROLES),
+  h(async (req, res) => {
+    const r = db.repairRequests.find((x) => x.id === req.params.id);
+    if (!r) return res.status(404).json({ error: "Repair request not found." });
+    if (r.assignedTo !== req.user.id && req.user.role !== "workshop_manager") {
+      return res.status(403).json({ error: "Only the assigned staff member can complete this." });
+    }
+    if (!["assigned", "in_progress"].includes(r.status)) return res.status(400).json({ error: "This request isn't in progress." });
+    const { workDone, partsUsed } = req.body || {};
+    if (!workDone || !workDone.trim()) return res.status(400).json({ error: "Describe the work that was done." });
+    const items = Array.isArray(partsUsed) ? partsUsed.filter((p) => p && p.name && Number(p.cost) > 0) : [];
+    if (!items.length) return res.status(400).json({ error: "Add at least one part/consumable with its cost." });
+    const totalCost = items.reduce((s, p) => s + Number(p.cost) * (Number(p.qty) || 1), 0);
+    r.workDone = workDone.trim();
+    r.partsUsed = items.map((p) => ({ name: String(p.name), qty: Number(p.qty) || 1, unit: p.unit || "", cost: Number(p.cost) }));
+    r.totalCost = Math.round(totalCost * 100) / 100;
+    r.status = "completed";
+    r.completedAt = nowIso();
+
+    const vehicle = repairRequestVehicle(r);
+    const partsList = r.partsUsed.map((p) => `${p.qty}${p.unit ? " " + p.unit : ""} ${p.name}`).join(", ");
+    const expense = {
+      id: uid("e"),
+      userId: req.user.id,
+      userName: req.user.name,
+      vehicleId: r.vehicleId,
+      siteId: vehicle ? vehicle.siteId || null : null,
+      isOfficeExpenditure: false,
+      category: "Workshop / Maintenance",
+      amount: r.totalCost,
+      description: `Repair: ${r.issueDescription} - ${partsList}`,
+      billUrl: null,
+      status: "pending",
+      decidedBy: null,
+      comment: "",
+      paymentStage: null,
+      utrNumber: null,
+      paymentUpdatedAt: null,
+      submittedAt: nowIso(),
+      repairRequestId: r.id,
+    };
+    db.expenses.unshift(expense);
+    r.expenseId = expense.id;
+    await save();
+    await audit(req.user, "repair_request_completed", `${req.user.name} completed a repair for ${vehicle ? vehicle.reg : r.vehicleId} - ₹${r.totalCost} (${partsList})`);
+    res.json({ repairRequest: publicRepairRequest(r), expense });
+  })
+);
+
+app.patch(
+  "/api/repair-requests/:id/cancel",
+  requireAuth,
+  requireRole(...REPAIR_REQUEST_ROLES, "workshop_manager", "owner"),
+  h(async (req, res) => {
+    const r = db.repairRequests.find((x) => x.id === req.params.id);
+    if (!r) return res.status(404).json({ error: "Repair request not found." });
+    if (["completed", "cancelled"].includes(r.status)) return res.status(400).json({ error: "This request can no longer be cancelled." });
+    if (req.user.role === "site_supervisor" && r.raisedBy !== req.user.id) {
+      return res.status(403).json({ error: "You can only cancel requests you raised." });
+    }
+    r.status = "cancelled";
+    await save();
+    res.json(publicRepairRequest(r));
+  })
+);
+
+// Drivers raise repair requests for whichever vehicle they're currently
+// assigned to, from their own driver-auth session.
+app.post(
+  "/api/driver-auth/repair-requests",
+  driverAuth,
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.driverId === req.driver.id);
+    if (!vehicle) return res.status(400).json({ error: "No vehicle is currently assigned to you." });
+    const { issueDescription, urgency } = req.body || {};
+    const result = await createRepairRequest({ vehicleId: vehicle.id, issueDescription, urgency }, req.driver.id, "driver", req.driver.name);
+    if (result.error) return res.status(400).json({ error: result.error });
+    res.json(publicRepairRequest(result.repairRequest));
+  })
+);
+app.get(
+  "/api/driver-auth/repair-requests",
+  driverAuth,
+  h(async (req, res) => {
+    const rows = db.repairRequests
+      .filter((r) => r.raisedBy === req.driver.id)
+      .map(publicRepairRequest)
+      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+    res.json(rows);
+  })
+);
+
+// ---------- Workshop bulk purchases (stock intake + invoice for Finance) ----------
+// Distinct from a repair's per-vehicle parts expense: this is Workshop
+// buying spares/consumables in bulk ahead of time, not tied to one vehicle.
+// The uploaded invoice photo is what lets Finance print it immediately.
+app.get(
+  "/api/workshop-purchases",
+  requireAuth,
+  requireRole(...WORKSHOP_STAFF_ROLES, "owner", "ops_manager"),
+  h(async (req, res) => {
+    res.json(db.workshopPurchases.slice().sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")));
+  })
+);
+app.post(
+  "/api/workshop-purchases",
+  requireAuth,
+  requireRole(...WORKSHOP_STAFF_ROLES),
+  h(async (req, res) => {
+    const { items, totalAmount, invoice, notes } = req.body || {};
+    const cleanItems = Array.isArray(items) ? items.filter((i) => i && i.name) : [];
+    if (!cleanItems.length) return res.status(400).json({ error: "Add at least one item purchased." });
+    if (!totalAmount || Number(totalAmount) <= 0) return res.status(400).json({ error: "A valid total amount is required." });
+    if (!invoice) return res.status(400).json({ error: "Upload a photo/scan of the invoice." });
+    const invoiceUrl = await savePhoto(invoice, "workshop_invoice");
+    if (!invoiceUrl) return res.status(400).json({ error: "Could not read the invoice image - please try again." });
+    const purchase = {
+      id: uid("wp"),
+      purchasedBy: req.user.id,
+      purchasedByName: req.user.name,
+      items: cleanItems.map((i) => ({ name: String(i.name), qty: Number(i.qty) || 1, unit: i.unit || "" })),
+      totalAmount: Number(totalAmount),
+      invoiceUrl,
+      notes: notes || "",
+      createdAt: nowIso(),
+    };
+    db.workshopPurchases.unshift(purchase);
+    await save();
+    await audit(req.user, "workshop_purchase", `${req.user.name} logged a bulk purchase of ₹${purchase.totalAmount} (${cleanItems.map((i) => i.name).join(", ")})`);
+    res.json(purchase);
   })
 );
 
