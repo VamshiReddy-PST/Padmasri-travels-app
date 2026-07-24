@@ -196,6 +196,23 @@ function vehicleRouteStartingPoint(v){
   const r = c ? (c.routes||[]).find(x=>x.id===v.routeId) : null;
   return r ? (r.name||"-") : "-";
 }
+// Free, no-API-key Google Maps deep links - same pattern used in driver.html
+// for pickup/drop points, extended here for both trip locations and driver
+// live-location pings.
+function mapsSearchUrl(query){
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
+}
+function mapsLatLngUrl(lat, lng){
+  return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+}
+function mapsLinkHtml(text, label){
+  if(!text) return "-";
+  return `${text} <a href="${mapsSearchUrl(text)}" target="_blank" rel="noopener">(Open in Maps)</a>`;
+}
+function mapsLocationLinkHtml(lat, lng, label){
+  if(lat==null || lng==null) return "";
+  return `<a href="${mapsLatLngUrl(lat, lng)}" target="_blank" rel="noopener">${label||"Open in Maps"}</a>`;
+}
 
 // ---------- bootstrap ----------
 async function boot(){
@@ -3153,8 +3170,8 @@ async function tripsScreen(){
           <td>${t.date}${t.scheduledTime? " "+t.scheduledTime : ""}</td>
           <td>${v? v.reg : t.vehicleId}</td>
           <td>${driverName(t.driverId)}</td>
-          <td>${t.pickupPoint || "-"}</td>
-          <td>${t.dropPoint || "-"}</td>
+          <td>${mapsLinkHtml(t.pickupPoint)}</td>
+          <td>${mapsLinkHtml(t.dropPoint)}</td>
           <td>${tripStatusBadge(t.status)}</td>
           <td>
             ${t.status!=="cancelled" && t.status!=="completed" ? `<button class="btn small secondary" onclick="cancelTrip('${t.id}')">Cancel</button>` : ""}
@@ -3482,11 +3499,18 @@ async function toggleOdometerVerifyFilter(checked){
   odometerVerifyPendingOnly = checked;
   await renderMain();
 }
+function driverLocationLineHtml(loc){
+  if(!loc) return "Location: not available yet";
+  const sourceLabel = {live:"Live tracking", closing_reading:"From closing reading", opening_reading:"From opening reading", login:"From login"}[loc.source] || "Last known";
+  const when = loc.ts ? new Date(loc.ts).toLocaleString() : "";
+  return `Location (${sourceLabel}${when? ', '+when:''}): ${mapsLocationLinkHtml(loc.lat, loc.lng, "Open in Maps")}`;
+}
 function odometerShiftCardHtml(r){
   return `
   <div class="card">
     <h2 class="section-title">${r.driverName}${r.driverPhone? ' &middot; '+r.driverPhone:''} - ${r.vehicleReg||'No vehicle assigned'} <span class="muted" style="font-weight:400;">(${r.date||'-'})</span></h2>
     <div class="muted" style="margin-bottom:8px;">${r.hasSupervisor ? `Supervisor: ${r.supervisorName}` : '<span class="badge rejected">No Supervisor Assigned</span>'}</div>
+    <div class="muted" style="margin-bottom:8px;">${driverLocationLineHtml(r.lastLocation)}</div>
     ${odometerPointBlockHtml(r.id,'open',r.open,r.canAct)}
     ${odometerPointBlockHtml(r.id,'close',r.close,r.canAct)}
   </div>`;

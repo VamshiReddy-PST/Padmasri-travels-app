@@ -3541,6 +3541,27 @@ function driverShiftsVisibleTo(user) {
 function odometerPointHtmlSafe(point) {
   return ["open", "close"].includes(point);
 }
+// Most recent GPS ping for a shift, falling back to whatever fixed lat/lng
+// we do have (opening odometer reading, then login) so a live-tracking
+// "Open in Maps" link still shows *something* even before the driver's
+// phone has sent a single background ping yet.
+function lastKnownLocationFor(shift) {
+  const pings = (db.driverLocationLogs || []).filter((p) => p.shiftId === shift.id);
+  if (pings.length) {
+    const latest = pings.reduce((a, b) => ((a.ts || "") > (b.ts || "") ? a : b));
+    return { lat: latest.lat, lng: latest.lng, ts: latest.ts, source: "live" };
+  }
+  if (shift.odometerCloseLat != null && shift.odometerCloseLng != null) {
+    return { lat: shift.odometerCloseLat, lng: shift.odometerCloseLng, ts: shift.odometerCloseAt, source: "closing_reading" };
+  }
+  if (shift.odometerOpenLat != null && shift.odometerOpenLng != null) {
+    return { lat: shift.odometerOpenLat, lng: shift.odometerOpenLng, ts: shift.odometerOpenAt, source: "opening_reading" };
+  }
+  if (shift.loginLat != null && shift.loginLng != null) {
+    return { lat: shift.loginLat, lng: shift.loginLng, ts: shift.loginAt, source: "login" };
+  }
+  return null;
+}
 function publicDriverShiftRow(entry, user) {
   const { shift: s, vehicle } = entry;
   const driver = db.drivers.find((d) => d.id === s.driverId);
@@ -3581,6 +3602,7 @@ function publicDriverShiftRow(entry, user) {
     loginAt: s.loginAt,
     open: pointView("Open"),
     close: pointView("Close"),
+    lastLocation: lastKnownLocationFor(s),
     // Only meaningful to whoever can actually act on this shift - never
     // handed to a Data Team member looking at someone else's supervised
     // vehicle, since it's not their call to make a manual entry there.
