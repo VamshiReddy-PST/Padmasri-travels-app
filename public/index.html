@@ -489,7 +489,7 @@ async function routeView(){
     if(tab==="expenses_view") return expensesScreen(false);
     if(tab==="usage") return vehicleUsageScreen();
     if(tab==="assignments") return supervisorAssignmentsScreen();
-    if(tab==="reports") return reportsScreen();
+    if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : reportsScreen();
     if(tab==="routes") return routesViewScreen();
   }
   if(role==="ops_manager"){
@@ -499,7 +499,7 @@ async function routeView(){
     if(tab==="trips") return tripsScreen();
     if(tab==="subvendors") return subvendorsScreen();
     if(tab==="people") return peopleScreen();
-    if(tab==="reports") return reportsScreen();
+    if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : reportsScreen();
     if(tab==="backup") return backupDownloadsScreen();
   }
   if(role==="data_team"){
@@ -523,7 +523,7 @@ async function routeView(){
     if(tab==="people") return peopleScreen();
     if(tab==="attendance") return hrAttendanceScreen();
     if(tab==="audit") return auditScreen();
-    if(tab==="reports") return reportsScreen();
+    if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : reportsScreen();
     if(tab==="backup") return backupDownloadsScreen();
   }
   if(role==="bookings"){
@@ -2633,7 +2633,69 @@ function reportsScreen(){
   return `
   <h1 class="page-title">Reports</h1>
   <div class="banner">Download the data behind this app to analyze however you like - each file only includes what you're already able to see in the app.</div>
+  <div class="card" style="cursor:pointer" onclick="goto('cost_analysis')" title="Click to see vehicle-wise and site-wise cost totals">
+    <div class="flex-between">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:6px;">Total Operational Cost Analysis &rsaquo;</h2>
+      <span class="muted">Vehicle-wise + Site-wise - click to view</span>
+    </div>
+    <p class="muted" style="margin:0;">Every approved expense tagged by Vehicle and Site, plus Office Expenditure split evenly across all sites.</p>
+  </div>
   ${cards}`;
+}
+// ================= TOTAL OPERATIONAL COST ANALYSIS =================
+// Vehicle-wise and Site-wise spend, built from GET /api/reports/operational-cost-analysis.
+// Only approved expenses count; Office Expenditure (no vehicle/site of its
+// own) is split evenly across every site so each site's "Total Operational
+// Cost" reflects its fair share of shared overhead, per the Owner's request.
+async function costAnalysisScreen(){
+  let d;
+  try{
+    const headers = {};
+    if(authToken) headers["Authorization"] = "Bearer " + authToken;
+    const res = await fetch(`${API}/reports/operational-cost-analysis`, {headers});
+    if(!res.ok) throw new Error((await res.json().catch(()=>({}))).error || "Could not load cost analysis.");
+    d = await res.json();
+  }catch(e){
+    return `<h1 class="page-title">Total Operational Cost Analysis</h1>
+    <button class="btn small secondary" onclick="goto('reports')">&larr; Back to Reports</button>
+    <div class="banner error" style="margin-top:12px;">${e.message}</div>`;
+  }
+  const siteRows = d.sites.map(s => `<tr>
+    <td>${s.siteName}</td>
+    <td>Rs ${s.directVehicleCost.toLocaleString('en-IN')}</td>
+    <td>Rs ${s.officeExpenditureShare.toLocaleString('en-IN')}</td>
+    <td><strong>Rs ${s.totalOperationalCost.toLocaleString('en-IN')}</strong></td>
+  </tr>`).join("") || `<tr><td colspan="4" class="empty">No sites configured yet.</td></tr>`;
+  const vehicleRows = d.vehicles.map(v => `<tr>
+    <td>${v.reg}</td>
+    <td>${v.siteName || "-"}</td>
+    <td>${v.clientName || "-"}</td>
+    <td>${v.count}</td>
+    <td><strong>Rs ${v.total.toLocaleString('en-IN')}</strong></td>
+  </tr>`).join("") || `<tr><td colspan="5" class="empty">No approved vehicle expenses yet.</td></tr>`;
+  return `
+  <h1 class="page-title">Total Operational Cost Analysis</h1>
+  <button class="btn small secondary" onclick="goto('reports')">&larr; Back to Reports</button>
+  <div class="grid cols-4" style="margin:12px 0 18px;">
+    <div class="kpi good"><div class="num">Rs ${d.grandTotal.toLocaleString('en-IN')}</div><div class="label">Grand Total (approved)</div></div>
+    <div class="kpi"><div class="num">Rs ${d.officeExpenditureTotal.toLocaleString('en-IN')}</div><div class="label">Office Expenditure</div></div>
+    <div class="kpi"><div class="num">Rs ${d.officeExpenditureSharePerSite.toLocaleString('en-IN')}</div><div class="label">Office Share / Site (${d.siteCount} sites)</div></div>
+    <div class="kpi warn"><div class="num">Rs ${d.pendingTotal.toLocaleString('en-IN')}</div><div class="label">Pending (not yet counted)</div></div>
+  </div>
+  <div class="card">
+    <h2 class="section-title">Site-wise Total Operational Cost</h2>
+    <p class="muted">Direct = vehicle expenses tagged to that site. Office Share = Office Expenditure split evenly across all sites.</p>
+    <table><tr><th>Site</th><th>Direct Vehicle Cost</th><th>Office Share</th><th>Total Operational Cost</th></tr>
+    ${siteRows}
+    </table>
+    ${d.noSiteVehicleCost ? `<p class="muted" style="margin-top:8px;">Rs ${d.noSiteVehicleCost.toLocaleString('en-IN')} in vehicle expenses are tagged to vehicles with no Site assigned, and are not included in any site's total above.</p>` : ""}
+  </div>
+  <div class="card">
+    <h2 class="section-title">Vehicle-wise Expenditure</h2>
+    <table><tr><th>Vehicle</th><th>Site</th><th>Client</th><th>Expense Count</th><th>Total</th></tr>
+    ${vehicleRows}
+    </table>
+  </div>`;
 }
 async function downloadReport(dataset, format){
   const fromEl = document.getElementById(`rep_from_${dataset}`);
@@ -2888,10 +2950,14 @@ async function priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpen
     </div>
   </div>
 
-  <div class="card">
-    <h2 class="section-title">Document expiry alerts (&lt;15 days)</h2>
+  <div class="card" style="cursor:pointer" onclick="goto('dashboard_detail',{metric:'expiring_docs'})" title="Click to see the full list and act on it">
+    <div class="flex-between">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:6px;">Document expiry alerts (&lt;15 days) &rsaquo;</h2>
+      <span class="muted">${expiringDocs.length} document(s) - click to view</span>
+    </div>
     <table><tr><th>Vehicle</th><th>Document</th><th>Status</th></tr>
-    ${expiringDocs.map(d=>`<tr><td>${d.reg}</td><td>${d.docType}</td><td><span class="badge low">${d.daysLeft<0? 'EXPIRED': d.daysLeft+' days left'}</span></td></tr>`).join("") || "<tr><td colspan='3' class='empty'>None</td></tr>"}
+    ${expiringDocs.slice(0,8).map(d=>`<tr><td>${d.reg}</td><td>${d.docType}</td><td><span class="badge low">${d.daysLeft<0? 'EXPIRED': d.daysLeft+' days left'}</span></td></tr>`).join("") || "<tr><td colspan='3' class='empty'>None</td></tr>"}
+    ${expiringDocs.length>8 ? `<tr><td colspan="3" class="muted" style="text-align:center;">+ ${expiringDocs.length-8} more - click to see all</td></tr>` : ""}
     </table>
   </div>
 

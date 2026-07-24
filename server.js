@@ -259,6 +259,10 @@ function backfillDefaults() {
     if (e.paymentStage === undefined) e.paymentStage = e.status === "approved" ? "approved" : null;
     if (e.utrNumber === undefined) e.utrNumber = null;
     if (e.paymentUpdatedAt === undefined) e.paymentUpdatedAt = null;
+    if (e.siteId === undefined) {
+      const v = e.vehicleId ? (db.vehicles || []).find((veh) => veh.id === e.vehicleId) : null;
+      e.siteId = v ? v.siteId || null : null;
+    }
   });
 }
 
@@ -1833,11 +1837,19 @@ app.post(
     }
     const billUrl = await savePhoto(bill, "bill");
     if (!billUrl) return res.status(400).json({ error: "Could not read the bill photo - please try again." });
+    // Every vehicle-tagged expense is snapshotted with the vehicle's Site at
+    // the moment it's filed - not looked up live later - so cost-by-site
+    // reporting stays accurate even if the vehicle moves sites afterward.
+    // Office Expenditure has no vehicle/site of its own; it gets divided
+    // across every site when computing total operational cost per site (see
+    // /api/reports/site-cost-analysis).
+    const expenseVehicle = !officeExpenditure && vehicleId ? db.vehicles.find((v) => v.id === vehicleId) : null;
     const expense = {
       id: uid("e"),
       userId: req.user.id,
       userName: req.user.name,
       vehicleId: officeExpenditure ? null : vehicleId,
+      siteId: expenseVehicle ? expenseVehicle.siteId || null : null,
       isOfficeExpenditure: officeExpenditure,
       category: category || "Other",
       amount: Number(amount),
@@ -4170,6 +4182,86 @@ function buildReport(dataset, user, query) {
   err.status = 400;
   throw err;
 }
+
+// ---------- Operational Cost Analysis (Vehicle-wise + Site-wise) ----------
+// Every vehicle-tagged expense already carries the vehicle's registration
+// (vehicleId) and a Site snapshot (siteId, taken at the moment it was
+// filed - see POST /api/expenses). Office Expenditure has neither, so per
+// the Owner's explicit instruction it's divided evenly across every Site
+// when computing each Site's Total Operational Cost, rather than being
+// left out of the picture entirely. Only approved expenses count as real
+// spend - pending/rejected requests aren't money that's actually gone out
+// yet.
+app.get(
+  "/api/reports/operational-cost-analysis",
+  requireAuth,
+  requireRole(...REPORT_ROLES),
+  (req, res) => {
+    const approved = db.expenses.filter((e) => e.status === "approved");
+    const pending = db.expenses.filter((e) => e.status === "pending");
+    const officeTotal = approved.filter((e) => e.isOfficeExpenditure).reduce((s, e) => s + e.amount, 0);
+    const vehicleExpenses = approved.filter((e) => e.vehicleId);
+
+    const byVehicle = {};
+    vehicleExpenses.forEach((e) => {
+      if (!byVehicle[e.vehicleId]) byVehicle[e.vehicleId] = { vehicleId: e.vehicleId, total: 0, count: 0, byCategory: {} };
+      const agg = byVehicle[e.vehicleId];
+      agg.total += e.amount;
+      agg.count += 1;
+      agg.byCategory[e.category] = (agg.byCategory[e.category] || 0) + e.amount;
+    });
+    const vehicleRows = Object.values(byVehicle)
+      .map((v) => {
+        const vehicle = db.vehicles.find((x) => x.id === v.vehicleId);
+        return {
+          vehicleId: v.vehicleId,
+          reg: vehicle ? vehicle.reg : "Unknown vehicle",
+          siteId: vehicle ? vehicle.siteId || null : null,
+          siteName: vehicle && vehicle.siteId ? siteNameServer(vehicle.siteId) : "",
+          clientName: vehicle && vehicle.clientId ? clientNameServer(vehicle.clientId) : vehicle ? "Internal / Fixed Route" : "",
+          total: Math.round(v.total * 100) / 100,
+          count: v.count,
+          byCategory: v.byCategory,
+        };
+      })
+      .sort((a, b) => b.total - a.total);
+
+    const bySite = {};
+    vehicleExpenses.forEach((e) => {
+      const key = e.siteId || "__no_site__";
+      if (!bySite[key]) bySite[key] = { siteId: e.siteId || null, direct: 0 };
+      bySite[key].direct += e.amount;
+    });
+    const siteIds = db.sites.map((s) => s.id);
+    const siteCount = siteIds.length || 1;
+    const officeShare = Math.round((officeTotal / siteCount) * 100) / 100;
+    siteIds.forEach((id) => {
+      if (!bySite[id]) bySite[id] = { siteId: id, direct: 0 };
+    });
+    const siteRows = Object.values(bySite)
+      .filter((s) => s.siteId)
+      .map((s) => ({
+        siteId: s.siteId,
+        siteName: siteNameServer(s.siteId),
+        directVehicleCost: Math.round(s.direct * 100) / 100,
+        officeExpenditureShare: officeShare,
+        totalOperationalCost: Math.round((s.direct + officeShare) * 100) / 100,
+      }))
+      .sort((a, b) => b.totalOperationalCost - a.totalOperationalCost);
+    const noSiteVehicleCost = Math.round(((bySite["__no_site__"] && bySite["__no_site__"].direct) || 0) * 100) / 100;
+
+    res.json({
+      officeExpenditureTotal: Math.round(officeTotal * 100) / 100,
+      siteCount,
+      officeExpenditureSharePerSite: officeShare,
+      vehicles: vehicleRows,
+      sites: siteRows,
+      noSiteVehicleCost,
+      pendingTotal: Math.round(pending.reduce((s, e) => s + e.amount, 0) * 100) / 100,
+      grandTotal: Math.round((vehicleExpenses.reduce((s, e) => s + e.amount, 0) + officeTotal) * 100) / 100,
+    });
+  }
+);
 
 app.get(
   "/api/reports/:dataset",
