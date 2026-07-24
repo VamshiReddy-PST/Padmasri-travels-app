@@ -2365,7 +2365,8 @@ async function driversCardHtml(){
   });
   const rows = sorted.map(d=>{
     const summary = mileageSummary[d.id];
-    return `<tr>
+    const isActive = d.active !== false;
+    return `<tr ${isActive?'':'style="opacity:.6;background:#fafafa"'}>
       <td><b>${d.name}</b></td>
       <td>${d.phone || "-"}</td>
       <td>${d.licenseNumber || "-"}</td>
@@ -2373,16 +2374,17 @@ async function driversCardHtml(){
       <td>${d.drivingLevel || "-"}</td>
       <td>${d.performanceScore!=null ? d.performanceScore : '<span class="muted">Not yet rated</span>'}</td>
       <td>${driverMileageLabel(summary)}</td>
+      <td>${isActive ? '<span class="badge ok">Active</span>' : '<span class="badge fail">Left</span>'}</td>
       <td>${canEditAtAll ? `<button class="btn small secondary" onclick="toggleDriverDetails('${d.id}')">${editingDriverId===d.id?'Close':'Details'}</button>` : ''}</td>
     </tr>
-    ${editingDriverId===d.id ? `<tr><td colspan="8">${driverEditorHtml(d)}</td></tr>` : ''}`;
+    ${editingDriverId===d.id ? `<tr><td colspan="9">${driverEditorHtml(d)}</td></tr>` : ''}`;
   }).join("");
   return `
   <div class="card">
     <h2 class="section-title">Drivers (${meta.drivers.length})</h2>
     <div class="muted" style="margin-bottom:8px;">Most recently joined first. Performance scores will appear here once client ratings are collected on the driver dashboard.</div>
-    <table><tr><th>Name</th><th>Mobile</th><th>License No.</th><th>Date of Joining</th><th>Driving Level</th><th>Performance</th><th>Mileage / Efficiency</th><th></th></tr>
-    ${rows || "<tr><td colspan='8' class='empty'>No drivers yet.</td></tr>"}
+    <table><tr><th>Name</th><th>Mobile</th><th>License No.</th><th>Date of Joining</th><th>Driving Level</th><th>Performance</th><th>Mileage / Efficiency</th><th>Status</th><th></th></tr>
+    ${rows || "<tr><td colspan='9' class='empty'>No drivers yet.</td></tr>"}
     </table>
     ${canEditAtAll ? `
     <form class="inline-form" onsubmit="return addDriverFull(event)">
@@ -2488,7 +2490,114 @@ function driverEditorHtml(d){
         <button type="button" class="btn small secondary" onclick="saveDriverCertificate('${d.id}','police')">Upload</button>
       </div>
     </div>
+    ${driverLifecycleUniformHtml(d)}
   </div>`;
+}
+// Employment lifecycle (join/leave/rehire history) and uniform-issue
+// tracking, shown at the bottom of a driver's Details panel. The driver's
+// `id` never changes across leave/rejoin cycles - `employmentHistory` is an
+// append-only list of stints, so HR can always see the full history before
+// deciding whether to let someone rejoin.
+function monthsBetweenDatesClient(fromStr, toStr){
+  if(!fromStr) return null;
+  const from = new Date(fromStr+"T00:00:00Z");
+  const to = new Date((toStr||todayStr())+"T00:00:00Z");
+  let months = (to.getUTCFullYear()-from.getUTCFullYear())*12 + (to.getUTCMonth()-from.getUTCMonth());
+  if(to.getUTCDate() < from.getUTCDate()) months -= 1;
+  return Math.max(0, months);
+}
+function driverLifecycleUniformHtml(d){
+  const isActive = d.active !== false;
+  const hist = Array.isArray(d.employmentHistory) ? d.employmentHistory : [];
+  const currentStint = hist.length ? hist[hist.length-1] : null;
+  const uniforms = Array.isArray(d.uniformHistory) ? d.uniformHistory : [];
+  const currentUniform = uniforms.length ? uniforms[uniforms.length-1] : null;
+  const uniformMonths = currentUniform ? monthsBetweenDatesClient(currentUniform.issuedDate, todayStr()) : null;
+  const uniformDue = isActive && currentUniform && uniformMonths!=null && uniformMonths>=12;
+
+  const historyRows = hist.slice().reverse().map(s=>`
+    <tr>
+      <td>${s.joinedDate||'-'}</td>
+      <td>${s.leftDate||'<span class="muted">Currently active</span>'}</td>
+      <td>${s.exitReason||'-'}</td>
+      <td>${s.rehireEligible===null||s.rehireEligible===undefined?'-':(s.rehireEligible?'<span class="badge ok">Yes</span>':'<span class="badge fail">No</span>')}</td>
+    </tr>`).join("");
+
+  const uniformRows = uniforms.slice().reverse().map(u=>`
+    <tr>
+      <td>${u.issuedDate}</td>
+      <td>₹${u.cost}</td>
+      <td>${u.deductionAppliedOnExit!=null ? `₹${u.deductionAppliedOnExit} deducted (left after ${u.exitMonthsElapsed} mo.)` : '<span class="muted">-</span>'}</td>
+    </tr>`).join("");
+
+  return `
+  <div style="margin-top:14px;border-top:1px solid #eee;padding-top:12px;">
+    <h3 style="margin:0 0 6px;">Employment status</h3>
+    <div style="margin-bottom:8px;">
+      ${isActive ? `<span class="badge ok">Active</span> since ${currentStint?currentStint.joinedDate:'-'}` : `<span class="badge fail">Left</span> on ${currentStint?currentStint.leftDate:'-'}${currentStint&&currentStint.exitReason?' - '+currentStint.exitReason:''}`}
+    </div>
+    <table><tr><th>Joined</th><th>Left</th><th>Exit reason</th><th>Rehire eligible</th></tr>
+      ${historyRows || "<tr><td colspan='4' class='empty'>No history yet.</td></tr>"}
+    </table>
+    <div style="margin-top:8px;">
+      ${isActive
+        ? `<button type="button" class="btn small secondary" onclick="markDriverLeft('${d.id}')">Mark as Left</button>`
+        : `<button type="button" class="btn small" onclick="reactivateDriver('${d.id}')">Reactivate</button>`}
+    </div>
+
+    <h3 style="margin:16px 0 6px;">Uniform</h3>
+    ${currentUniform
+      ? `<div style="margin-bottom:8px;">Current pair issued <b>${currentUniform.issuedDate}</b> (₹${currentUniform.cost}), ${uniformMonths} month${uniformMonths===1?'':'s'} ago.
+         ${uniformDue ? `<span class="badge fail" style="margin-left:6px;">New pair due - notify the uniform vendor</span>` : ''}</div>`
+      : `<div class="muted" style="margin-bottom:8px;">No uniform recorded yet.</div>`}
+    <table><tr><th>Issued</th><th>Cost</th><th>Deduction on exit</th></tr>
+      ${uniformRows || "<tr><td colspan='3' class='empty'>No uniform history yet.</td></tr>"}
+    </table>
+    ${isActive ? `<div style="margin-top:8px;"><button type="button" class="btn small secondary" onclick="issueDriverUniform('${d.id}')">${currentUniform?'Issue New Uniform':'Issue Uniform'}</button></div>` : ''}
+  </div>`;
+}
+async function issueDriverUniform(id){
+  if(!confirm("Issue a new uniform pair (₹2400, fixed cost) to this driver, effective today?")) return;
+  try{
+    const updated = await api(`/drivers/${id}/uniform/issue`, {method:"POST", body: JSON.stringify({})});
+    const idx = meta.drivers.findIndex(x=>x.id===id);
+    meta.drivers[idx] = updated;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function markDriverLeft(id){
+  const exitReason = prompt("Reason this driver is leaving the company:");
+  if(exitReason===null) return;
+  if(!exitReason.trim()){ alert("An exit reason is required."); return; }
+  const rehireEligible = confirm("Is this driver eligible for rehire in the future?\n\nOK = Yes, eligible.\nCancel = No, not eligible - they won't be allowed to rejoin without an Owner override.");
+  if(!confirm(`Confirm: mark this driver as LEFT today.\nExit reason: "${exitReason}"\nRehire eligible: ${rehireEligible?'Yes':'No'}\n\nAny applicable uniform-cost deduction will be calculated automatically and added to their payroll.`)) return;
+  try{
+    const result = await api(`/drivers/${id}/mark-left`, {method:"POST", body: JSON.stringify({exitReason, rehireEligible})});
+    const idx = meta.drivers.findIndex(x=>x.id===id);
+    meta.drivers[idx] = result.driver;
+    await renderMain();
+    if(result.uniformDeduction) alert(`A uniform deduction of ₹${result.uniformDeduction.amount} was added to this driver's payroll (${result.uniformDeduction.label}).`);
+  }catch(e){ alert(e.message); }
+}
+async function reactivateDriver(id, force){
+  try{
+    const res = await fetch(API+`/drivers/${id}/reactivate`, {
+      method:"POST",
+      headers:{"Content-Type":"application/json","Authorization":"Bearer "+authToken},
+      body: JSON.stringify(force?{force:true}:{})
+    });
+    const data = await res.json().catch(()=>({}));
+    if(!res.ok){
+      if(data.blockedByConduct && currentUser.role==="owner" && !force){
+        if(confirm(data.error + "\n\nAs Owner, you can override this and reactivate anyway. Proceed?")) return reactivateDriver(id, true);
+        return;
+      }
+      throw new Error(data.error || "Request failed");
+    }
+    const idx = meta.drivers.findIndex(x=>x.id===id);
+    meta.drivers[idx] = data;
+    await renderMain();
+  }catch(e){ alert(e.message); }
 }
 function toggleDriverDetails(id){
   editingDriverId = editingDriverId===id ? null : id;
@@ -2631,6 +2740,7 @@ async function hrAttendanceScreen(){
 
   return `
   <h1 class="page-title">Attendance</h1>
+  ${uniformRenewalReminderBannerHtml()}
   ${canDownload ? await attendanceBackupReminderBannerHtml() : ""}
   <div class="card">
     <div class="check-row">
@@ -2789,6 +2899,31 @@ async function attendanceBackupReminderBannerHtml(){
     : `It's been ${days} days since the last attendance backup (target: every ${ATTENDANCE_BACKUP_TARGET_DAYS} days, next due ${nextDue}).`;
   return `<div class="banner ${days!==null && days>=ATTENDANCE_BACKUP_TARGET_DAYS ? 'error' : ''}" style="margin-bottom:14px;">
     ⏰ ${msg} <button class="btn small secondary" onclick="switchTab('attendance')" style="margin-left:8px;">Go to Attendance</button>
+  </div>`;
+}
+
+// A driver's uniform pair is fully depreciated once 12 months have passed
+// since it was issued - at that point HR/Owner need to know so a new pair
+// can be requested from the vendor. Computed client-side from the same
+// meta.drivers data the Drivers card already has (no dedicated backend
+// endpoint - mirrors the expiring_docs dashboard pattern).
+function driversNeedingUniformRenewal(){
+  return (meta.drivers||[]).filter(d=>{
+    if(d.active===false) return false;
+    const uniforms = Array.isArray(d.uniformHistory) ? d.uniformHistory : [];
+    if(!uniforms.length) return false;
+    const current = uniforms[uniforms.length-1];
+    const months = monthsBetweenDatesClient(current.issuedDate, todayStr());
+    return months!=null && months>=12;
+  });
+}
+function uniformRenewalReminderBannerHtml(){
+  const due = driversNeedingUniformRenewal();
+  if(!due.length) return "";
+  const names = due.slice(0,3).map(d=>d.name).join(", ") + (due.length>3 ? ` +${due.length-3} more` : "");
+  return `<div class="banner error" style="margin-bottom:14px;">
+    👕 ${due.length} driver${due.length===1?'':'s'} due for a new uniform pair (12+ months since last issue): <b>${names}</b> - notify the uniform vendor to raise a request.
+    <button class="btn small secondary" onclick="switchTab('people')" style="margin-left:8px;">Go to People</button>
   </div>`;
 }
 
@@ -3123,6 +3258,7 @@ async function ownerDashboardScreen(){
 
   ${await backupReminderBannerHtml()}
   ${await attendanceBackupReminderBannerHtml()}
+  ${uniformRenewalReminderBannerHtml()}
 
   ${await priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpenses)}
 
@@ -3876,11 +4012,16 @@ async function cancelRepairRequest(id){
   }catch(e){ alert(e.message); }
 }
 
-// ---- Workshop staff side: incoming queue (Workshop Manager), my assigned
-// repairs (everyone else), and bulk purchase + invoice logging (everyone) ----
+// ---- Workshop staff side: incoming queue (Workshop Manager + Workshop
+// Supervisor only - they're the sole two roles who can assign work to
+// Mechanics/Helpers/Electricians, per the Owner's explicit call), my
+// assigned repairs (everyone else), and bulk purchase + invoice logging
+// (everyone in Workshop) ----
+const WORKSHOP_ASSIGN_ROLES = ["workshop_manager","workshop_supervisor"];
 async function workshopScreen(){
   const role = currentUser.role;
-  const isManagerView = role==="workshop_manager" || role==="owner" || role==="ops_manager";
+  const canAssign = WORKSHOP_ASSIGN_ROLES.includes(role);
+  const isManagerView = canAssign || role==="owner" || role==="ops_manager";
   let requests = [], purchases = [];
   try{ [requests, purchases] = await Promise.all([api("/repair-requests"), api("/workshop-purchases")]); }catch(e){}
   const incoming = requests.filter(r=>r.status==="requested");
@@ -3888,7 +4029,7 @@ async function workshopScreen(){
   const staffOptions = meta.users.filter(u=>WORKSHOP_STAFF_ROLES.includes(u.role) && u.active!==false)
     .map(u=>`<option value="${u.id}">${u.name} (${roleLabel(u.role)})</option>`).join("");
 
-  const incomingHtml = (role==="workshop_manager" || role==="owner") ? `
+  const incomingHtml = canAssign ? `
   <div class="card">
     <h2 class="section-title">Incoming Requests ${incoming.length? `<span class="badge pending">${incoming.length}</span>`:''}</h2>
     ${incoming.length===0 ? `<div class="empty">Nothing waiting on assignment.</div>` : `

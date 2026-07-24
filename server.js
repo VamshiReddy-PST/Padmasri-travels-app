@@ -146,7 +146,17 @@ function backfillDefaults() {
       u.mustChangePassword = true;
     }
     if (u.mustChangePassword === undefined) u.mustChangePassword = false;
-    delete u.pin;
+    // Workshop staff (Mechanic/Helper/Electrician/Workshop Supervisor/
+    // Workshop Manager) don't have email addresses and aren't expected to
+    // handle the full staff app - they log in to the combined driver.html
+    // portal with mobile number + a 4-digit PIN instead, same low-friction
+    // pattern as drivers. Everyone else's old PIN field is legacy cruft
+    // from before password login existed and gets cleared out.
+    if (WORKSHOP_STAFF_ROLES.includes(u.role)) {
+      if (u.pin === undefined) u.pin = "1234";
+    } else {
+      delete u.pin;
+    }
   });
   // The Owner's email is a one-time, explicitly-specified migration - it
   // only lives in seed.json otherwise, which never touches an already-
@@ -198,6 +208,21 @@ function backfillDefaults() {
     // bar as staff's hashed/complex passwords - it's an intentional
     // trade-off for a low-friction, low-literacy login.
     if (d.pin === undefined) d.pin = "1234";
+    // Employment lifecycle: a driver's ID/record is permanent - leaving the
+    // company never deletes it, only closes out the current "stint" with an
+    // exit reason and a rehire-eligibility call, so a genuine rejoin later
+    // reactivates the SAME record (and its full history) rather than
+    // starting fresh. active===false blocks driver-app login.
+    if (d.active === undefined) d.active = true;
+    if (!Array.isArray(d.employmentHistory)) {
+      d.employmentHistory = [
+        { joinedDate: d.dateOfJoining || null, leftDate: null, exitReason: null, rehireEligible: null, recordedBy: null, recordedByName: null, recordedAt: null },
+      ];
+    }
+    // Uniform issue log - each entry is one pair issued; the most recent
+    // entry is treated as "currently in use" for both the 12-month renewal
+    // alert and the leaving-early deduction calculation.
+    if (!Array.isArray(d.uniformHistory)) d.uniformHistory = [];
   });
   if (!Array.isArray(db.driverShifts)) db.driverShifts = [];
   (db.driverShifts || []).forEach((s) => {
@@ -407,6 +432,33 @@ function validateVehicleTypeFuel(vehicleType, fuelType) {
   if (!VEHICLE_TYPES.includes(vehicleType)) return `Vehicle Type must be one of: ${VEHICLE_TYPES.join(", ")}.`;
   if (!FUEL_TYPES.includes(fuelType)) return `Fuel Type must be one of: ${FUEL_TYPES.join(", ")}.`;
   if (vehicleType === "Bus" && fuelType !== "Diesel") return "Buses can only be Diesel - there are no Petrol/CNG/EV/Hybrid buses in this fleet.";
+  return null;
+}
+// Registration number, Engine number and Chassis number must each be
+// mapped to exactly one vehicle, ever - a duplicate of any of the three is
+// rejected outright, whether at onboarding or later editing. Compared
+// trimmed + uppercased so "ts09at1001" and "TS 09 AT1001"-with-different-
+// spacing don't sneak past as "different" values.
+function normalizeVehicleFieldValue(v) {
+  return String(v || "").trim().toUpperCase().replace(/\s+/g, "");
+}
+function findVehicleFieldClash(field, value, excludeVehicleId) {
+  const norm = normalizeVehicleFieldValue(value);
+  if (!norm) return null;
+  return db.vehicles.find((v) => v.id !== excludeVehicleId && normalizeVehicleFieldValue(v[field]) === norm) || null;
+}
+const VEHICLE_UNIQUE_FIELD_LABELS = { reg: "Registration number", engineNo: "Engine No", chassisNo: "Chassis No" };
+// Checks reg/engineNo/chassisNo all at once and returns the first clash
+// found (as a ready-to-send error message), or null if none of the
+// supplied fields collide with another vehicle.
+function vehicleUniquenessError(fields, excludeVehicleId) {
+  for (const field of ["reg", "engineNo", "chassisNo"]) {
+    if (fields[field] === undefined) continue;
+    const clash = findVehicleFieldClash(field, fields[field], excludeVehicleId);
+    if (clash) {
+      return `${VEHICLE_UNIQUE_FIELD_LABELS[field]} "${fields[field]}" is already used by vehicle ${clash.reg} - it must be unique.`;
+    }
+  }
   return null;
 }
 
@@ -733,6 +785,10 @@ app.post(
       supervises: Array.isArray(supervises) ? supervises : [],
       dateOfJoining: dateOfJoining || "",
     };
+    // Workshop staff log in to their own mobile portal via phone + PIN
+    // (see /api/workshop-auth/login) rather than email/password - they get
+    // the same default-1234-never-forced PIN drivers do.
+    if (WORKSHOP_STAFF_ROLES.includes(role)) user.pin = "1234";
     db.users.push(user);
     await audit(req.user, "create_user", `${req.user.name} added ${name} as ${role}`);
     res.json(publicUser(user));
@@ -927,6 +983,17 @@ app.post(
 // already add drivers from the Operations screen's quick-add form.
 const DRIVER_EDITOR_ROLES = ["owner", "ops_manager", "hr", "data_team"];
 const DRIVING_LEVELS = ["Trainee", "Standard", "Senior", "Expert"];
+// Every driver's mobile number must be unique - it's their driver-app login
+// identifier, so two drivers sharing one would make login ambiguous.
+// Checked against every driver record regardless of active/left status,
+// since a phone number that belonged to a driver who left is still "theirs"
+// until reassigned - re-hiring the SAME person reuses their existing
+// record (see the exit/rehire endpoints below) rather than needing a new one.
+function findDriverPhoneClash(phone, excludeDriverId) {
+  const norm = String(phone || "").trim();
+  if (!norm) return null;
+  return db.drivers.find((d) => d.id !== excludeDriverId && d.phone && String(d.phone).trim() === norm) || null;
+}
 app.post(
   "/api/drivers",
   requireAuth,
@@ -936,6 +1003,10 @@ app.post(
     if (!name) return res.status(400).json({ error: "name is required." });
     if (drivingLevel && !DRIVING_LEVELS.includes(drivingLevel)) {
       return res.status(400).json({ error: `Driving level must be one of: ${DRIVING_LEVELS.join(", ")}.` });
+    }
+    const phoneClash = findDriverPhoneClash(phone, null);
+    if (phoneClash) {
+      return res.status(400).json({ error: `Mobile number ${phone} is already registered to driver ${phoneClash.name} - it must be unique. If this is the same person rejoining, reactivate their existing driver record instead of adding a new one.` });
     }
     const driver = {
       id: uid("d"),
@@ -963,6 +1034,11 @@ app.post(
       // Driver app login - mobile number + this PIN, defaulting to 1234
       // and never forced to change (see backfillDefaults for why).
       pin: "1234",
+      active: true,
+      employmentHistory: [
+        { joinedDate: dateOfJoining || todayStr(), leftDate: null, exitReason: null, rehireEligible: null, recordedBy: req.user.id, recordedByName: req.user.name, recordedAt: nowIso() },
+      ],
+      uniformHistory: [],
     };
     db.drivers.push(driver);
     await audit(req.user, "create_driver", `${req.user.name} added driver ${name}`);
@@ -994,6 +1070,12 @@ app.patch(
     } = req.body || {};
     if (drivingLevel !== undefined && drivingLevel && !DRIVING_LEVELS.includes(drivingLevel)) {
       return res.status(400).json({ error: `Driving level must be one of: ${DRIVING_LEVELS.join(", ")}.` });
+    }
+    if (phone !== undefined && phone) {
+      const phoneClash = findDriverPhoneClash(phone, driver.id);
+      if (phoneClash) {
+        return res.status(400).json({ error: `Mobile number ${phone} is already registered to driver ${phoneClash.name} - it must be unique.` });
+      }
     }
     let changed = false;
     if (name !== undefined && String(name).trim()) { driver.name = String(name).trim(); changed = true; }
@@ -1076,6 +1158,146 @@ app.patch(
     if (!driver) return res.status(404).json({ error: "Driver not found." });
     driver.pin = "1234";
     await audit(req.user, "reset_driver_pin", `${req.user.name} reset the app PIN for driver ${driver.name} (${driver.id}) back to the default`);
+    res.json(publicDriverForStaff(driver));
+  })
+);
+
+// ---------- Driver employment lifecycle (leave / rejoin) + uniform tracking ----------
+// A pair of uniform is Rs 2400, and depreciates by Rs 200 for every full
+// month it's been in use - so leaving 1 month in costs the driver Rs 2200,
+// 2 months in costs Rs 2000, 10 months in costs Rs 400, and by 12 months
+// it's fully depreciated (Rs 0 - a normal end-of-cycle replacement, not an
+// early-exit penalty), per the Owner's exact figures.
+const UNIFORM_COST = 2400;
+const UNIFORM_MONTHLY_DEPRECIATION = 200;
+function monthsBetweenDates(fromStr, toStr) {
+  if (!fromStr || !toStr) return 0;
+  const from = new Date(fromStr + "T00:00:00Z");
+  const to = new Date(toStr + "T00:00:00Z");
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return 0;
+  let months = (to.getUTCFullYear() - from.getUTCFullYear()) * 12 + (to.getUTCMonth() - from.getUTCMonth());
+  if (to.getUTCDate() < from.getUTCDate()) months -= 1; // hasn't reached the same day-of-month yet - not a full month
+  return Math.max(0, months);
+}
+function uniformDeductionForMonths(months) {
+  return Math.max(0, Math.min(UNIFORM_COST, UNIFORM_COST - UNIFORM_MONTHLY_DEPRECIATION * months));
+}
+function currentUniform(driver) {
+  return driver.uniformHistory.length ? driver.uniformHistory[driver.uniformHistory.length - 1] : null;
+}
+function currentEmploymentStint(driver) {
+  return driver.employmentHistory.length ? driver.employmentHistory[driver.employmentHistory.length - 1] : null;
+}
+
+app.post(
+  "/api/drivers/:id/uniform/issue",
+  requireAuth,
+  requireRole(...DRIVER_EDITOR_ROLES),
+  h(async (req, res) => {
+    const driver = db.drivers.find((d) => d.id === req.params.id);
+    if (!driver) return res.status(404).json({ error: "Driver not found." });
+    if (!driver.active) return res.status(400).json({ error: "This driver has left the company - reactivate them first before issuing a uniform." });
+    const { issuedDate } = req.body || {};
+    const entry = {
+      issuedDate: issuedDate || todayStr(),
+      cost: UNIFORM_COST,
+      issuedBy: req.user.id,
+      issuedByName: req.user.name,
+      recordedAt: nowIso(),
+    };
+    driver.uniformHistory.push(entry);
+    await audit(req.user, "issue_uniform", `${req.user.name} issued a new uniform to ${driver.name} (${driver.id})`);
+    res.json(publicDriverForStaff(driver));
+  })
+);
+
+app.post(
+  "/api/drivers/:id/mark-left",
+  requireAuth,
+  requireRole(...DRIVER_EDITOR_ROLES),
+  h(async (req, res) => {
+    const driver = db.drivers.find((d) => d.id === req.params.id);
+    if (!driver) return res.status(404).json({ error: "Driver not found." });
+    if (!driver.active) return res.status(400).json({ error: "This driver has already left." });
+    const { exitReason, rehireEligible } = req.body || {};
+    if (!exitReason || !String(exitReason).trim()) return res.status(400).json({ error: "An exit reason is required." });
+    if (typeof rehireEligible !== "boolean") return res.status(400).json({ error: "Please record whether this driver is eligible for rehire." });
+
+    const stint = currentEmploymentStint(driver);
+    const leftDate = todayStr();
+    if (stint) {
+      stint.leftDate = leftDate;
+      stint.exitReason = String(exitReason).trim();
+      stint.rehireEligible = rehireEligible;
+      stint.recordedBy = req.user.id;
+      stint.recordedByName = req.user.name;
+      stint.recordedAt = nowIso();
+    }
+    driver.active = false;
+
+    // Uniform deduction, if they currently hold a pair issued within the
+    // last year (past that, it's already fully depreciated - Rs 0).
+    let uniformDeduction = null;
+    const uniform = currentUniform(driver);
+    if (uniform && !uniform.deductionAppliedOnExit) {
+      const months = monthsBetweenDates(uniform.issuedDate, leftDate);
+      const amount = uniformDeductionForMonths(months);
+      uniform.exitMonthsElapsed = months;
+      uniform.deductionAppliedOnExit = amount;
+      uniform.deductionAppliedAt = nowIso();
+      if (amount > 0) {
+        const month = leftDate.slice(0, 7);
+        uniformDeduction = {
+          id: uid("payadh"),
+          personType: "driver",
+          personId: driver.id,
+          month,
+          category: "uniform_deduction",
+          label: `Uniform Deduction (issued ${uniform.issuedDate}, left after ${months} month${months === 1 ? "" : "s"})`,
+          type: "deduction",
+          amount,
+          addedBy: req.user.id,
+          addedByName: req.user.name,
+          addedAt: nowIso(),
+          autoGenerated: true,
+        };
+        db.payrollAdhocEntries.unshift(uniformDeduction);
+      }
+    }
+
+    await audit(req.user, "driver_left", `${req.user.name} marked driver ${driver.name} (${driver.id}) as left - rehire eligible: ${rehireEligible ? "yes" : "no"}${uniformDeduction ? `, uniform deduction ₹${uniformDeduction.amount} applied` : ""}`);
+    res.json({ driver: publicDriverForStaff(driver), uniformDeduction });
+  })
+);
+
+app.post(
+  "/api/drivers/:id/reactivate",
+  requireAuth,
+  requireRole(...DRIVER_EDITOR_ROLES),
+  h(async (req, res) => {
+    const driver = db.drivers.find((d) => d.id === req.params.id);
+    if (!driver) return res.status(404).json({ error: "Driver not found." });
+    if (driver.active) return res.status(400).json({ error: "This driver is already active." });
+    const lastStint = currentEmploymentStint(driver);
+    const { force } = req.body || {};
+    if (lastStint && lastStint.rehireEligible === false && !(force && req.user.role === "owner")) {
+      return res.status(403).json({
+        error: `${driver.name} was marked NOT eligible for rehire when they left on ${lastStint.leftDate} - reason: "${lastStint.exitReason}". Only the Owner can override this.`,
+        blockedByConduct: true,
+      });
+    }
+    driver.employmentHistory.push({
+      joinedDate: todayStr(),
+      leftDate: null,
+      exitReason: null,
+      rehireEligible: null,
+      recordedBy: req.user.id,
+      recordedByName: req.user.name,
+      recordedAt: nowIso(),
+    });
+    driver.active = true;
+    const overrideNote = lastStint && lastStint.rehireEligible === false ? " (Owner override of a not-eligible-for-rehire record)" : "";
+    await audit(req.user, "driver_reactivated", `${req.user.name} reactivated driver ${driver.name} (${driver.id})${overrideNote}`);
     res.json(publicDriverForStaff(driver));
   })
 );
@@ -1173,6 +1395,8 @@ app.post(
     }
     const typeFuelError = validateVehicleTypeFuel(vehicleType, fuelType);
     if (typeFuelError) return res.status(400).json({ error: typeFuelError });
+    const uniqueError = vehicleUniquenessError({ reg, engineNo, chassisNo }, null);
+    if (uniqueError) return res.status(400).json({ error: uniqueError });
     const vehicle = {
       id: uid("v"),
       reg,
@@ -1244,12 +1468,14 @@ app.patch(
     }
     if (engineNo !== undefined) {
       if (!String(engineNo).trim()) return res.status(400).json({ error: "Engine No cannot be blank." });
-      vehicle.engineNo = engineNo;
     }
     if (chassisNo !== undefined) {
       if (!String(chassisNo).trim()) return res.status(400).json({ error: "Chassis No cannot be blank." });
-      vehicle.chassisNo = chassisNo;
     }
+    const uniqueError = vehicleUniquenessError({ engineNo, chassisNo }, vehicle.id);
+    if (uniqueError) return res.status(400).json({ error: uniqueError });
+    if (engineNo !== undefined) vehicle.engineNo = engineNo;
+    if (chassisNo !== undefined) vehicle.chassisNo = chassisNo;
     if (rcDate !== undefined) {
       if (!String(rcDate).trim()) return res.status(400).json({ error: "RC Date cannot be blank." });
       vehicle.rcDate = rcDate;
@@ -3886,50 +4112,39 @@ app.post(
   })
 );
 
-// Workshop Manager assigns a requested repair to a specific staff member -
-// the only way a request moves off the incoming queue, per the Owner's
-// explicit choice over an open self-service queue.
-app.patch(
-  "/api/repair-requests/:id/assign",
-  requireAuth,
-  requireRole("workshop_manager", "owner"),
-  h(async (req, res) => {
-    const r = db.repairRequests.find((x) => x.id === req.params.id);
-    if (!r) return res.status(404).json({ error: "Repair request not found." });
-    if (r.status !== "requested") return res.status(400).json({ error: "This request has already been assigned or is no longer open." });
-    const { assignedTo } = req.body || {};
-    const staffUser = db.users.find((u) => u.id === assignedTo && WORKSHOP_STAFF_ROLES.includes(u.role));
-    if (!staffUser) return res.status(400).json({ error: "Select a valid Workshop staff member to assign this to." });
-    r.assignedTo = staffUser.id;
-    r.assignedToName = staffUser.name;
-    r.assignedBy = req.user.id;
-    r.assignedByName = req.user.name;
-    r.assignedAt = nowIso();
-    r.status = "assigned";
-    await save();
-    await audit(req.user, "repair_request_assigned", `${req.user.name} assigned a repair request (${repairRequestVehicle(r) ? repairRequestVehicle(r).reg : r.vehicleId}) to ${staffUser.name}`);
-    res.json(publicRepairRequest(r));
-  })
-);
-
-app.patch(
-  "/api/repair-requests/:id/start",
-  requireAuth,
-  requireRole(...WORKSHOP_STAFF_ROLES),
-  h(async (req, res) => {
-    const r = db.repairRequests.find((x) => x.id === req.params.id);
-    if (!r) return res.status(404).json({ error: "Repair request not found." });
-    if (r.assignedTo !== req.user.id && req.user.role !== "workshop_manager") {
-      return res.status(403).json({ error: "Only the assigned staff member can start work on this." });
-    }
-    if (r.status !== "assigned") return res.status(400).json({ error: "This request isn't in an assigned state." });
-    r.status = "in_progress";
-    r.startedAt = nowIso();
-    await save();
-    res.json(publicRepairRequest(r));
-  })
-);
-
+// Core assign/start/complete logic, extracted so both the staff-side
+// (email/password session) and the Workshop-staff-side (phone+PIN session,
+// see /api/workshop-auth/* below) routes share one implementation instead
+// of two copies that could drift apart. `actor` just needs {id, name,
+// role} - true of both req.user and req.workshopUser.
+async function doAssignRepairRequest(actor, requestId, assignedTo) {
+  const r = db.repairRequests.find((x) => x.id === requestId);
+  if (!r) return { status: 404, error: "Repair request not found." };
+  if (r.status !== "requested") return { status: 400, error: "This request has already been assigned or is no longer open." };
+  const staffUser = db.users.find((u) => u.id === assignedTo && WORKSHOP_STAFF_ROLES.includes(u.role));
+  if (!staffUser) return { status: 400, error: "Select a valid Workshop staff member to assign this to." };
+  r.assignedTo = staffUser.id;
+  r.assignedToName = staffUser.name;
+  r.assignedBy = actor.id;
+  r.assignedByName = actor.name;
+  r.assignedAt = nowIso();
+  r.status = "assigned";
+  await save();
+  await audit(actor, "repair_request_assigned", `${actor.name} assigned a repair request (${repairRequestVehicle(r) ? repairRequestVehicle(r).reg : r.vehicleId}) to ${staffUser.name}`);
+  return { data: publicRepairRequest(r) };
+}
+async function doStartRepairRequest(actor, requestId) {
+  const r = db.repairRequests.find((x) => x.id === requestId);
+  if (!r) return { status: 404, error: "Repair request not found." };
+  if (r.assignedTo !== actor.id && actor.role !== "workshop_manager") {
+    return { status: 403, error: "Only the assigned staff member can start work on this." };
+  }
+  if (r.status !== "assigned") return { status: 400, error: "This request isn't in an assigned state." };
+  r.status = "in_progress";
+  r.startedAt = nowIso();
+  await save();
+  return { data: publicRepairRequest(r) };
+}
 // Completing a repair logs exactly what was done and what parts/consumables
 // were used (each with its own cost, so "3-4 Litres of Adblue" is its own
 // line item) and auto-creates a vehicle-tagged expense for the total - the
@@ -3937,56 +4152,100 @@ app.patch(
 // already reads from. This bypasses the normal POST /api/expenses bill-photo
 // requirement, mirroring the existing pattern for other system-generated
 // financial records (temp-driver auto-expense, missed-odometer penalty).
+async function doCompleteRepairRequest(actor, requestId, { workDone, partsUsed }) {
+  const r = db.repairRequests.find((x) => x.id === requestId);
+  if (!r) return { status: 404, error: "Repair request not found." };
+  if (r.assignedTo !== actor.id && actor.role !== "workshop_manager") {
+    return { status: 403, error: "Only the assigned staff member can complete this." };
+  }
+  if (!["assigned", "in_progress"].includes(r.status)) return { status: 400, error: "This request isn't in progress." };
+  if (!workDone || !workDone.trim()) return { status: 400, error: "Describe the work that was done." };
+  const items = Array.isArray(partsUsed) ? partsUsed.filter((p) => p && p.name && Number(p.cost) > 0) : [];
+  if (!items.length) return { status: 400, error: "Add at least one part/consumable with its cost." };
+  const totalCost = items.reduce((s, p) => s + Number(p.cost) * (Number(p.qty) || 1), 0);
+  r.workDone = workDone.trim();
+  r.partsUsed = items.map((p) => ({ name: String(p.name), qty: Number(p.qty) || 1, unit: p.unit || "", cost: Number(p.cost) }));
+  r.totalCost = Math.round(totalCost * 100) / 100;
+  r.status = "completed";
+  r.completedAt = nowIso();
+
+  const vehicle = repairRequestVehicle(r);
+  const partsList = r.partsUsed.map((p) => `${p.qty}${p.unit ? " " + p.unit : ""} ${p.name}`).join(", ");
+  const expense = {
+    id: uid("e"),
+    userId: actor.id,
+    userName: actor.name,
+    vehicleId: r.vehicleId,
+    siteId: vehicle ? vehicle.siteId || null : null,
+    isOfficeExpenditure: false,
+    category: "Workshop / Maintenance",
+    amount: r.totalCost,
+    description: `Repair: ${r.issueDescription} - ${partsList}`,
+    billUrl: null,
+    status: "pending",
+    decidedBy: null,
+    comment: "",
+    paymentStage: null,
+    utrNumber: null,
+    paymentUpdatedAt: null,
+    submittedAt: nowIso(),
+    repairRequestId: r.id,
+  };
+  db.expenses.unshift(expense);
+  r.expenseId = expense.id;
+  await save();
+  await audit(actor, "repair_request_completed", `${actor.name} completed a repair for ${vehicle ? vehicle.reg : r.vehicleId} - ₹${r.totalCost} (${partsList})`);
+  return { data: { repairRequest: publicRepairRequest(r), expense } };
+}
+async function doCreateWorkshopPurchase(actor, { items, totalAmount, invoice, notes }) {
+  const cleanItems = Array.isArray(items) ? items.filter((i) => i && i.name) : [];
+  if (!cleanItems.length) return { status: 400, error: "Add at least one item purchased." };
+  if (!totalAmount || Number(totalAmount) <= 0) return { status: 400, error: "A valid total amount is required." };
+  if (!invoice) return { status: 400, error: "Upload a photo/scan of the invoice." };
+  const invoiceUrl = await savePhoto(invoice, "workshop_invoice");
+  if (!invoiceUrl) return { status: 400, error: "Could not read the invoice image - please try again." };
+  const purchase = {
+    id: uid("wp"),
+    purchasedBy: actor.id,
+    purchasedByName: actor.name,
+    items: cleanItems.map((i) => ({ name: String(i.name), qty: Number(i.qty) || 1, unit: i.unit || "" })),
+    totalAmount: Number(totalAmount),
+    invoiceUrl,
+    notes: notes || "",
+    createdAt: nowIso(),
+  };
+  db.workshopPurchases.unshift(purchase);
+  await save();
+  await audit(actor, "workshop_purchase", `${actor.name} logged a bulk purchase of ₹${purchase.totalAmount} (${cleanItems.map((i) => i.name).join(", ")})`);
+  return { data: purchase };
+}
+function sendResult(res, result) {
+  if (result.error) return res.status(result.status || 400).json({ error: result.error });
+  res.json(result.data);
+}
+
+// Workshop Manager (or Workshop Supervisor) assigns a requested repair to a
+// specific staff member - the only way a request moves off the incoming
+// queue, per the Owner's explicit choice over an open self-service queue.
+app.patch(
+  "/api/repair-requests/:id/assign",
+  requireAuth,
+  requireRole("workshop_manager", "workshop_supervisor"),
+  h(async (req, res) => sendResult(res, await doAssignRepairRequest(req.user, req.params.id, (req.body || {}).assignedTo)))
+);
+
+app.patch(
+  "/api/repair-requests/:id/start",
+  requireAuth,
+  requireRole(...WORKSHOP_STAFF_ROLES),
+  h(async (req, res) => sendResult(res, await doStartRepairRequest(req.user, req.params.id)))
+);
+
 app.patch(
   "/api/repair-requests/:id/complete",
   requireAuth,
   requireRole(...WORKSHOP_STAFF_ROLES),
-  h(async (req, res) => {
-    const r = db.repairRequests.find((x) => x.id === req.params.id);
-    if (!r) return res.status(404).json({ error: "Repair request not found." });
-    if (r.assignedTo !== req.user.id && req.user.role !== "workshop_manager") {
-      return res.status(403).json({ error: "Only the assigned staff member can complete this." });
-    }
-    if (!["assigned", "in_progress"].includes(r.status)) return res.status(400).json({ error: "This request isn't in progress." });
-    const { workDone, partsUsed } = req.body || {};
-    if (!workDone || !workDone.trim()) return res.status(400).json({ error: "Describe the work that was done." });
-    const items = Array.isArray(partsUsed) ? partsUsed.filter((p) => p && p.name && Number(p.cost) > 0) : [];
-    if (!items.length) return res.status(400).json({ error: "Add at least one part/consumable with its cost." });
-    const totalCost = items.reduce((s, p) => s + Number(p.cost) * (Number(p.qty) || 1), 0);
-    r.workDone = workDone.trim();
-    r.partsUsed = items.map((p) => ({ name: String(p.name), qty: Number(p.qty) || 1, unit: p.unit || "", cost: Number(p.cost) }));
-    r.totalCost = Math.round(totalCost * 100) / 100;
-    r.status = "completed";
-    r.completedAt = nowIso();
-
-    const vehicle = repairRequestVehicle(r);
-    const partsList = r.partsUsed.map((p) => `${p.qty}${p.unit ? " " + p.unit : ""} ${p.name}`).join(", ");
-    const expense = {
-      id: uid("e"),
-      userId: req.user.id,
-      userName: req.user.name,
-      vehicleId: r.vehicleId,
-      siteId: vehicle ? vehicle.siteId || null : null,
-      isOfficeExpenditure: false,
-      category: "Workshop / Maintenance",
-      amount: r.totalCost,
-      description: `Repair: ${r.issueDescription} - ${partsList}`,
-      billUrl: null,
-      status: "pending",
-      decidedBy: null,
-      comment: "",
-      paymentStage: null,
-      utrNumber: null,
-      paymentUpdatedAt: null,
-      submittedAt: nowIso(),
-      repairRequestId: r.id,
-    };
-    db.expenses.unshift(expense);
-    r.expenseId = expense.id;
-    await save();
-    await audit(req.user, "repair_request_completed", `${req.user.name} completed a repair for ${vehicle ? vehicle.reg : r.vehicleId} - ₹${r.totalCost} (${partsList})`);
-    res.json({ repairRequest: publicRepairRequest(r), expense });
-  })
+  h(async (req, res) => sendResult(res, await doCompleteRepairRequest(req.user, req.params.id, req.body || {})))
 );
 
 app.patch(
@@ -4048,28 +4307,145 @@ app.post(
   "/api/workshop-purchases",
   requireAuth,
   requireRole(...WORKSHOP_STAFF_ROLES),
+  h(async (req, res) => sendResult(res, await doCreateWorkshopPurchase(req.user, req.body || {})))
+);
+
+// ---------- WORKSHOP STAFF AUTH (mobile portal, shared with driver.html) ----------
+// Mechanics, Helpers, Electricians, and the Workshop Manager/Supervisor don't
+// have email addresses and aren't trained to handle the full staff app - so,
+// same as drivers, they log in with mobile number + a 4-digit PIN (default
+// 1234) from the same combined mobile portal (driver.html). This is a
+// completely separate session map from both the staff `sessions` map and
+// `driverSessions` - a Workshop-staff account is still a `db.users` row
+// (so Owner/HR keep managing it from the Staff tab, and it can also still
+// log into the full desktop app with email/password if it has one), but the
+// mobile-portal login never touches passwordHash at all.
+const workshopSessions = new Map(); // token -> userId
+function publicWorkshopUser(u) {
+  if (!u) return null;
+  const { pin, passwordHash, passwordHistory, ...rest } = u;
+  return rest;
+}
+function workshopAuth(req, res, next) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  const userId = token && workshopSessions.get(token);
+  const user = userId && db.users.find((u) => u.id === userId && WORKSHOP_STAFF_ROLES.includes(u.role) && u.active !== false);
+  if (!user) return res.status(401).json({ error: "Not signed in. Please log in again." });
+  req.workshopUser = user;
+  req.workshopToken = token;
+  next();
+}
+
+app.post(
+  "/api/workshop-auth/login",
   h(async (req, res) => {
-    const { items, totalAmount, invoice, notes } = req.body || {};
-    const cleanItems = Array.isArray(items) ? items.filter((i) => i && i.name) : [];
-    if (!cleanItems.length) return res.status(400).json({ error: "Add at least one item purchased." });
-    if (!totalAmount || Number(totalAmount) <= 0) return res.status(400).json({ error: "A valid total amount is required." });
-    if (!invoice) return res.status(400).json({ error: "Upload a photo/scan of the invoice." });
-    const invoiceUrl = await savePhoto(invoice, "workshop_invoice");
-    if (!invoiceUrl) return res.status(400).json({ error: "Could not read the invoice image - please try again." });
-    const purchase = {
-      id: uid("wp"),
-      purchasedBy: req.user.id,
-      purchasedByName: req.user.name,
-      items: cleanItems.map((i) => ({ name: String(i.name), qty: Number(i.qty) || 1, unit: i.unit || "" })),
-      totalAmount: Number(totalAmount),
-      invoiceUrl,
-      notes: notes || "",
-      createdAt: nowIso(),
-    };
-    db.workshopPurchases.unshift(purchase);
-    await save();
-    await audit(req.user, "workshop_purchase", `${req.user.name} logged a bulk purchase of ₹${purchase.totalAmount} (${cleanItems.map((i) => i.name).join(", ")})`);
-    res.json(purchase);
+    const { phone, pin } = req.body || {};
+    if (!phone || !pin) return res.status(400).json({ error: "Mobile number and PIN are required." });
+    const phoneNorm = String(phone).trim();
+    const user = db.users.find((u) => u.active !== false && WORKSHOP_STAFF_ROLES.includes(u.role) && u.phone && String(u.phone).trim() === phoneNorm);
+    if (!user || String(user.pin || "1234") !== String(pin).trim()) {
+      return res.status(401).json({ error: "Incorrect mobile number or PIN." });
+    }
+    const token = uid("wtok");
+    workshopSessions.set(token, user.id);
+    await audit(user, "workshop_login", `${user.name} (${user.role}) logged in via the Workshop mobile portal`);
+    res.json({ token, user: publicWorkshopUser(user) });
+  })
+);
+
+app.get(
+  "/api/workshop-auth/me",
+  workshopAuth,
+  h(async (req, res) => {
+    res.json({ user: publicWorkshopUser(req.workshopUser) });
+  })
+);
+
+app.post(
+  "/api/workshop-auth/logout",
+  workshopAuth,
+  h(async (req, res) => {
+    workshopSessions.delete(req.workshopToken);
+    res.json({ ok: true });
+  })
+);
+
+// Lets the Workshop Manager/Supervisor's assign-dropdown in the mobile
+// portal populate without needing a full /api/users (staff-only) call.
+app.get(
+  "/api/workshop-auth/staff",
+  workshopAuth,
+  h(async (req, res) => {
+    res.json(
+      db.users
+        .filter((u) => WORKSHOP_STAFF_ROLES.includes(u.role) && u.active !== false)
+        .map((u) => ({ id: u.id, name: u.name, role: u.role }))
+    );
+  })
+);
+
+app.get(
+  "/api/workshop-auth/repair-requests",
+  workshopAuth,
+  h(async (req, res) => {
+    const rows = repairRequestsVisibleTo(req.workshopUser)
+      .map(publicRepairRequest)
+      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+    res.json(rows);
+  })
+);
+app.patch(
+  "/api/workshop-auth/repair-requests/:id/assign",
+  workshopAuth,
+  h(async (req, res) => {
+    if (!["workshop_manager", "workshop_supervisor"].includes(req.workshopUser.role)) {
+      return res.status(403).json({ error: "Only the Workshop Manager or Workshop Supervisor can assign requests." });
+    }
+    return sendResult(res, await doAssignRepairRequest(req.workshopUser, req.params.id, (req.body || {}).assignedTo));
+  })
+);
+app.patch(
+  "/api/workshop-auth/repair-requests/:id/start",
+  workshopAuth,
+  h(async (req, res) => sendResult(res, await doStartRepairRequest(req.workshopUser, req.params.id)))
+);
+app.patch(
+  "/api/workshop-auth/repair-requests/:id/complete",
+  workshopAuth,
+  h(async (req, res) => sendResult(res, await doCompleteRepairRequest(req.workshopUser, req.params.id, req.body || {})))
+);
+
+app.get(
+  "/api/workshop-auth/workshop-purchases",
+  workshopAuth,
+  h(async (req, res) => {
+    res.json(
+      db.workshopPurchases
+        .filter((p) => p.purchasedBy === req.workshopUser.id)
+        .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+    );
+  })
+);
+app.post(
+  "/api/workshop-auth/workshop-purchases",
+  workshopAuth,
+  h(async (req, res) => sendResult(res, await doCreateWorkshopPurchase(req.workshopUser, req.body || {})))
+);
+
+// Safety valve if a Workshop staff member forgets their PIN - resets it
+// straight back to the default (1234), same as the driver-PIN reset. HR/
+// Owner only.
+app.patch(
+  "/api/users/:id/reset-workshop-pin",
+  requireAuth,
+  requireRole("owner", "hr"),
+  h(async (req, res) => {
+    const user = db.users.find((u) => u.id === req.params.id && WORKSHOP_STAFF_ROLES.includes(u.role));
+    if (!user) return res.status(404).json({ error: "Workshop staff member not found." });
+    user.pin = "1234";
+    await audit(req.user, "reset_workshop_pin", `${req.user.name} reset the app PIN for ${user.name} (${user.id}) back to the default`);
+    res.json(publicWorkshopUser(user));
   })
 );
 

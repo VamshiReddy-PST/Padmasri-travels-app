@@ -31,6 +31,8 @@
   .field{margin-bottom:16px;}
   .field label{display:block;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--grey);margin-bottom:6px;font-weight:600;}
   .field input{width:100%;padding:14px 12px;border:1px solid var(--border);background:#fff;border-radius:14px;font-size:18px;text-align:center;letter-spacing:1px;}
+  .field select{width:100%;padding:14px 12px;border:1px solid var(--border);background:#fff;border-radius:14px;font-size:15px;text-align:left;letter-spacing:normal;}
+  .field.left input{text-align:left;letter-spacing:normal;font-size:15px;}
   .big-btn{width:100%;background:var(--accent);color:#fff;border:none;padding:16px;border-radius:16px;font-size:16px;font-weight:700;cursor:pointer;}
   .big-btn:hover{background:var(--accent-dark);}
   .big-btn:disabled{opacity:.45;cursor:not-allowed;}
@@ -94,19 +96,35 @@
 <input type="file" id="odoCloseInput" accept="image/*" capture="environment" style="display:none" />
 <script>
 /* =========================================================================
-   PADMASRI TRAVELS - DRIVER APP
-   Deliberately separate from index.html and its login system: drivers sign
-   in with just their mobile number + a 4-digit PIN (default 1234, never
-   forced to change - see server.js backfillDefaults for why). Everything
-   here talks to /api/driver-auth/* and /api/driver-auth/trips, /payslip -
-   a completely different session (driverSessions on the server) from the
-   staff app's token.
+   PADMASRI TRAVELS - DRIVER + WORKSHOP STAFF APP
+   Deliberately separate from index.html and its login system: Drivers and
+   Workshop staff (Manager, Supervisor, Mechanic, Helper, Electrician) don't
+   have email addresses and aren't trained on the full staff app, so they
+   all sign in here with just their mobile number + a 4-digit PIN (default
+   1234, never forced to change - see server.js backfillDefaults for why).
+   One combined login form (see doPortalLogin) tries /api/driver-auth/login
+   first, then falls back to /api/workshop-auth/login - the same phone+PIN
+   the person types works for whichever portal their account belongs to,
+   so nobody has to know or care which "kind" of login they have.
+   `portalType` ("driver" | "workshop") tracks which session is active and
+   is what every render/boot function below branches on. The two sessions
+   (driverSessions vs workshopSessions on the server) are completely
+   independent - a phone number only ever matches one or the other.
    ========================================================================= */
 
 const API = "/api";
+let portalType = localStorage.getItem("portalType") || null; // "driver" | "workshop"
 let driverToken = localStorage.getItem("driverAuthToken") || null;
 let driver = null;
 let shift = null;
+let workshopToken = localStorage.getItem("workshopAuthToken") || null;
+let workshopUser = null;
+let workshopTab = "myrepairs";
+let workshopRequests = [];
+let workshopPurchases = [];
+let workshopStaffList = [];
+let workshopBusy = false;
+let pendingWorkshopInvoice = null;
 let lastError = "";
 // Which sub-tab is showing once the shift is active (on_trip/ready_to_logout).
 let driverTab = "current";
@@ -154,8 +172,54 @@ function resetSession(){
   driverTab = "current"; currentTrip = null;
   monthTrips = { upcoming: [], completed: [] }; myLeaveRequests = [];
   attendanceRows = []; documentsData = null; payslip = null;
+  portalType = null;
   localStorage.removeItem("driverAuthToken");
+  localStorage.removeItem("portalType");
   stopLocationPings(); stopPolling();
+}
+
+// ---------- Workshop staff (separate session, same login form) ----------
+async function workshopApi(path, opts={}){
+  const headers = Object.assign({"Content-Type":"application/json"}, opts.headers||{});
+  if(workshopToken) headers["Authorization"] = "Bearer " + workshopToken;
+  const res = await fetch(API+path, Object.assign({}, opts, {headers}));
+  if(res.status === 401){
+    resetWorkshopSession();
+    render();
+    throw new Error("Session expired - please log in again.");
+  }
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || ("Request failed ("+res.status+")"));
+  return data;
+}
+function resetWorkshopSession(){
+  workshopToken = null; workshopUser = null; portalType = null;
+  workshopTab = "myrepairs";
+  workshopRequests = []; workshopPurchases = []; workshopStaffList = [];
+  pendingWorkshopInvoice = null;
+  localStorage.removeItem("workshopAuthToken");
+  localStorage.removeItem("portalType");
+}
+const WORKSHOP_MANAGER_ROLES = ["workshop_manager","workshop_supervisor"];
+const WORKSHOP_ROLE_LABELS = { workshop_manager:"Workshop Manager", workshop_supervisor:"Workshop Supervisor", mechanic:"Mechanic", helper:"Helper", electrician:"Electrician" };
+function roleLabelClient(r){ return WORKSHOP_ROLE_LABELS[r] || r; }
+async function loadWorkshopTabData(){
+  if(workshopTab==="queue"){
+    try{
+      const [reqs, staff] = await Promise.all([workshopApi("/workshop-auth/repair-requests"), workshopApi("/workshop-auth/staff")]);
+      workshopRequests = reqs; workshopStaffList = staff;
+    }catch(e){}
+  } else if(workshopTab==="myrepairs"){
+    try{ workshopRequests = await workshopApi("/workshop-auth/repair-requests"); }catch(e){}
+  } else if(workshopTab==="purchases"){
+    try{ workshopPurchases = await workshopApi("/workshop-auth/workshop-purchases"); }catch(e){}
+  }
+}
+async function setWorkshopTab(tab){
+  workshopTab = tab;
+  render();
+  await loadWorkshopTabData();
+  render();
 }
 
 // ---------- location ----------
@@ -263,6 +327,19 @@ async function fetchDocuments(){
 
 // ---------- boot ----------
 async function boot(){
+  if(portalType === "workshop"){
+    if(!workshopToken){ render(); return; }
+    try{
+      const m = await workshopApi("/workshop-auth/me");
+      workshopUser = m.user;
+      workshopTab = WORKSHOP_MANAGER_ROLES.includes(workshopUser.role) ? "queue" : "myrepairs";
+      await loadWorkshopTabData();
+      render();
+    }catch(e){
+      resetWorkshopSession(); render();
+    }
+    return;
+  }
   if(!driverToken){ render(); return; }
   try{
     const m = await api("/driver-auth/me");
@@ -355,23 +432,41 @@ function initSwipe(trackId, onConfirm){
 }
 
 // ---------- actions ----------
-async function doDriverLogin(){
+// One combined login: try the Driver session first (the common case), then
+// fall back to Workshop staff - same phone+PIN form, no portal picker,
+// per the Owner's explicit choice to combine the two mobile logins.
+async function doPortalLogin(){
   if(busy) return;
   lastError = "";
   const phone = (document.getElementById("driverPhone")||{}).value || "";
   const pin = (document.getElementById("driverPin")||{}).value || "";
   if(!phone.trim() || !pin.trim()){ lastError = "Enter your mobile number and PIN."; render(); return; }
   busy = true; render();
+  const pos = await getPosition(6000);
   try{
-    const pos = await getPosition(6000);
     const r = await api("/driver-auth/login", {method:"POST", body: JSON.stringify({phone: phone.trim(), pin: pin.trim(), lat: pos.lat, lng: pos.lng})});
     driverToken = r.token; driver = r.driver; shift = r.shift;
+    portalType = "driver";
     localStorage.setItem("driverAuthToken", driverToken);
+    localStorage.setItem("portalType", "driver");
     startLocationPings(); startPolling();
     driverTab = "current";
     await fetchCurrentTrip();
-  }catch(e){
-    lastError = e.message;
+    busy = false; render();
+    return;
+  }catch(driverErr){
+    // Not a driver (or wrong PIN) - try Workshop staff before giving up.
+  }
+  try{
+    const r2 = await workshopApi("/workshop-auth/login", {method:"POST", body: JSON.stringify({phone: phone.trim(), pin: pin.trim()})});
+    workshopToken = r2.token; workshopUser = r2.user;
+    portalType = "workshop";
+    localStorage.setItem("workshopAuthToken", workshopToken);
+    localStorage.setItem("portalType", "workshop");
+    workshopTab = WORKSHOP_MANAGER_ROLES.includes(workshopUser.role) ? "queue" : "myrepairs";
+    await loadWorkshopTabData();
+  }catch(workshopErr){
+    lastError = "Incorrect mobile number or PIN.";
   }
   busy = false; render();
 }
@@ -460,16 +555,22 @@ function render(){
   const app = document.getElementById("app");
   app.innerHTML = topbarHtml() + `<main>${bodyHtml()}</main>` + footerHtml();
   setTimeout(()=>{
-    if(!driverToken) initSwipe("loginSwipe", doDriverLogin);
+    if(!driverToken && !workshopToken) initSwipe("loginSwipe", doPortalLogin);
     if(shift && shift.status==="ready_to_logout") initSwipe("logoutSwipe", doDriverLogout);
   }, 0);
 }
 
 function topbarHtml(){
+  if(portalType==="workshop" && workshopUser){
+    return `<header class="topbar">
+      <div class="brand">Padmasri <span class="accent-script">Travels</span></div>
+      <div class="who">${workshopUser.name}<br/><span class="muted" style="color:#fff;opacity:.8;">${roleLabelClient(workshopUser.role)}</span></div>
+    </header>`;
+  }
   const dot = locationOk ? "" : " off";
   return `<header class="topbar">
     <div class="brand">Padmasri <span class="accent-script">Travels</span></div>
-    ${driver ? `<div class="who">${driver.name}<br/><span class="status-pill"><span class="dot${dot}"></span>${locationOk?"Location on":"Location off"}</span></div>` : `<div class="who">Driver App</div>`}
+    ${driver ? `<div class="who">${driver.name}<br/><span class="status-pill"><span class="dot${dot}"></span>${locationOk?"Location on":"Location off"}</span></div>` : `<div class="who">Driver &amp; Workshop App</div>`}
   </header>`;
 }
 
@@ -482,6 +583,7 @@ function errorBannerHtml(){
 }
 
 function bodyHtml(){
+  if(portalType==="workshop") return workshopBodyHtml();
   if(!driverToken || !driver) return loginScreen();
   if(!shift || shift.status==="closed") return loggedOutScreen();
   // Every other stage (awaiting_odometer, on_trip, ready_to_logout) lands
@@ -492,9 +594,10 @@ function bodyHtml(){
 
 function loginScreen(){
   return `
-  <h1 class="page-title">Driver Login</h1>
+  <h1 class="page-title">Login</h1>
   ${errorBannerHtml()}
   <div class="card">
+    <p class="muted" style="text-align:center;margin:-4px 0 14px;">Drivers &amp; Workshop staff (Manager, Supervisor, Mechanic, Helper, Electrician)</p>
     <div class="field">
       <label>Mobile Number</label>
       <input type="tel" id="driverPhone" placeholder="10-digit mobile number" inputmode="numeric" maxlength="10" />
@@ -511,11 +614,17 @@ function loginScreen(){
   </div>`;
 }
 
+function workshopBodyHtml(){
+  if(!workshopToken || !workshopUser) return loginScreen();
+  return workshopActiveScreen();
+}
+
 function loggedOutScreen(){
   // Session closed (either the driver logged out cleanly, or the 10-minute
   // odometer window expired and the shift was auto-closed) - back to login.
   const reasonHtml = (shift && shift.autoClosedReason) ? `<div class="banner error">${shift.autoClosedReason}</div>` : "";
-  driverToken = null; localStorage.removeItem("driverAuthToken");
+  driverToken = null; portalType = null;
+  localStorage.removeItem("driverAuthToken"); localStorage.removeItem("portalType");
   return reasonHtml + loginScreen();
 }
 
@@ -900,6 +1009,259 @@ function payslipCardHtml(){
     </div>
     ${inner}
   </div>`;
+}
+
+// ---------- Workshop staff screens ----------
+// Manager/Supervisor get an Incoming Queue (assign to a Mechanic/Helper/
+// Electrician - matches the Owner's rule that only those two roles can
+// assign work). Everyone in Workshop gets My Repairs (start/complete
+// whatever's assigned to them) and Bulk Purchases. Deliberately simpler
+// than the staff app's version - a plain photo attachment for the invoice
+// rather than the OpenCV auto-scan-to-PDF flow, matching how much lighter
+// this mobile portal already is everywhere else (e.g. driver odometer
+// photos are a plain capture too).
+function workshopActiveScreen(){
+  return `
+  <h1 class="page-title">Welcome, <span class="accent-script">${workshopUser.name}</span></h1>
+  ${errorBannerHtml()}
+  ${workshopTabBarHtml()}
+  ${workshopTabContentHtml()}
+  `;
+}
+function workshopTabsFor(role){
+  const tabs = [];
+  if(WORKSHOP_MANAGER_ROLES.includes(role)) tabs.push(["queue","Incoming Queue"]);
+  tabs.push(["myrepairs","My Repairs"]);
+  tabs.push(["purchases","Bulk Purchases"]);
+  tabs.push(["account","Account"]);
+  return tabs;
+}
+function workshopTabBarHtml(){
+  const tabs = workshopTabsFor(workshopUser.role);
+  return `<div class="driver-tabbar">${tabs.map(([k,l])=>
+    `<button class="${workshopTab===k?'active':''}" onclick="setWorkshopTab('${k}')">${l}</button>`
+  ).join("")}</div>`;
+}
+function workshopTabContentHtml(){
+  if(workshopTab==="queue") return workshopQueueTabHtml();
+  if(workshopTab==="purchases") return workshopPurchasesTabHtml();
+  if(workshopTab==="account") return workshopAccountTabHtml();
+  return workshopMyRepairsTabHtml();
+}
+
+// ---- Incoming Queue (Manager/Supervisor only) ----
+function workshopQueueTabHtml(){
+  const incoming = workshopRequests.filter(r=>r.status==="requested");
+  const rowHtml = (r) => `
+    <div class="trip-item">
+      <div class="date">${fmtDate(r.createdAt.slice(0,10))} &middot; ${r.vehicleReg}</div>
+      <div class="desc">${r.issueDescription}</div>
+      <div class="meta">Urgency: ${r.urgency} &middot; Raised by ${r.raisedByName}</div>
+      <div class="field left" style="margin-top:10px;margin-bottom:6px;">
+        <label>Assign to</label>
+        <select id="wsAssign_${r.id}">
+          <option value="">Select staff...</option>
+          ${workshopStaffList.map(s=>`<option value="${s.id}">${s.name} (${roleLabelClient(s.role)})</option>`).join("")}
+        </select>
+      </div>
+      <button class="big-btn secondary" ${workshopBusy?"disabled":""} onclick="assignWorkshopRequest('${r.id}')">Assign</button>
+    </div>`;
+  return `
+  <div class="card">
+    <h2 class="section-title">Incoming Queue ${incoming.length? `<span class="badge pending">${incoming.length}</span>`:''}</h2>
+    ${incoming.length===0 ? `<div class="empty">Nothing waiting on assignment.</div>` : incoming.map(rowHtml).join("")}
+  </div>`;
+}
+async function assignWorkshopRequest(id){
+  const sel = document.getElementById(`wsAssign_${id}`);
+  const assignedTo = sel ? sel.value : "";
+  if(!assignedTo){ alert("Select a staff member to assign this to."); return; }
+  if(workshopBusy) return;
+  lastError = "";
+  workshopBusy = true; render();
+  try{
+    await workshopApi(`/workshop-auth/repair-requests/${id}/assign`, {method:"PATCH", body: JSON.stringify({assignedTo})});
+    await loadWorkshopTabData();
+  }catch(e){ lastError = e.message; }
+  workshopBusy = false; render();
+}
+
+// ---- My Repairs (everyone in Workshop) ----
+function workshopMyRepairsTabHtml(){
+  const mine = workshopRequests.filter(r=>r.assignedTo===workshopUser.id && ["assigned","in_progress"].includes(r.status));
+  const doneMine = workshopRequests.filter(r=>r.assignedTo===workshopUser.id && r.status==="completed").slice(0,10);
+  return `
+  <div class="card">
+    <h2 class="section-title">My Assigned Repairs</h2>
+    ${mine.length===0 ? `<div class="empty">Nothing assigned to you right now.</div>` : mine.map(workshopRepairCardHtml).join("")}
+  </div>
+  ${doneMine.length ? `
+  <div class="card">
+    <h2 class="section-title">Recently Completed</h2>
+    ${doneMine.map(r=>`<div class="trip-item"><div class="date">${r.vehicleReg}</div><div class="desc">${r.issueDescription}</div><span class="badge completed">Completed</span>${r.totalCost!=null?` &middot; ${money(r.totalCost)}`:''}</div>`).join("")}
+  </div>` : ""}`;
+}
+function workshopRepairCardHtml(r){
+  return `
+  <div class="trip-item">
+    <div class="date">${r.vehicleReg}</div>
+    <div class="desc">${r.issueDescription}</div>
+    <div class="meta">Urgency: ${r.urgency} &middot; Raised by ${r.raisedByName}</div>
+    <span class="badge ${r.status}">${r.status==="in_progress"?"In Progress":"Assigned"}</span>
+    ${r.status==="assigned" ? `<div class="trip-actions"><button ${workshopBusy?"disabled":""} onclick="startWorkshopRequest('${r.id}')">Start Work</button></div>` : ""}
+    ${r.status==="in_progress" ? `<div id="wsCompleteForm_${r.id}" style="margin-top:10px;"><button class="big-btn secondary" ${workshopBusy?"disabled":""} onclick="openWorkshopCompleteForm('${r.id}')">Mark Complete</button></div>` : ""}
+  </div>`;
+}
+async function startWorkshopRequest(id){
+  if(workshopBusy) return;
+  lastError = "";
+  workshopBusy = true; render();
+  try{
+    await workshopApi(`/workshop-auth/repair-requests/${id}/start`, {method:"PATCH"});
+    await loadWorkshopTabData();
+  }catch(e){ lastError = e.message; }
+  workshopBusy = false; render();
+}
+function openWorkshopCompleteForm(id){
+  const el = document.getElementById(`wsCompleteForm_${id}`);
+  if(!el) return;
+  el.innerHTML = `
+    <div class="field left"><label>What was done</label><input type="text" id="wsWd_${id}" placeholder="e.g. Replaced brake pads" /></div>
+    <div id="wsParts_${id}">
+      <div class="field left"><label>Part/Consumable</label><input type="text" class="wsPartName" placeholder="e.g. Brake pads" /></div>
+      <div class="field left"><label>Qty</label><input type="number" step="0.1" class="wsPartQty" value="1" /></div>
+      <div class="field left"><label>Unit</label><input type="text" class="wsPartUnit" placeholder="e.g. set" /></div>
+      <div class="field left"><label>Cost (&#8377;)</label><input type="number" class="wsPartCost" /></div>
+    </div>
+    <button class="big-btn secondary" type="button" onclick="addWorkshopPartRow('${id}')">+ Add another part</button>
+    <button class="big-btn" style="margin-top:10px;" ${workshopBusy?"disabled":""} onclick="submitWorkshopComplete('${id}')">Submit &amp; Create Expense</button>`;
+}
+function addWorkshopPartRow(id){
+  const wrap = document.getElementById(`wsParts_${id}`);
+  const frag = document.createElement("div");
+  frag.innerHTML = `
+    <div class="field left"><label>Part/Consumable</label><input type="text" class="wsPartName" /></div>
+    <div class="field left"><label>Qty</label><input type="number" step="0.1" class="wsPartQty" value="1" /></div>
+    <div class="field left"><label>Unit</label><input type="text" class="wsPartUnit" /></div>
+    <div class="field left"><label>Cost (&#8377;)</label><input type="number" class="wsPartCost" /></div>`;
+  while(frag.firstChild) wrap.appendChild(frag.firstChild);
+}
+async function submitWorkshopComplete(id){
+  const workDone = (document.getElementById(`wsWd_${id}`)||{}).value || "";
+  const names = document.querySelectorAll(`#wsParts_${id} .wsPartName`);
+  const qtys = document.querySelectorAll(`#wsParts_${id} .wsPartQty`);
+  const units = document.querySelectorAll(`#wsParts_${id} .wsPartUnit`);
+  const costs = document.querySelectorAll(`#wsParts_${id} .wsPartCost`);
+  const partsUsed = [];
+  for(let i=0;i<names.length;i++){
+    const name = names[i].value, cost = Number(costs[i].value)||0;
+    if(name && cost>0) partsUsed.push({ name, qty: Number(qtys[i].value)||1, unit: units[i].value, cost });
+  }
+  if(!workDone.trim()){ alert("Describe the work that was done."); return; }
+  if(!partsUsed.length){ alert("Add at least one part/consumable with its cost."); return; }
+  if(workshopBusy) return;
+  lastError = "";
+  workshopBusy = true; render();
+  try{
+    await workshopApi(`/workshop-auth/repair-requests/${id}/complete`, {method:"PATCH", body: JSON.stringify({workDone, partsUsed})});
+    await loadWorkshopTabData();
+    workshopBusy = false; render();
+    alert("Repair marked complete. A vehicle expense has been created and sent for approval.");
+    return;
+  }catch(e){ lastError = e.message; }
+  workshopBusy = false; render();
+}
+
+// ---- Bulk Purchases (everyone in Workshop) ----
+function workshopPurchasesTabHtml(){
+  return `
+  <div class="card">
+    <h2 class="section-title">Log a Bulk Purchase</h2>
+    <p class="muted">Add each item you bought, the total amount, and a photo of the invoice.</p>
+    <div id="wsPurchaseItemsRows">
+      <div class="field left"><label>Item</label><input type="text" class="wsItemName" placeholder="e.g. Adblue" /></div>
+      <div class="field left"><label>Qty</label><input type="number" step="0.1" class="wsItemQty" placeholder="e.g. 4" /></div>
+      <div class="field left"><label>Unit</label><input type="text" class="wsItemUnit" placeholder="e.g. Litres" /></div>
+    </div>
+    <button class="big-btn secondary" type="button" onclick="addWorkshopPurchaseItemRow()">+ Add another item</button>
+    <div class="field left" style="margin-top:12px;"><label>Total Amount (&#8377;)</label><input type="number" id="wsTotalAmount" /></div>
+    <div class="field left"><label>Notes (optional)</label><input type="text" id="wsNotes" /></div>
+    <div class="photo-box">
+      ${pendingWorkshopInvoice ? `<img src="${pendingWorkshopInvoice}"/><br/>` : ""}
+      <input type="file" id="wsInvoiceFileInput" accept="image/*" capture="environment" style="display:none" onchange="handleWorkshopInvoicePhoto(event)" />
+      <button type="button" class="big-btn secondary" style="margin-top:${pendingWorkshopInvoice?'10px':'0'};" onclick="document.getElementById('wsInvoiceFileInput').click()">${pendingWorkshopInvoice? "📷 Retake Invoice Photo" : "📷 Attach Invoice Photo"}</button>
+    </div>
+    <button class="big-btn" ${workshopBusy?"disabled":""} onclick="submitWorkshopPurchaseMobile()">${workshopBusy?'<span class="spinner"></span>Saving...':"Log Purchase"}</button>
+  </div>
+  <div class="card">
+    <h2 class="section-title">Your Recent Bulk Purchases</h2>
+    ${workshopPurchases.length===0 ? `<div class="empty">No purchases logged yet.</div>` : workshopPurchases.slice(0,20).map(p=>`
+      <div class="trip-item">
+        <div class="date">${fmtDate(p.createdAt.slice(0,10))}</div>
+        <div class="desc">${p.items.map(i=>`${i.qty}${i.unit?' '+i.unit:''} ${i.name}`).join(", ")}</div>
+        <div class="meta">${money(p.totalAmount)}${p.invoiceUrl?` &middot; <a href="${p.invoiceUrl}" target="_blank">View invoice</a>`:''}</div>
+      </div>`).join("")}
+  </div>`;
+}
+function addWorkshopPurchaseItemRow(){
+  const wrap = document.getElementById("wsPurchaseItemsRows");
+  const frag = document.createElement("div");
+  frag.innerHTML = `
+    <div class="field left"><label>Item</label><input type="text" class="wsItemName" /></div>
+    <div class="field left"><label>Qty</label><input type="number" step="0.1" class="wsItemQty" /></div>
+    <div class="field left"><label>Unit</label><input type="text" class="wsItemUnit" /></div>`;
+  while(frag.firstChild) wrap.appendChild(frag.firstChild);
+}
+function handleWorkshopInvoicePhoto(e){
+  const file = e.target.files[0];
+  e.target.value = "";
+  if(!file) return;
+  downscaleImage(file, 900, 0.8, (dataUrl)=>{ pendingWorkshopInvoice = dataUrl; render(); });
+}
+async function submitWorkshopPurchaseMobile(){
+  const names = document.querySelectorAll("#wsPurchaseItemsRows .wsItemName");
+  const qtys = document.querySelectorAll("#wsPurchaseItemsRows .wsItemQty");
+  const units = document.querySelectorAll("#wsPurchaseItemsRows .wsItemUnit");
+  const items = [];
+  for(let i=0;i<names.length;i++){
+    if(names[i].value) items.push({ name: names[i].value, qty: Number(qtys[i].value)||1, unit: units[i].value });
+  }
+  const totalAmount = Number((document.getElementById("wsTotalAmount")||{}).value);
+  const notes = (document.getElementById("wsNotes")||{}).value || "";
+  if(!items.length){ alert("Add at least one item purchased."); return; }
+  if(!totalAmount || totalAmount<=0){ alert("Enter a valid total amount."); return; }
+  if(!pendingWorkshopInvoice){ alert("Attach a photo of the invoice."); return; }
+  if(workshopBusy) return;
+  lastError = "";
+  workshopBusy = true; render();
+  try{
+    await workshopApi("/workshop-auth/workshop-purchases", {method:"POST", body: JSON.stringify({items, totalAmount, invoice: pendingWorkshopInvoice, notes})});
+    pendingWorkshopInvoice = null;
+    await loadWorkshopTabData();
+    workshopBusy = false; render();
+    alert("Purchase logged.");
+    return;
+  }catch(e){ lastError = e.message; }
+  workshopBusy = false; render();
+}
+
+// ---- Account (everyone in Workshop) ----
+function workshopAccountTabHtml(){
+  return `
+  <div class="card">
+    <h2 class="section-title">Account Info</h2>
+    <div class="doc-row"><div>Name</div><div>${workshopUser.name}</div></div>
+    <div class="doc-row"><div>Role</div><div>${roleLabelClient(workshopUser.role)}</div></div>
+    <div class="doc-row"><div>Mobile Number</div><div>${workshopUser.phone || "-"}</div></div>
+    <button class="big-btn danger" style="margin-top:14px;" ${workshopBusy?"disabled":""} onclick="doWorkshopLogout()">${workshopBusy?'<span class="spinner"></span>Logging out...':"Log Out"}</button>
+  </div>`;
+}
+async function doWorkshopLogout(){
+  if(workshopBusy) return;
+  workshopBusy = true; render();
+  try{ await workshopApi("/workshop-auth/logout", {method:"POST"}); }catch(e){}
+  resetWorkshopSession();
+  workshopBusy = false; render();
 }
 
 // Ticks the 10-minute countdown once a second WITHOUT a full re-render -
