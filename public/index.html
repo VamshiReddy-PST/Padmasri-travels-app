@@ -2179,7 +2179,11 @@ let editingClientRoutesId = null;
 let ownerAssignUnlocked = false;
 let subvendors = [];
 let editingSubvendorId = null;
-let odometerVerifyPendingOnly = true;
+// Completed shifts pile up fast (every driver, every day) and there's
+// nothing actionable in them, so they're hidden behind this toggle by
+// default - Pending and Approved (the two zones that actually need
+// someone's attention) are always shown in full.
+let odometerVerifyShowCompleted = false;
 const ROLE_OPTIONS = [
   ["site_supervisor","Site Supervisor"],["area_supervisor","Area Supervisor"],["ops_manager","Operations Manager"],
   ["data_team","Data Team"],["hr","HR"],["owner","Owner"],["bookings","Bookings Department"],
@@ -3857,28 +3861,43 @@ async function recordMySubvendorPayment(subvendorId, vehicleId, evt){
 // that's enforced server-side, not just hidden here.
 async function odometerVerificationScreen(){
   const allRows = await api("/driver-shifts");
-  const pendingCount = allRows.filter(isShiftPending).length;
-  const rows = odometerVerifyPendingOnly ? allRows.filter(isShiftPending) : allRows;
-  const cards = rows.map(odometerShiftCardHtml).join("");
+  // Three zones, not a single pending/done flag: a shift only counts as
+  // Approved once its opening reading is verified, and only moves into
+  // Completed once BOTH the opening AND the closing readings are verified -
+  // approving just one of the two is not enough to be "done".
+  const zones = { pending: [], approved: [], completed: [] };
+  allRows.forEach(r => zones[odometerVerificationZone(r)].push(r));
+  const zoneSectionHtml = (title, badgeClass, list, emptyMsg) => `
+    <h2 class="section-title" style="margin-top:18px;">${title} <span class="badge ${badgeClass}">${list.length}</span></h2>
+    ${list.length===0 ? `<div class="card"><div class="empty">${emptyMsg}</div></div>` : list.map(odometerShiftCardHtml).join("")}`;
   return `
   <h1 class="page-title">Odometer Verification</h1>
   <div class="banner">Check each driver's odometer photo before approving - once approved, a reading can never be edited again. If a driver genuinely couldn't enter a reading themselves, use Manual Entry after they read out their 6-digit code to you (this applies a ₹100 penalty on the driver for the missed entry).</div>
-  <div class="card">
+  ${zoneSectionHtml("Pending Verification", "pending", zones.pending, "Nothing pending verification.")}
+  ${zoneSectionHtml("Approved - Awaiting Closing Reading", "in_process", zones.approved, "Nothing waiting on a closing reading right now.")}
+  <div class="card" style="margin-top:18px;">
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;">
-      <input type="checkbox" ${odometerVerifyPendingOnly?"checked":""} onchange="toggleOdometerVerifyFilter(this.checked)" />
-      Show only shifts with something pending (${pendingCount} of ${allRows.length})
+      <input type="checkbox" ${odometerVerifyShowCompleted?"checked":""} onchange="toggleOdometerVerifyShowCompleted(this.checked)" />
+      Show completed shifts (${zones.completed.length} - both opening and closing approved)
     </label>
   </div>
-  ${rows.length===0 ? `<div class="card"><div class="empty">${odometerVerifyPendingOnly ? "Nothing pending verification." : "No driver shifts yet."}</div></div>` : cards}
+  ${odometerVerifyShowCompleted ? zoneSectionHtml("Completed", "completed", zones.completed, "No completed shifts yet.") : ""}
   `;
 }
-function isShiftPending(r){
-  const openPending = r.open.hasReading ? !r.open.verified : true;
-  const closePending = r.status!=="closed" && r.status!=="awaiting_odometer" ? (r.close.hasReading ? !r.close.verified : (r.status==="ready_to_logout")) : false;
-  return openPending || closePending;
+// A shift is Pending until its opening reading is verified. Once the
+// opening reading is verified it moves to Approved - even if the closing
+// reading is still outstanding. It only reaches Completed once BOTH the
+// opening AND the closing readings are verified; approving just one side
+// is never enough to land in Completed.
+function odometerVerificationZone(r){
+  const openVerified = r.open.hasReading && r.open.verified;
+  if(!openVerified) return "pending";
+  const closeVerified = r.close.hasReading && r.close.verified;
+  if(closeVerified) return "completed";
+  return "approved";
 }
-async function toggleOdometerVerifyFilter(checked){
-  odometerVerifyPendingOnly = checked;
+async function toggleOdometerVerifyShowCompleted(checked){
+  odometerVerifyShowCompleted = checked;
   await renderMain();
 }
 function driverLocationLineHtml(loc){
@@ -4512,7 +4531,7 @@ Object.assign(window, {
   createTrip, cancelTrip, deleteTrip,
   toggleSubvendorDetail, addSubvendor, linkSubvendorVehicle, reviseSubvendorBilling, unlinkSubvendorVehicle,
   recordSubvendorPayment, settleSubvendorAdvance, recordMySubvendorPayment,
-  toggleOdometerVerifyFilter, verifyOdometerReading, manualOdometerEntry,
+  toggleOdometerVerifyShowCompleted, verifyOdometerReading, manualOdometerEntry,
   submitRepairRequest, cancelRepairRequest, assignRepairRequest, startRepairRequest,
   openCompleteRepairForm, addPartRow, submitCompleteRepair,
   addPurchaseItemRow, handleWorkshopInvoiceFile, submitWorkshopPurchase,
