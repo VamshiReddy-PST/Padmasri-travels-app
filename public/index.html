@@ -228,7 +228,7 @@ let loading = false;
 let lastError = "";
 let loginPortal = null; // null = chooser screen, "staff" = staff/supervisor login form
 
-// ---- Site Supervisor vehicle/driver onboarding (pending approval) ----
+// ---- Area Supervisor vehicle/driver onboarding (pending approval) ----
 // Deliberately kept OUT of the `vehicles`/`meta.drivers` arrays above - a
 // pending submission isn't a real fleet vehicle/driver yet (see
 // vehicleIsApproved/driverIsApproved on the backend), so it must never leak
@@ -238,13 +238,23 @@ let mySubmittedVehicles = [];
 let mySubmittedDrivers = [];
 let onboardingSubmissionsLoaded = false;
 let onboardingBusy = false;
+// Which of the supervisor's own submitted drivers has its documents panel
+// open right now (null = none), for uploading the compliance docs
+// (License/Aadhar/ESI/PF/Police Verification) the supervisor didn't have
+// on hand at the moment of onboarding.
+let editingOnboardingDriverId = null;
+// ---- Fuel cross-verification (Data Team) ----
+let fuelVerifyPending = [];
+let fuelVerifyLoaded = false;
+let fuelVerifyBusy = false;
+let editingFuelVerifyKey = null; // `${vehicleId}_${date}` of the row whose edit form is open
 // ---- Fleet Approvals queue (Data Team/Owner for vehicles, HR/Owner for drivers) ----
 let pendingVehicleApprovals = [];
 let pendingDriverApprovals = [];
 let approvalsLoaded = false;
 let approvalsBusy = false;
 
-// ---- Site Supervisor: propose a new route, or a driver/route/company
+// ---- Area Supervisor: propose a new route, or a driver/route/company
 // assignment for one of their own vehicles - both need Data Team/Ops
 // Manager/Owner approval before taking effect. ----
 let myRouteRequests = [];
@@ -292,7 +302,7 @@ async function api(path, opts={}){
 }
 
 function roleLabel(r){
-  return {site_supervisor:"Site Supervisor", area_supervisor:"Area Supervisor", ops_manager:"Operations Manager", data_team:"Data Team", owner:"Owner", hr:"HR", bookings:"Bookings Department",
+  return {site_supervisor:"Area Supervisor", area_supervisor:"Regional Supervisor", ops_manager:"Operations Manager", data_team:"Data Team", owner:"Owner", hr:"HR", bookings:"Bookings Department",
     workshop_manager:"Workshop Manager", workshop_supervisor:"Workshop Supervisor", mechanic:"Mechanic", helper:"Helper", electrician:"Electrician"}[r] || r;
 }
 const WORKSHOP_STAFF_ROLES = ["workshop_manager","workshop_supervisor","mechanic","helper","electrician"];
@@ -791,11 +801,11 @@ async function submitVoluntaryPasswordChange(){
 // screen stays first/most prominent.
 function tabsFor(role){
   if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   return [];
@@ -810,7 +820,7 @@ function tabsFor(role){
 // that has none of its tabs in it.
 const NAV_GROUPS = [
   { key:"trips_vehicles", icon:"🚐", label:"Trips & Vehicles", tabs:["trips","usage","assignments","routes","subvendor_expenses","onboarding"] },
-  { key:"verification", icon:"🛠️", label:"Verification & Repairs", tabs:["odometer_verify","repairs","workshop"] },
+  { key:"verification", icon:"🛠️", label:"Verification & Repairs", tabs:["odometer_verify","fuel_verify","repairs","workshop"] },
   { key:"money", icon:"💰", label:"Money", tabs:["expenses","expenses_view","my_expenses","payroll","subvendors","reports","backup"] },
   { key:"people", icon:"👥", label:"People", tabs:["people","attendance","my_attendance"] },
   { key:"admin", icon:"📋", label:"Admin", tabs:["audit","approvals"] },
@@ -872,14 +882,15 @@ async function routeView(){
   if(view.name==="change_password") return changePasswordScreen();
   if(tab==="payroll") return payrollScreen();
   if(tab==="odometer_verify") return odometerVerificationScreen();
+  if(tab==="fuel_verify") return fuelVerificationScreen();
   if(tab==="repairs") return repairRequestsScreen();
   if(tab==="workshop") return workshopScreen();
   if(tab==="smart_assistant") return smartAssistantScreen();
   if(tab==="onboarding") return supervisorOnboardingScreen();
   if(tab==="approvals") return fleetApprovalsScreen();
-  // "My Vehicles" is shared by Site Supervisor and Area Supervisor - an Area
+  // "My Vehicles" is shared by Area Supervisor and Regional Supervisor - an Area
   // Supervisor can directly hold some vehicles/sites themselves (same as a
-  // Site Supervisor would), so they get the exact same checklist screen for
+  // Area Supervisor would), so they get the exact same checklist screen for
   // those, scoped down to just the vehicles supervisorId===them (see
   // supervisorHome()) rather than everything they oversee.
   if(tab==="my_vehicles") return view.name==="vehicle_detail" ? vehicleChecklistScreen(view.vehicleId) : supervisorHome();
@@ -941,7 +952,7 @@ async function routeView(){
   return "<div class='empty'>Nothing here.</div>";
 }
 
-// ================= VEHICLE USAGE (Site Supervisor, Area Supervisor, Bookings Department) =================
+// ================= VEHICLE USAGE (Area Supervisor, Regional Supervisor, Bookings Department) =================
 // A lighter-weight editor than the full Assignments screen - these three
 // roles can flip a vehicle's Usage (Fixed / Client on demand / Booking)
 // without touching site/driver/client assignment, which stays restricted
@@ -968,7 +979,7 @@ function vehicleUsageScreen(){
   <h1 class="page-title">Vehicle Usage</h1>
   <div class="banner">Set whether each vehicle runs a Fixed route, is used Client on demand, or is a Booking. Other vehicle/route/assignment details are managed by Operations Manager.</div>
   <div class="card">
-    <table><tr><th>Vehicle</th><th>Route/Site</th><th>Client</th><th>Driver</th><th>Usage</th></tr>
+    <table><tr><th>Vehicle</th><th>Route/Area</th><th>Client</th><th>Driver</th><th>Usage</th></tr>
     ${rows || "<tr><td colspan='5' class='empty'>No vehicles visible to you yet.</td></tr>"}
     </table>
   </div>`;
@@ -982,11 +993,11 @@ async function setVehicleUsage(vehicleId, usage){
 
 // ================= SITE SUPERVISOR =================
 function supervisorHome(){
-  // For a Site Supervisor, `vehicles` (from GET /api/vehicles) is already
-  // just their own. For an Area Supervisor it's wider - it also includes
-  // every vehicle under the Site Supervisors they oversee - so narrow down
+  // For an Area Supervisor, `vehicles` (from GET /api/vehicles) is already
+  // just their own. For an Regional Supervisor it's wider - it also includes
+  // every vehicle under the Area Supervisors they oversee - so narrow down
   // to only the ones they directly hold themselves (supervisorId === them),
-  // the same "special sites assigned to him" set a Site Supervisor would see.
+  // the same "special sites assigned to him" set an Area Supervisor would see.
   const mine = currentUser.role==="area_supervisor" ? vehicles.filter(v=>v.supervisorId===currentUser.id) : vehicles;
   const cards = mine.map(v=>{
     const rec = records[v.id];
@@ -1000,7 +1011,7 @@ function supervisorHome(){
     </div>`;
   }).join("");
   const note = currentUser.role==="area_supervisor"
-    ? "These are the sites you hold directly yourself, separate from the Site Supervisors you oversee. Complete the daily checklist, document check, breathalyzer test, attendance, and fuel/mileage entry for each before it goes on route - Data Team or the Owner verifies these, not you."
+    ? "These are the sites you hold directly yourself, separate from the Area Supervisors you oversee. Complete the daily checklist, document check, breathalyzer test, attendance, and fuel/mileage entry for each before it goes on route - Data Team or the Owner verifies these, not you."
     : "Complete the daily checklist, document check, breathalyzer test, attendance, and fuel/mileage entry for each vehicle before it goes on route.";
   return `
   <h1 class="page-title">My Vehicles - ${mine.length} allotted</h1>
@@ -1009,7 +1020,7 @@ function supervisorHome(){
   `;
 }
 
-// ---- Site Supervisor: Add Vehicle/Driver (full control over onboarding,
+// ---- Area Supervisor: Add Vehicle/Driver (full control over onboarding,
 // but each submission starts "pending" and needs Data Team/Owner (vehicle)
 // or HR/Owner (driver) approval before it's a real, usable fleet
 // vehicle/driver - it stays invisible everywhere else in the app until then. ----
@@ -1037,7 +1048,8 @@ async function supervisorOnboardingScreen(){
       <td><b>${d.name}</b></td><td>${d.phone||'-'}</td>
       <td>${submissionStatusBadge(d.approvalStatus)}</td>
       <td>${d.approvalStatus==="rejected" ? (d.rejectionComment||'-') : '-'}</td>
-    </tr>`).join("");
+      <td><button class="btn small secondary" onclick="toggleOnboardingDriverDocs('${d.id}')">${editingOnboardingDriverId===d.id?'Close':'Documents'}</button></td>
+    </tr>${editingOnboardingDriverId===d.id ? `<tr><td colspan="5">${onboardingDriverDocsPanelHtml(d)}</td></tr>` : ""}`).join("");
   return `
   <h1 class="page-title">Add Vehicle / Driver</h1>
   <div class="banner">You have full control over adding new vehicles and drivers here - once submitted, a vehicle needs Data Team or Owner approval, and a driver needs HR or Owner approval, before it's usable across the app (trips, assignments, etc.). You cannot delete a vehicle or driver once added.</div>
@@ -1095,8 +1107,9 @@ async function supervisorOnboardingScreen(){
       <button class="btn small" type="submit" ${onboardingBusy?"disabled":""}>${onboardingBusy?'<span class="spinner"></span>':'+ Submit driver for approval'}</button>
     </form>
     <h3 style="margin:16px 0 8px;">Your driver submissions</h3>
-    <table><tr><th>Driver</th><th>Phone</th><th>Status</th><th>Rejection reason</th></tr>
-    ${driverRows || "<tr><td colspan='4' class='empty'>You haven't submitted any drivers yet.</td></tr>"}
+    <div class="muted" style="margin-bottom:6px;">Click "Documents" on any driver to upload their compliance documents (License, Aadhar, ESI, PF, Police Verification) once you have them.</div>
+    <table><tr><th>Driver</th><th>Phone</th><th>Status</th><th>Rejection reason</th><th></th></tr>
+    ${driverRows || "<tr><td colspan='5' class='empty'>You haven't submitted any drivers yet.</td></tr>"}
     </table>
   </div>
   `;
@@ -1155,17 +1168,154 @@ async function submitDriverOnboarding(evt){
     const d = await api("/drivers", {method:"POST", body: JSON.stringify({name, phone, licenseNumber, dateOfJoining})});
     // NOT pushed into meta.drivers - same reasoning as vehicles above.
     mySubmittedDrivers.unshift(d);
-    alert(`${d.name} submitted - waiting on HR/Owner approval before they're assignable.`);
+    alert(`${d.name} submitted - waiting on HR, Data Team, or Owner approval before they're assignable.`);
   }catch(e){ alert(e.message); }
   onboardingBusy = false; await renderMain();
   return false;
+}
+// ---- Uploading a submitted driver's compliance documents (License,
+// Aadhar, ESI Certificate, PF Certificate, Police Verification) - the same
+// 5 "mandatory" doc types the archive-deadline rule tracks (see
+// driverDocsStatus() on the server). Only for a driver the supervisor
+// submitted themselves (enforced server-side too). ----
+const ONBOARDING_DRIVER_DOC_FIELDS = [
+  { key:"license", label:"Driving License", numberField:"licenseNumber", copyField:"licenseCopy", urlField:"licenseCopyUrl" },
+  { key:"aadhar", label:"Aadhar Card", numberField:"aadharNumber", copyField:"aadharCopy", urlField:"aadharCopyUrl" },
+  { key:"esi", label:"ESI Certificate", numberField:"esiNumber", copyField:"esiCertificate", urlField:"esiCertificateUrl" },
+  { key:"pf", label:"PF Certificate", numberField:"pfNumber", copyField:"pfCertificate", urlField:"pfCertificateUrl" },
+  { key:"police", label:"Police Verification", numberField:"policeVerificationNumber", copyField:"policeVerificationCopy", urlField:"policeVerificationCopyUrl" },
+];
+function toggleOnboardingDriverDocs(driverId){
+  editingOnboardingDriverId = editingOnboardingDriverId===driverId ? null : driverId;
+  renderMain();
+}
+function onboardingDriverDocsPanelHtml(d){
+  const rows = ONBOARDING_DRIVER_DOC_FIELDS.map(f=>`
+    <div class="check-row">
+      <div class="label"><b>${f.label}</b></div>
+      <div class="controls">
+        <input type="text" placeholder="Number" value="${d[f.numberField]||''}" style="width:130px" id="obDoc_${f.key}_number_${d.id}" />
+        <input type="file" accept="image/*" id="obDoc_${f.key}_copy_${d.id}" style="width:180px" />
+        ${d[f.urlField] ? `<a href="${d[f.urlField]}" target="_blank" rel="noopener">View uploaded copy</a>` : "<span class='muted'>No copy uploaded yet</span>"}
+      </div>
+    </div>`).join("");
+  return `
+  <div class="card" style="margin:8px 0;background:var(--panel-alt,#f7f7f9);">
+    <h2 class="section-title">${d.name} - Documents</h2>
+    ${rows}
+    <button class="btn small" onclick="saveOnboardingDriverDocs('${d.id}')">Save documents</button>
+  </div>`;
+}
+async function saveOnboardingDriverDocs(driverId){
+  const body = {};
+  for(const f of ONBOARDING_DRIVER_DOC_FIELDS){
+    const number = document.getElementById(`obDoc_${f.key}_number_${driverId}`).value;
+    if(number) body[f.numberField] = number;
+    const fileInput = document.getElementById(`obDoc_${f.key}_copy_${driverId}`);
+    const dataUrl = fileInput ? await readFileAsDataUrl(fileInput) : null;
+    if(dataUrl) body[f.copyField] = dataUrl;
+  }
+  try{
+    const updated = await api(`/drivers/${driverId}`, {method:"PATCH", body: JSON.stringify(body)});
+    const idx = mySubmittedDrivers.findIndex(x=>x.id===driverId);
+    if(idx>=0) mySubmittedDrivers[idx] = updated;
+    alert("Documents saved.");
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+
+// ---- Fuel Verification (Data Team/Owner) - a second, independent check on
+// the fuel numbers (litres/price/station/odometer) a Site/Area Supervisor
+// or Ops Manager entered, separate from whoever already verified the
+// record as a whole. Mirrors the Odometer Verification screen's pattern. ----
+async function loadFuelVerifyPending(){
+  try{ fuelVerifyPending = await api("/fuel-verification/pending"); }
+  catch(e){ lastError = e.message; }
+  fuelVerifyLoaded = true;
+}
+function toggleFuelVerifyEdit(vehicleId, date){
+  const key = `${vehicleId}_${date}`;
+  editingFuelVerifyKey = editingFuelVerifyKey===key ? null : key;
+  renderMain();
+}
+async function fuelVerificationScreen(){
+  if(!fuelVerifyLoaded) await loadFuelVerifyPending();
+  const rows = fuelVerifyPending.map(r=>{
+    const key = `${r.vehicleId}_${r.date}`;
+    const editing = editingFuelVerifyKey===key;
+    return `
+    <tr>
+      <td><b>${r.reg}</b></td><td>${r.date}</td><td>${r.submittedByName||'-'}</td>
+      <td>${r.fuel.litres} L</td><td>₹${r.fuel.fuelPrice}/L</td><td>₹${r.fuel.totalCost}</td>
+      <td>${r.fuel.station||'-'} / ${r.fuel.paymentMode||'-'}</td>
+      <td>${r.fuel.odometer} km ${r.fuel.belowStandard ? `<span class="badge low">below standard</span>` : ""}</td>
+      <td>
+        <button class="btn small secondary" ${fuelVerifyBusy?"disabled":""} onclick="toggleFuelVerifyEdit('${r.vehicleId}','${r.date}')">${editing?'Close':'Edit'}</button>
+        <button class="btn small" ${fuelVerifyBusy?"disabled":""} onclick="decideFuelVerify('${r.vehicleId}','${r.date}','approved')">Approve</button>
+        <button class="btn small danger" ${fuelVerifyBusy?"disabled":""} onclick="decideFuelVerify('${r.vehicleId}','${r.date}','flagged')">Flag</button>
+      </td>
+    </tr>
+    ${editing ? `<tr><td colspan="9">
+      <div class="card" style="margin:6px 0;background:var(--panel-alt,#f7f7f9);">
+        <h2 class="section-title">Correct ${r.reg} - ${r.date}</h2>
+        <div class="inline-form">
+          <div class="f"><label>Litres</label><input type="number" step="0.1" id="fv_litres_${key}" value="${r.fuel.litres}" style="width:80px" /></div>
+          <div class="f"><label>Fuel price (₹/L)</label><input type="number" step="0.1" id="fv_price_${key}" value="${r.fuel.fuelPrice}" style="width:90px" /></div>
+          <div class="f"><label>Odometer (km)</label><input type="number" id="fv_odo_${key}" value="${r.fuel.odometer}" style="width:100px" /></div>
+          <div class="f"><label>Station</label>
+            <select id="fv_station_${key}">
+              <option value="">- select -</option>
+              ${FUEL_STATIONS.map(s=>`<option value="${s}" ${r.fuel.station===s?'selected':''}>${s}</option>`).join("")}
+            </select>
+          </div>
+          <div class="f"><label>Payment mode</label>
+            <select id="fv_payment_${key}">
+              <option value="">- select -</option>
+              ${FUEL_PAYMENT_MODES.map(p=>`<option value="${p}" ${r.fuel.paymentMode===p?'selected':''}>${p}</option>`).join("")}
+            </select>
+          </div>
+        </div>
+        <button class="btn small" ${fuelVerifyBusy?"disabled":""} onclick="decideFuelVerify('${r.vehicleId}','${r.date}','approved',true)">Save correction &amp; approve</button>
+      </div>
+    </td></tr>` : ""}`;
+  }).join("");
+  return `
+  <h1 class="page-title">Fuel Verification</h1>
+  <div class="banner">Cross-checks the fuel figures a Site/Area Supervisor or Ops Manager entered on their daily record - separate from whoever already verified the record overall. Only shows days fuel was actually filled.</div>
+  <div class="card">
+    <h2 class="section-title">Pending (${fuelVerifyPending.length})</h2>
+    <table><tr><th>Vehicle</th><th>Date</th><th>Submitted by</th><th>Litres</th><th>Price</th><th>Total</th><th>Station / Payment</th><th>Odometer</th><th>Action</th></tr>
+    ${rows || "<tr><td colspan='9' class='empty'>Nothing pending.</td></tr>"}</table>
+  </div>`;
+}
+async function decideFuelVerify(vehicleId, date, status, withEdits){
+  let comment = "";
+  if(status==="flagged"){ comment = prompt("Reason for flagging this fuel entry:",""); if(comment===null || !comment.trim()){ alert("A comment is required when flagging."); return; } }
+  const key = `${vehicleId}_${date}`;
+  const body = {status, comment};
+  if(withEdits){
+    body.edits = {
+      litres: document.getElementById(`fv_litres_${key}`).value,
+      fuelPrice: document.getElementById(`fv_price_${key}`).value,
+      odometer: document.getElementById(`fv_odo_${key}`).value,
+      station: document.getElementById(`fv_station_${key}`).value,
+      paymentMode: document.getElementById(`fv_payment_${key}`).value,
+    };
+  }
+  fuelVerifyBusy = true; await renderMain();
+  try{
+    await api(`/records/${vehicleId}/${date}/fuel-verify`, {method:"PATCH", body: JSON.stringify(body)});
+    fuelVerifyPending = fuelVerifyPending.filter(r=>!(r.vehicleId===vehicleId && r.date===date));
+    editingFuelVerifyKey = null;
+  }catch(e){ alert(e.message); }
+  fuelVerifyBusy = false; await renderMain();
 }
 
 // ---- Fleet Approvals (Data Team/Owner for vehicles, HR/Owner for drivers) ----
 async function loadPendingApprovals(){
   const role = currentUser.role;
   const canSeeVehicles = role==="data_team" || role==="owner";
-  const canSeeDrivers = role==="hr" || role==="owner";
+  const canSeeDrivers = role==="hr" || role==="owner" || role==="data_team";
   const canSeeRoutesAndAssignments = role==="data_team" || role==="ops_manager" || role==="owner";
   try{
     const [v, d, rr, ar] = await Promise.all([
@@ -1184,7 +1334,7 @@ async function fleetApprovalsScreen(){
   if(!approvalsLoaded) await loadPendingApprovals();
   const role = currentUser.role;
   const canSeeVehicles = role==="data_team" || role==="owner";
-  const canSeeDrivers = role==="hr" || role==="owner";
+  const canSeeDrivers = role==="hr" || role==="owner" || role==="data_team";
   const canSeeRoutesAndAssignments = role==="data_team" || role==="ops_manager" || role==="owner";
   const vehicleRows = pendingVehicleApprovals.map(v=>`
     <tr>
@@ -1224,7 +1374,7 @@ async function fleetApprovalsScreen(){
     </tr>`).join("");
   return `
   <h1 class="page-title">Fleet Approvals</h1>
-  <div class="banner">Vehicles, drivers, routes and assignments submitted by Site Supervisors land here first - they aren't usable anywhere else in the app until approved.</div>
+  <div class="banner">Vehicles, drivers, routes and assignments submitted by Area Supervisors land here first - they aren't usable anywhere else in the app until approved.</div>
   ${canSeeVehicles ? `
   <div class="card">
     <h2 class="section-title">Pending Vehicles (${pendingVehicleApprovals.length})</h2>
@@ -1379,12 +1529,23 @@ function vehicleChecklistScreen(vehicleId){
   const docsRows = Object.entries(v.docs||{}).map(([k,doc])=>{
     const dleft = daysUntil(doc.expiry);
     const cls = (dleft < 15) ? 'low' : 'ok';
+    // Site/Area Supervisors can upload a photo/scan of each document right
+    // here on their own vehicle, same doc-copy capability Data Team/Ops
+    // Manager/Owner already have via Vehicle Details - everybody who
+    // touches a vehicle can keep its paperwork current, not just admins.
+    const canUploadCopy = DOC_COPY_TYPES.includes(k);
     return `<div class="check-row">
       <div class="label"><b>${k}</b> - ${doc.number||'(no number on file)'}</div>
       <div class="controls">
         <input type="date" value="${doc.expiry||''}" onchange="updateDoc('${vehicleId}','${k}',this.value)" />
         <span class="badge ${cls}">${doc.expiry? (dleft<0? 'EXPIRED' : dleft+' days left') : 'not set'}</span>
       </div>
+      ${canUploadCopy ? `
+      <div class="controls" style="margin-top:4px;">
+        <input type="file" accept="image/*" id="checklistDoc_${k}_${vehicleId}" style="width:200px" />
+        <button class="btn small secondary" onclick="updateDocCopy('${vehicleId}','${k}')">Upload copy</button>
+        ${doc.copyUrl ? `<a href="${doc.copyUrl}" target="_blank" rel="noopener">View uploaded copy</a>` : "<span class='muted'>No copy uploaded yet</span>"}
+      </div>` : ""}
     </div>`;
   }).join("");
 
@@ -1430,7 +1591,7 @@ function vehicleChecklistScreen(vehicleId){
   <button class="btn secondary small" onclick="goto('list')">&larr; Back to vehicles</button>
   <h1 class="page-title">${v.reg} <span class="muted" style="font-size:13px;">· ${v.route || siteName(v.siteId)} · Driver: ${driverName(v.driverId)}</span></h1>
   ${statusBadge}
-  ${existingRec && existingRec.verification.comment ? `<div class="banner" style="margin-top:10px;">Area Supervisor note: "${existingRec.verification.comment}"</div>` : ""}
+  ${existingRec && existingRec.verification.comment ? `<div class="banner" style="margin-top:10px;">Regional Supervisor note: "${existingRec.verification.comment}"</div>` : ""}
 
   ${dayOdometerCard(vehicleId)}
 
@@ -1601,6 +1762,20 @@ async function updateDoc(vehicleId, docType, expiry){
     renderMain();
   }catch(e){ alert(e.message); }
 }
+// Lets whoever is looking at a vehicle's daily checklist (Site/Area
+// Supervisor, on their own vehicle) upload a document photo/scan right
+// there, not just admins via the separate Vehicle Details editor.
+async function updateDocCopy(vehicleId, docType){
+  const fileInput = document.getElementById(`checklistDoc_${docType}_${vehicleId}`);
+  const dataUrl = fileInput ? await readFileAsDataUrl(fileInput) : null;
+  if(!dataUrl){ alert("Choose a file first."); return; }
+  try{
+    const v = await api(`/vehicles/${vehicleId}/docs`, {method:"PATCH", body: JSON.stringify({docType, copy: dataUrl})});
+    const idx = vehicles.findIndex(x=>x.id===vehicleId);
+    if(idx>=0) vehicles[idx] = v;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
 async function submitVehicle(vehicleId){
   if(Number(draft.fuel.litres) > 0 && !(draft.photoTags.fuelReceipt||[]).length){
     alert("You entered litres filled, so a photo of the fuel receipt is required before you can submit.");
@@ -1644,7 +1819,7 @@ async function myAttendanceScreen(){
       <td>${a.type==='clockin'?'Clock in':'Clock out'}</td>
       <td>${new Date(a.ts).toLocaleTimeString()}</td>
       <td>${a.selfieUrl? `<img class="selfie-thumb" src="${a.selfieUrl}" />` : "-"}</td>
-      <td>${a.distanceMeters!=null ? a.distanceMeters+" m from "+ (a.siteName||"site") : "no site on file"}</td>
+      <td>${a.distanceMeters!=null ? a.distanceMeters+" m from "+ (a.siteName||"area") : "no area on file"}</td>
       <td><span class="badge ${a.withinGeofence? 'ok':'low'}">${a.withinGeofence==null?'n/a':(a.withinGeofence?'AT SITE':'AWAY FROM SITE')}</span></td>
     </tr>`).join("");
   return `
@@ -1688,7 +1863,7 @@ async function completeClock(type, selfie, lat, lng){
   try{
     const entry = await api(`/attendance/${type}`, {method:"POST", body: JSON.stringify({selfie, lat, lng})});
     let msg = type==='clockin' ? "Clocked in." : "Clocked out.";
-    if(entry.withinGeofence===false) msg += " Note: you appear to be away from your assigned site.";
+    if(entry.withinGeofence===false) msg += " Note: you appear to be away from your assigned area.";
     alert(msg);
     await renderMain();
   }catch(e){ alert(e.message); }
@@ -1872,7 +2047,7 @@ async function setExpensePaymentStage(id, paymentStage){
 
 // ================= AREA SUPERVISOR =================
 async function areaQueueScreen(){
-  // `vehicles` includes both the Site Supervisors this Area Supervisor
+  // `vehicles` includes both the Area Supervisors this Regional Supervisor
   // oversees AND any vehicles/sites he directly holds himself (see "My
   // Vehicles"). He can't verify his own directly-held vehicles' records -
   // only Data Team/Owner can - so this queue only ever needs to show the
@@ -1900,7 +2075,7 @@ async function areaQueueScreen(){
   </div>
   ${selfHeldPending ? `<div class="banner">${selfHeldPending} record(s) from your own directly-held vehicle(s) are also awaiting verification, but only Data Team or the Owner can review those - check "My Vehicles" for their status.</div>` : ""}
   <div class="card"><h2 class="section-title">Awaiting cross-verification</h2>
-    <table><tr><th>Vehicle</th><th>Route/Site</th><th>Submitted by</th><th>Flags</th><th>Action</th></tr>${rows || "<tr><td colspan='5' class='empty'>Nothing pending.</td></tr>"}</table>
+    <table><tr><th>Vehicle</th><th>Route/Area</th><th>Submitted by</th><th>Flags</th><th>Action</th></tr>${rows || "<tr><td colspan='5' class='empty'>Nothing pending.</td></tr>"}</table>
   </div>`;
 }
 function flagsSummary(r,v){
@@ -2041,7 +2216,7 @@ async function assignmentsDateViewCardHtml(){
         <button class="btn small secondary" onclick="downloadVehiclesRunning('xlsx')">Download Excel</button>
       </div>
     </div>
-    <table><tr><th>Vehicle</th><th>Company</th><th>Area Supervisor</th><th>Site Supervisor</th><th>Supervisor Mobile</th><th>Driver</th><th>Driver Mobile</th><th>Route ID</th><th>Route Starting Point</th></tr>
+    <table><tr><th>Vehicle</th><th>Company</th><th>Regional Supervisor</th><th>Area Supervisor</th><th>Supervisor Mobile</th><th>Driver</th><th>Driver Mobile</th><th>Route ID</th><th>Route Starting Point</th></tr>
     ${rows || "<tr><td colspan='9' class='empty'>No vehicles yet.</td></tr>"}
     </table>
   </div>`;
@@ -2070,7 +2245,7 @@ async function downloadVehiclesRunning(format){
 // ---- Fuel filling overview - every vehicle fuelled on the selected date,
 // plus that day's spend broken out by fuel station brand and by payment
 // mode. Shares the same date as the date-view card above so both stay in
-// sync when the date is changed. Visible to Site Supervisor, Area
+// sync when the date is changed. Visible to Area Supervisor, Area
 // Supervisor, Operations Manager and Owner.
 async function fetchFuelOverview(date){
   try{ return await api("/fuel-overview?date="+date); }catch(e){ return null; }
@@ -2148,7 +2323,7 @@ async function ownerAssignmentsReadOnlyHtml(){
     <button class="btn small secondary" onclick="unlockOwnerAssignmentEditing()">Unlock editing (password required)</button>
   </div>`;
 }
-// Read-only Assignments view for Site Supervisor and Area Supervisor -
+// Read-only Assignments view for Area Supervisor and Regional Supervisor -
 // same date-scoped vehicle/driver view and fuel overview as Owner/Ops
 // Manager get, automatically scoped to their own visible vehicles
 // server-side, with no edit controls at all.
@@ -2222,7 +2397,7 @@ async function assignmentsEditorHtml(){
   <div class="banner">Assign each vehicle to a company and one of its Route IDs, a site supervisor, and a driver here. Only Operations Manager, Data Team and Owner can make these changes - every change is logged. A vehicle with a Company but no Route (or vice versa) is flagged below - both are required to fully recognise a vehicle.</div>
   <div class="card">
     <h2 class="section-title">Vehicles (${vehicles.length})</h2>
-    <table><tr><th>Vehicle</th><th>Type / Fuel</th><th>Client</th><th>Route ID</th><th>Site</th><th>Site Supervisor</th><th>Driver</th><th>Driver since</th><th>Usage</th><th></th></tr>${rows}</table>
+    <table><tr><th>Vehicle</th><th>Type / Fuel</th><th>Client</th><th>Route ID</th><th>Area</th><th>Area Supervisor</th><th>Driver</th><th>Driver since</th><th>Usage</th><th></th></tr>${rows}</table>
     <div class="banner">Every field below is required - a vehicle cannot be added without its complete onboarding data.</div>
     <form class="inline-form" onsubmit="return addVehicle(event)">
       <div class="f"><label>New registration number *</label><input type="text" id="newVehicleReg" placeholder="TS 09 XX 1234" required /></div>
@@ -2268,11 +2443,12 @@ async function assignmentsEditorHtml(){
   <div class="grid cols-3">
     <div class="card">
       <h2 class="section-title">Clients & Routes</h2>
-      <table><tr><th>Client</th><th>Routes</th><th></th></tr>${meta.clients.map(c=>`
+      <table><tr><th>Client</th><th>Routes</th><th></th><th></th></tr>${meta.clients.map(c=>`
         <tr>
           <td>${c.name}</td>
           <td>${(c.routes||[]).length} / ${c.routeCap||0}</td>
           <td><button class="btn small secondary" onclick="toggleClientRoutes('${c.id}')">${editingClientRoutesId===c.id?'Close':(canEditRoutes()?'Manage Routes':'View Routes')}</button></td>
+          <td>${canEditRoutes() ? `<button class="btn small secondary" onclick="renameClient('${c.id}')">Rename</button>` : ""}</td>
         </tr>`).join("")}</table>
       <form class="inline-form" onsubmit="return addClient(event)">
         <div class="f"><label>New client</label><input type="text" id="newClientName" required /></div>
@@ -2281,10 +2457,10 @@ async function assignmentsEditorHtml(){
       ${editingClientRoutesId ? clientRoutesEditorHtml(editingClientRoutesId) : ""}
     </div>
     <div class="card">
-      <h2 class="section-title">Sites</h2>
-      <table>${meta.sites.map(s=>`<tr><td>${s.name}</td></tr>`).join("")}</table>
+      <h2 class="section-title">Areas</h2>
+      <table>${meta.sites.map(s=>`<tr><td>${s.name}</td><td>${canEditRoutes() ? `<button class="btn small secondary" onclick="editSite('${s.id}')">Edit</button>` : ""}</td></tr>`).join("")}</table>
       <form class="inline-form" onsubmit="return addSite(event)">
-        <div class="f"><label>New site name</label><input type="text" id="newSiteName" required /></div>
+        <div class="f"><label>New area name</label><input type="text" id="newSiteName" required /></div>
         <div class="f"><label>Lat</label><input type="number" step="0.0001" id="newSiteLat" style="width:80px" /></div>
         <div class="f"><label>Lng</label><input type="number" step="0.0001" id="newSiteLng" style="width:80px" /></div>
         <button class="btn small" type="submit">+ Add</button>
@@ -2360,10 +2536,9 @@ async function addVehicle(evt){
 // Date/Seating) and per-document number/expiry, including Permit's district
 // details. Opened per-vehicle from the Assignments table.
 const DOC_TYPES = ["RC","Permit","Insurance","Fitness","Tax","PUC","TemporaryPermit","BorderTax"];
-// These 5 get a photo/scan of the physical document attached + a visible
-// "last updated" stamp - Insurance does not (matches the server's
-// DOC_COPY_TYPES list).
-const DOC_COPY_TYPES = ["RC","Permit","Fitness","Tax","PUC","TemporaryPermit","BorderTax"];
+// These get a photo/scan of the physical document attached + a visible
+// "last updated" stamp (matches the server's DOC_COPY_TYPES list).
+const DOC_COPY_TYPES = ["RC","Permit","Insurance","Fitness","Tax","PUC","TemporaryPermit","BorderTax"];
 function toggleVehicleDetails(vehicleId){
   editingVehicleId = editingVehicleId===vehicleId ? null : vehicleId;
   renderMain();
@@ -2510,10 +2685,10 @@ async function saveVehicleDoc(vehicleId, docType){
 // ---- Client Routes: each client has a route cap (Owner-only) and a list of
 // routes - starting point name + route number (e.g. "Alwal" / "6A") - that
 // Owner and Operations Manager can add/edit/remove, capped at that number.
-// Everyone else (Data Team, Site/Area Supervisors) can see this via
+// Everyone else (Data Team, Area/Regional Supervisors) can see this via
 // meta.clients but has no controls to change it.
 function canSetRouteCap(){ return currentUser.role==="owner"; }
-function canEditRoutes(){ return currentUser.role==="owner" || currentUser.role==="ops_manager"; }
+function canEditRoutes(){ return currentUser.role==="owner" || currentUser.role==="ops_manager" || currentUser.role==="data_team"; }
 function toggleClientRoutes(clientId){
   editingClientRoutesId = editingClientRoutesId===clientId ? null : clientId;
   renderMain();
@@ -2609,6 +2784,36 @@ async function addSite(evt){
   catch(e){ alert(e.message); }
   return false;
 }
+// Rename an existing client - Owner/Ops Manager/Data Team only (this whole
+// screen is already gated to those three roles server-side, so no extra
+// frontend permission check is needed here beyond "can you see this screen").
+async function renameClient(clientId){
+  const c = meta.clients.find(x=>x.id===clientId);
+  if(!c) return;
+  const name = prompt("Rename client:", c.name);
+  if(name===null || !name.trim()) return;
+  try{
+    const updated = await api(`/clients/${clientId}`, {method:"PATCH", body: JSON.stringify({name: name.trim()})});
+    Object.assign(c, updated);
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+// Edit an existing area's name/lat/lng - same access as renaming a client.
+async function editSite(siteId){
+  const s = meta.sites.find(x=>x.id===siteId);
+  if(!s) return;
+  const name = prompt("Area name:", s.name);
+  if(name===null || !name.trim()) return;
+  const latStr = prompt("Latitude (used for clock-in geofence, leave blank to clear):", s.lat!=null?String(s.lat):"");
+  if(latStr===null) return;
+  const lngStr = prompt("Longitude:", s.lng!=null?String(s.lng):"");
+  if(lngStr===null) return;
+  try{
+    const updated = await api(`/sites/${siteId}`, {method:"PATCH", body: JSON.stringify({name: name.trim(), lat: latStr===""?null:latStr, lng: lngStr===""?null:lngStr})});
+    Object.assign(s, updated);
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
 async function addDriver(evt){
   evt.preventDefault();
   const name = document.getElementById("newDriverName").value;
@@ -2635,13 +2840,13 @@ let editingSubvendorId = null;
 // someone's attention) are always shown in full.
 let odometerVerifyShowCompleted = false;
 const ROLE_OPTIONS = [
-  ["site_supervisor","Site Supervisor"],["area_supervisor","Area Supervisor"],["ops_manager","Operations Manager"],
+  ["site_supervisor","Area Supervisor"],["area_supervisor","Regional Supervisor"],["ops_manager","Operations Manager"],
   ["data_team","Data Team"],["hr","HR"],["owner","Owner"],["bookings","Bookings Department"],
   ["workshop_manager","Workshop Manager"],["workshop_supervisor","Workshop Supervisor"],["mechanic","Mechanic"],["helper","Helper"],["electrician","Electrician"],
 ];
 // Mirrors the server's rule in server.js (canManageUserRole): Owner can
-// manage anyone. HR - the primary staff onboarder - can manage Site
-// Supervisor, Area Supervisor, Operations Manager, Data Team and Bookings
+// manage anyone. HR - the primary staff onboarder - can manage Area
+// Supervisor, Regional Supervisor, Operations Manager, Data Team and Bookings
 // Department accounts (everyone except Owner and other HR). Ops Manager can
 // manage everyone except Owner, Ops Manager and HR. This is purely a UI
 // convenience (hide buttons/options that would just get a 403 back) - the
@@ -2693,13 +2898,13 @@ async function peopleScreen(){
   <h1 class="page-title">People</h1>
   <div class="card">
     <h2 class="section-title">Staff (${meta.users.length})</h2>
-    <table><tr><th>Name</th><th>Role</th><th>Site / Supervises</th><th>Email</th><th>Mobile Number</th><th>Date of Joining</th><th></th></tr>${rows}</table>
+    <table><tr><th>Name</th><th>Role</th><th>Area / Supervises</th><th>Email</th><th>Mobile Number</th><th>Date of Joining</th><th></th></tr>${rows}</table>
 
     ${canEditAtAll ? `
     <form class="inline-form" onsubmit="return ${editing ? 'saveEditPerson(event)' : 'addPerson(event)'}">
       <div class="f"><label>Name</label><input type="text" id="newPersonName" value="${editing? editing.name : ''}" required /></div>
       <div class="f"><label>Role</label><select id="newPersonRole">${roleOptionsHtml(editing? editing.role : 'site_supervisor', myRole)}</select></div>
-      <div class="f"><label>Site (if Site Supervisor)</label><select id="newPersonSite">${siteOptionsHtml(editing? editing.siteId : null)}</select></div>
+      <div class="f"><label>Area (if Area Supervisor)</label><select id="newPersonSite">${siteOptionsHtml(editing? editing.siteId : null)}</select></div>
       <div class="f"><label>Email</label><input type="email" id="newPersonEmail" value="${editing? (editing.email||'') : ''}" style="width:200px" /></div>
       <div class="f"><label>Mobile Number</label><input type="tel" id="newPersonPhone" value="${editing? (editing.phone||'') : ''}" style="width:130px" /></div>
       <div class="f"><label>Date of Joining</label><input type="date" id="newPersonDoj" value="${editing? (editing.dateOfJoining||'') : ''}" style="width:140px" /></div>
@@ -2828,7 +3033,7 @@ async function driversCardHtml(){
       <td>${d.drivingLevel || "-"}</td>
       <td>${d.performanceScore!=null ? d.performanceScore : '<span class="muted">Not yet rated</span>'}</td>
       <td>${driverMileageLabel(summary)}</td>
-      <td>${isActive ? '<span class="badge ok">Active</span>' : '<span class="badge fail">Left</span>'}</td>
+      <td>${isActive ? '<span class="badge ok">Active</span>' : '<span class="badge fail">Left</span>'} ${driverDocsBadgeHtml(d)}</td>
       <td>${canEditAtAll ? `<button class="btn small secondary" onclick="toggleDriverDetails('${d.id}')">${editingDriverId===d.id?'Close':'Details'}</button>` : ''}</td>
     </tr>
     ${editingDriverId===d.id ? `<tr><td colspan="9">${driverEditorHtml(d)}</td></tr>` : ''}`;
@@ -2960,6 +3165,43 @@ function monthsBetweenDatesClient(fromStr, toStr){
   if(to.getUTCDate() < from.getUTCDate()) months -= 1;
   return Math.max(0, months);
 }
+// Mandatory driver documents (License, Aadhar, ESI Certificate, PF
+// Certificate, Police Verification) - mirrors MANDATORY_DRIVER_DOC_FIELDS in
+// server.js. A driver missing any of these gets a 5-day upload deadline
+// (docsDeadline); if it passes without all 5 uploaded, the driver is
+// auto-archived (docsArchived=true, active=false) until they're complete.
+const DRIVER_MANDATORY_DOC_LABELS = {
+  licenseCopyUrl: "Driving License",
+  aadharCopyUrl: "Aadhar Card",
+  esiCertificateUrl: "ESI Certificate",
+  pfCertificateUrl: "PF Certificate",
+  policeVerificationCopyUrl: "Police Verification",
+};
+function driverMissingMandatoryDocs(d){
+  return Object.keys(DRIVER_MANDATORY_DOC_LABELS).filter(f=>!d[f]).map(f=>DRIVER_MANDATORY_DOC_LABELS[f]);
+}
+function driverDocsBadgeHtml(d){
+  if(d.docsArchived) return '<span class="badge fail" title="Auto-archived for missing mandatory documents">Docs Archived</span>';
+  if(!d.docsDeadline) return '';
+  const daysLeft = Math.ceil((new Date(d.docsDeadline+"T00:00:00Z") - new Date(todayStr()+"T00:00:00Z")) / 86400000);
+  if(daysLeft < 0) return '<span class="badge fail">Docs OVERDUE</span>';
+  return `<span class="badge pending">Docs due in ${daysLeft} day${daysLeft===1?'':'s'}</span>`;
+}
+function driverDocsStatusPanelHtml(d){
+  const missing = driverMissingMandatoryDocs(d);
+  if(!missing.length && !d.docsArchived) return `<div class="muted" style="margin-bottom:8px;">All mandatory documents (License, Aadhar, ESI Certificate, PF Certificate, Police Verification) are on file.</div>`;
+  if(d.docsArchived){
+    return `<div style="margin-bottom:8px;">
+      <span class="badge fail">Archived - missing documents</span>
+      <div class="muted" style="margin-top:4px;">Missing: ${missing.join(", ")}. Upload the remaining documents above, then use "Reactivate" below to bring this driver back to Active.</div>
+    </div>`;
+  }
+  const badge = driverDocsBadgeHtml(d);
+  return `<div style="margin-bottom:8px;">
+    ${badge}
+    <div class="muted" style="margin-top:4px;">Missing: ${missing.join(", ")}. Due ${d.docsDeadline} - if not uploaded by then, this driver will be automatically archived until the documents are provided.</div>
+  </div>`;
+}
 function driverLifecycleUniformHtml(d){
   const isActive = d.active !== false;
   const hist = Array.isArray(d.employmentHistory) ? d.employmentHistory : [];
@@ -2986,7 +3228,9 @@ function driverLifecycleUniformHtml(d){
 
   return `
   <div style="margin-top:14px;border-top:1px solid #eee;padding-top:12px;">
-    <h3 style="margin:0 0 6px;">Employment status</h3>
+    <h3 style="margin:0 0 6px;">Mandatory documents</h3>
+    ${driverDocsStatusPanelHtml(d)}
+    <h3 style="margin:16px 0 6px;">Employment status</h3>
     <div style="margin-bottom:8px;">
       ${isActive ? `<span class="badge ok">Active</span> since ${currentStint?currentStint.joinedDate:'-'}` : `<span class="badge fail">Left</span> on ${currentStint?currentStint.leftDate:'-'}${currentStint&&currentStint.exitReason?' - '+currentStint.exitReason:''}`}
     </div>
@@ -3213,7 +3457,7 @@ async function hrAttendanceScreen(){
       <button class="btn small secondary" onclick="downloadAttendanceSupervisors('csv')">Download CSV</button>
       <button class="btn small secondary" onclick="downloadAttendanceSupervisors('xlsx')">Download Excel</button>
     </div>` : ""}
-    <table><tr><th>Date</th><th>Selfie</th><th>Name</th><th>Role</th><th>Type</th><th>Time</th><th>Site</th><th>Distance</th><th>Status</th></tr>
+    <table><tr><th>Date</th><th>Selfie</th><th>Name</th><th>Role</th><th>Type</th><th>Time</th><th>Area</th><th>Distance</th><th>Status</th></tr>
     ${supRows || "<tr><td colspan='9' class='empty'>No clock-ins for this range.</td></tr>"}</table>
   </div>
   <div class="card">
@@ -3425,7 +3669,7 @@ async function setAuditRange(from, to){
   await renderMain();
 }
 
-// ================= REPORTS (Owner, Operations Manager, Area Supervisor) =================
+// ================= REPORTS (Owner, Operations Manager, Regional Supervisor) =================
 // Every dataset here is scoped server-side to what this role can already
 // see elsewhere in the app - this screen just gives a way to pull it out as
 // a file instead of reading it on screen.
@@ -3442,7 +3686,7 @@ const REPORT_DATASETS = [
   {key:"monthly", label:"Monthly Vehicle Summary", desc:"One row per vehicle per month - total distance, fuel cost, average mileage, and driver absent days.", dateRange:true},
   {key:"audit", label:"Audit Log", desc:"Every action taken in the app, who did it, and when.", dateRange:true, roles:["owner","ops_manager"]},
 ];
-// ================= ROUTES (read-only for Site/Area Supervisors) =================
+// ================= ROUTES (read-only for Area/Regional Supervisors) =================
 async function routesViewScreen(){
   const rows = meta.clients.filter(c=>(c.routes||[]).length).map(c=>`
     <tr>
@@ -3463,7 +3707,7 @@ async function routesViewScreen(){
   `;
 }
 
-// ---- Site Supervisor: propose a route, or a driver/route/company
+// ---- Area Supervisor: propose a route, or a driver/route/company
 // assignment for one of their own vehicles - both go to Data Team/Ops
 // Manager/Owner for approval before taking effect. ----
 async function loadRouteAssignmentSubmissions(){
@@ -3603,17 +3847,17 @@ function reportsScreen(){
   return `
   <h1 class="page-title">Reports</h1>
   <div class="banner">Download the data behind this app to analyze however you like - each file only includes what you're already able to see in the app.</div>
-  <div class="card" style="cursor:pointer" onclick="goto('cost_analysis')" title="Click to see vehicle-wise and site-wise cost totals">
+  <div class="card" style="cursor:pointer" onclick="goto('cost_analysis')" title="Click to see vehicle-wise and area-wise cost totals">
     <div class="flex-between">
       <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:6px;">Total Operational Cost Analysis &rsaquo;</h2>
-      <span class="muted">Vehicle-wise + Site-wise - click to view</span>
+      <span class="muted">Vehicle-wise + Area-wise - click to view</span>
     </div>
-    <p class="muted" style="margin:0;">Every approved expense tagged by Vehicle and Site, plus Office Expenditure split evenly across all sites.</p>
+    <p class="muted" style="margin:0;">Every approved expense tagged by Vehicle and Area, plus Office Expenditure split evenly across all sites.</p>
   </div>
   ${cards}`;
 }
 // ================= TOTAL OPERATIONAL COST ANALYSIS =================
-// Vehicle-wise and Site-wise spend, built from GET /api/reports/operational-cost-analysis.
+// Vehicle-wise and Area-wise spend, built from GET /api/reports/operational-cost-analysis.
 // Only approved expenses count; Office Expenditure (no vehicle/site of its
 // own) is split evenly across every site so each site's "Total Operational
 // Cost" reflects its fair share of shared overhead, per the Owner's request.
@@ -3649,21 +3893,21 @@ async function costAnalysisScreen(){
   <div class="grid cols-4" style="margin:12px 0 18px;">
     <div class="kpi good"><div class="num">Rs ${d.grandTotal.toLocaleString('en-IN')}</div><div class="label">Grand Total (approved)</div></div>
     <div class="kpi"><div class="num">Rs ${d.officeExpenditureTotal.toLocaleString('en-IN')}</div><div class="label">Office Expenditure</div></div>
-    <div class="kpi"><div class="num">Rs ${d.officeExpenditureSharePerSite.toLocaleString('en-IN')}</div><div class="label">Office Share / Site (${d.siteCount} sites)</div></div>
+    <div class="kpi"><div class="num">Rs ${d.officeExpenditureSharePerSite.toLocaleString('en-IN')}</div><div class="label">Office Share / Area (${d.siteCount} sites)</div></div>
     <div class="kpi warn"><div class="num">Rs ${d.pendingTotal.toLocaleString('en-IN')}</div><div class="label">Pending (not yet counted)</div></div>
   </div>
   <div class="card">
-    <h2 class="section-title">Site-wise Total Operational Cost</h2>
+    <h2 class="section-title">Area-wise Total Operational Cost</h2>
     <p class="muted">Direct = vehicle expenses tagged to that site. Office Share = Office Expenditure split evenly across all sites.</p>
-    <table><tr><th>Site</th><th>Direct Vehicle Cost</th><th>Office Share</th><th>Total Operational Cost</th></tr>
+    <table><tr><th>Area</th><th>Direct Vehicle Cost</th><th>Office Share</th><th>Total Operational Cost</th></tr>
     ${siteRows}
     </table>
-    ${d.noSiteVehicleCost ? `<p class="muted" style="margin-top:8px;">Rs ${d.noSiteVehicleCost.toLocaleString('en-IN')} in vehicle expenses are tagged to vehicles with no Site assigned, and are not included in any site's total above.</p>` : ""}
+    ${d.noSiteVehicleCost ? `<p class="muted" style="margin-top:8px;">Rs ${d.noSiteVehicleCost.toLocaleString('en-IN')} in vehicle expenses are tagged to vehicles with no Area assigned, and are not included in any area's total above.</p>` : ""}
   </div>
   <div class="card">
     <h2 class="section-title">Vehicle-wise Expenditure</h2>
     <p class="muted">Click any vehicle for its full expenditure history, bifurcated by category.</p>
-    <table><tr><th>Vehicle</th><th>Site</th><th>Client</th><th>Expense Count</th><th>Total</th></tr>
+    <table><tr><th>Vehicle</th><th>Area</th><th>Client</th><th>Expense Count</th><th>Total</th></tr>
     ${vehicleRows}
     </table>
   </div>`;
@@ -3868,17 +4112,17 @@ function dashboardDetailScreen(metric){
         || `<tr><td colspan="5" class="empty">${meta_.empty}</td></tr>`}
       </table>`;
   } else if(metric==="expiring_docs"){
-    tableHtml = `<table><tr><th>Vehicle</th><th>Document</th><th>Expiry</th><th>Status</th><th>Site</th><th>Client</th><th>Supervisor</th></tr>
+    tableHtml = `<table><tr><th>Vehicle</th><th>Document</th><th>Expiry</th><th>Status</th><th>Area</th><th>Client</th><th>Supervisor</th></tr>
       ${rows.map(d=>`<tr><td><b>${d.reg}</b></td><td>${d.docType}</td><td>${d.expiry}</td><td><span class="badge low">${d.daysLeft<0?'EXPIRED':d.daysLeft+' days left'}</span></td><td>${d.site}</td><td>${d.client}</td><td>${d.supervisor}</td></tr>`).join("")
         || `<tr><td colspan="7" class="empty">${meta_.empty}</td></tr>`}
       </table>`;
   } else if(metric==="not_submitted"){
-    tableHtml = `<table><tr><th>Vehicle</th><th>Site</th><th>Client</th><th>Supervisor</th><th>Driver</th></tr>
+    tableHtml = `<table><tr><th>Vehicle</th><th>Area</th><th>Client</th><th>Supervisor</th><th>Driver</th></tr>
       ${rows.map(r=>`<tr><td><b>${r.reg}</b></td><td>${r.site}</td><td>${r.client}</td><td>${r.supervisor}</td><td>${r.driver}</td></tr>`).join("")
         || `<tr><td colspan="5" class="empty">${meta_.empty}</td></tr>`}
       </table>`;
   } else if(metric==="idle"){
-    tableHtml = `<table><tr><th>Vehicle</th><th>Site</th><th>Client</th><th>Supervisor</th><th>Driver</th><th>Reason</th><th></th></tr>
+    tableHtml = `<table><tr><th>Vehicle</th><th>Area</th><th>Client</th><th>Supervisor</th><th>Driver</th><th>Reason</th><th></th></tr>
       ${rows.map(r=>`<tr style="cursor:pointer" onclick="goto('vehicle_status',{tab:'dashboard',vehicleId:'${r.vehicleId}'})" title="Click to view and act on this vehicle">
         <td><b>${r.reg}</b></td><td>${r.site}</td><td>${r.client}</td><td>${r.supervisor}</td><td>${r.driver}</td><td>${r.idleReason}</td><td class="muted">View &rsaquo;</td></tr>`).join("")
         || `<tr><td colspan="7" class="empty">${meta_.empty}</td></tr>`}
@@ -3892,7 +4136,7 @@ function dashboardDetailScreen(metric){
     const showReading = metric==="breath_fail";
     const showApprove = metric==="pending";
     const showFlag = ["breath_fail","absent","uniform","below_mileage"].includes(metric);
-    tableHtml = `<table><tr><th>Vehicle</th><th>Site</th><th>Client</th><th>Supervisor</th><th>Driver</th>${showReading?'<th>Reading</th>':''}${(showApprove||showFlag)?'<th>Status</th><th>Action</th>':''}</tr>
+    tableHtml = `<table><tr><th>Vehicle</th><th>Area</th><th>Client</th><th>Supervisor</th><th>Driver</th>${showReading?'<th>Reading</th>':''}${(showApprove||showFlag)?'<th>Status</th><th>Action</th>':''}</tr>
       ${rows.map(r=>`<tr>
         <td><b>${r.reg}</b></td><td>${r.site}</td><td>${r.client}</td><td>${r.supervisor}</td><td>${r.driver}</td>
         ${showReading? `<td>${r.record.breathalyzer.reading} mg/L</td>` : ''}
@@ -3948,7 +4192,7 @@ function vehicleTodayStatusScreen(vehicleId){
   <h1 class="page-title">${v.reg} - Today's Status</h1>
   <div class="card">
     <table>
-      <tr><td class="muted">Site</td><td>${siteName(v.siteId)}</td></tr>
+      <tr><td class="muted">Area</td><td>${siteName(v.siteId)}</td></tr>
       <tr><td class="muted">Client</td><td>${v.clientId? clientName(v.clientId) : "Internal / Fixed Route"}</td></tr>
       <tr><td class="muted">Supervisor</td><td>${userName(v.supervisorId)}</td></tr>
       <tr><td class="muted">Driver</td><td>${(r && r.attendance && r.attendance.driver) || driverName(v.driverId)}</td></tr>
@@ -4158,7 +4402,7 @@ async function priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpen
       ${idleVehicles.length ? `<span class="muted" style="cursor:pointer" onclick="goto('dashboard_detail',{metric:'idle'})">See full list &rsaquo;</span>` : ''}
     </div>
     <p class="muted" style="margin:2px 0 12px;">Click a vehicle to view and act on it.</p>
-    <table><tr><th>Vehicle</th><th>Route/Site</th><th>Supervisor</th><th>Reason</th></tr>
+    <table><tr><th>Vehicle</th><th>Route/Area</th><th>Supervisor</th><th>Reason</th></tr>
     ${idleRows || "<tr><td colspan='4' class='empty'>Every vehicle has moved today.</td></tr>"}
     </table>
   </div>
@@ -4430,7 +4674,7 @@ function drawCharts(approved,pending,rejected,fails,passes){
 }
 
 // ================= TRIPS =================
-// Site Supervisors (and Owner, as an admin override) allocate trips to the
+// Area Supervisors (and Owner, as an admin override) allocate trips to the
 // driver on each of their vehicles. Drivers see these in their own app's
 // "My Trips" list and can mark them in progress/completed themselves.
 let trips = [];
@@ -4712,8 +4956,8 @@ async function settleSubvendorAdvance(id, advanceId, maxAmount){
   }catch(e){ alert(e.message); }
 }
 
-// ---- Site Supervisor: file expenses for their own Subvendor vehicles ----
-// A cut-down view of the same "record a payment" flow above - a Site
+// ---- Area Supervisor: file expenses for their own Subvendor vehicles ----
+// A cut-down view of the same "record a payment" flow above - an Area
 // Supervisor only sees their own vehicles that are linked to a Subvendor
 // (Diesel/Advance/Repair/Other running costs paid on that subvendor's
 // behalf), never the full company-wide subvendor list, income, or other
@@ -4773,7 +5017,7 @@ async function recordMySubvendorPayment(subvendorId, vehicleId, evt){
 }
 
 // ================= ODOMETER VERIFICATION =================
-// Site Supervisor (their own vehicles), Data Team (fallback for vehicles
+// Area Supervisor (their own vehicles), Data Team (fallback for vehicles
 // with no Supervisor - status-only for everyone else's), and Ops
 // Manager/Owner (everything) all land on the same screen; the backend does
 // the actual scoping/redaction, this just renders whatever it hands back.
@@ -4878,7 +5122,7 @@ async function manualOdometerEntry(shiftId, point){
 }
 
 // ================= WORKSHOP / MAINTENANCE MODULE =================
-// Repair requests: raised by Driver/Site Supervisor/Ops Manager/Area
+// Repair requests: raised by Driver/Area Supervisor/Ops Manager/Area
 // Supervisor, always landing with the Workshop Manager first (no
 // self-service claiming - the Owner's explicit call), who assigns each one
 // to a specific Workshop staff member. That staff member starts it, then
@@ -5181,7 +5425,7 @@ async function submitWorkshopPurchase(){
 // other penalties, or a bonus). Every payslip is computed fresh from the
 // two, never hand-typed. Everyone can always see/download their own; HR
 // can see and edit everyone's; Owner sees everyone's but can't edit;
-// Operations Manager and Site Supervisor can see drivers only (Site
+// Operations Manager and Area Supervisor can see drivers only (Area
 // Supervisor limited to their own supervised drivers).
 const PAYROLL_ADHOC_CATEGORIES = [
   {key:"traffic_challan", label:"Traffic Challan"},
@@ -5436,12 +5680,12 @@ Object.assign(window, {
   choosePortal,
   doLogin, doLogout, switchTab, goto, draftSet, updateBreathalyzer, startPhotoCapture,
   submitForcedPasswordChange, submitVoluntaryPasswordChange,
-  updateDoc, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
-  addSite, addDriver, addPerson, correctOdometer, captureBillPhoto, submitExpense, decideExpense,
+  updateDoc, updateDocCopy, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
+  addSite, renameClient, editSite, addDriver, addPerson, correctOdometer, captureBillPhoto, submitExpense, decideExpense,
   onExpenseOfficeToggle, setExpensePaymentStage,
   startEditPerson, cancelEditPerson, saveEditPerson, setPersonActive, resetStaffPassword, saveOdometer, restoreBackup, downloadReport,
   toggleVehicleDetails, saveVehicleDetails, saveVehicleDoc, onNewVehicleTypeChange, onVdVehicleTypeChange, onPermitStateToggle,
-  toggleClientRoutes, saveRouteCap, addRoute, saveRouteEdit, deleteRoute,
+  toggleClientRoutes, saveRouteCap, addRoute, saveRouteEdit, deleteRoute, toggleFuelVerifyEdit, decideFuelVerify,
   setVehicleUsage, unlockOwnerAssignmentEditing, setAuditRange, downloadFullBackup, setAssignmentsViewDate,
   downloadVehiclesRunning, downloadFuelOverview,
   toggleDriverDetails, saveDriverDetails, saveDriverCertificate, addDriverFull,
@@ -5458,7 +5702,7 @@ Object.assign(window, {
   openDocumentScanner, handleScannerFile, closeScannerModal, retakeScan, confirmScan, onWorkshopInvoiceScanned,
   toggleExpenditureBucket, openMileageDetail, openInsight,
   askAiSuggested, sendAiChatMessage, loadAiInsights,
-  onObVehicleTypeChange, submitVehicleOnboarding, submitDriverOnboarding,
+  onObVehicleTypeChange, submitVehicleOnboarding, submitDriverOnboarding, toggleOnboardingDriverDocs, saveOnboardingDriverDocs,
   decideVehicleApproval, decideDriverApproval,
   onArClientChange, submitRouteRequest, submitAssignmentRequest,
   decideRouteRequest, decideAssignmentRequest,

@@ -74,6 +74,8 @@ async function initStorage() {
     }
     await runBackup("startup");
     setInterval(() => runBackup("daily"), BACKUP_INTERVAL_MS);
+    await archiveOverdueDriverDocs();
+    setInterval(() => archiveOverdueDriverDocs(), BACKUP_INTERVAL_MS);
   } else {
     if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
     if (!fs.existsSync(DATA_FILE)) fs.copyFileSync(SEED_FILE, DATA_FILE);
@@ -84,6 +86,8 @@ async function initStorage() {
         "free tier this data (and uploaded photos) will be WIPED on every redeploy/restart. Set MONGODB_URI to fix " +
         "this permanently - see DEPLOY.md."
     );
+    await archiveOverdueDriverDocs();
+    setInterval(() => archiveOverdueDriverDocs(), BACKUP_INTERVAL_MS);
   }
 }
 
@@ -249,13 +253,21 @@ function backfillDefaults() {
     // entry is treated as "currently in use" for both the 12-month renewal
     // alert and the leaving-early deduction calculation.
     if (!Array.isArray(d.uniformHistory)) d.uniformHistory = [];
+    // Mandatory documents deadline/archive (License, Aadhar, ESI Certificate,
+    // PF Certificate, Police Verification copies) - see
+    // MANDATORY_DRIVER_DOC_FIELDS below. docsDeadline is a YYYY-MM-DD date
+    // string once any of those 5 are missing, cleared back to null once all
+    // are uploaded; docsArchived marks a driver auto-exited by the system
+    // for blowing the deadline (distinct from a real HR-initiated exit).
+    if (d.docsDeadline === undefined) d.docsDeadline = null;
+    if (d.docsArchived === undefined) d.docsArchived = false;
   });
   if (!Array.isArray(db.driverShifts)) db.driverShifts = [];
   (db.driverShifts || []).forEach((s) => {
     // Odometer verification: who actually typed in each reading (the
-    // driver themselves, normally - or a Site Supervisor/Data Team member
+    // driver themselves, normally - or an Area Supervisor/Data Team member
     // doing a PIN-verified manual entry when the driver couldn't), and
-    // whether a Site Supervisor (or Data Team, only when the vehicle has no
+    // whether an Area Supervisor (or Data Team, only when the vehicle has no
     // Supervisor) has since checked the photo and approved it. Once
     // verified===true there is deliberately no endpoint anywhere that can
     // change that reading again - approval is a one-way door.
@@ -315,8 +327,22 @@ function backfillDefaults() {
       e.siteId = v ? v.siteId || null : null;
     }
   });
+  // ---------- Fuel cross-verification (Data Team double-checks the fuel
+  // portion of daily records - separate from the Area/Regional Supervisor's
+  // overall record verification) ----------
+  Object.values(db.records || {}).forEach((r) => {
+    if (r.fuel && r.fuel.crossVerification === undefined) {
+      r.fuel.crossVerification = {
+        status: r.fuel.litres > 0 ? "pending" : "not_applicable",
+        verifiedBy: null,
+        verifiedByName: null,
+        verifiedAt: null,
+        comment: "",
+      };
+    }
+  });
   // ---------- Route creation + driver/route/company assignment requests
-  // (Site Supervisor onboarding, pending Data Team/Ops Manager/Owner approval) ----------
+  // (Area Supervisor onboarding, pending Data Team/Ops Manager/Owner approval) ----------
   if (!Array.isArray(db.routeRequests)) db.routeRequests = [];
   if (!Array.isArray(db.assignmentRequests)) db.assignmentRequests = [];
   // ---------- Workshop / Maintenance module ----------
@@ -400,12 +426,13 @@ function computeRcExpiry(rcDate) {
   d.setFullYear(d.getFullYear() + 15);
   return d.toISOString().slice(0, 10);
 }
-// These document types get a photo/scan of the physical document attached
-// (Insurance does not, per the Owner's spec). TemporaryPermit and BorderTax
+// These document types get a photo/scan of the physical document attached.
+// Insurance copy upload was added after the fact (previously excluded per
+// the Owner's original spec, now reversed). TemporaryPermit and BorderTax
 // cover whatever an RTA checkpoint outside the vehicle's home state might
 // ask for, alongside the original 5 - drivers view/download all of these
 // read-only in the driver app once the office has filled them in here.
-const DOC_COPY_TYPES = ["RC", "Permit", "Fitness", "Tax", "PUC", "TemporaryPermit", "BorderTax"];
+const DOC_COPY_TYPES = ["RC", "Permit", "Insurance", "Fitness", "Tax", "PUC", "TemporaryPermit", "BorderTax"];
 
 // ---------- PASSWORDS ----------
 // Every login is now email (or mobile number, if no email on file) plus a
@@ -495,8 +522,8 @@ function vehicleUniquenessError(fields, excludeVehicleId) {
 function roleLabelServer(role) {
   return (
     {
-      site_supervisor: "Site Supervisor",
-      area_supervisor: "Area Supervisor",
+      site_supervisor: "Area Supervisor",
+      area_supervisor: "Regional Supervisor",
       ops_manager: "Operations Manager",
       data_team: "Data Team",
       owner: "Owner",
@@ -513,7 +540,7 @@ function roleLabelServer(role) {
 // Everyone on the workshop/maintenance side, as distinct from field staff.
 const WORKSHOP_STAFF_ROLES = ["workshop_manager", "workshop_supervisor", "mechanic", "helper", "electrician"];
 // Staff roles allowed to raise a repair request, per the Owner's explicit
-// list ("Driver, Supervisor, Operations Supervisor and Area Supervisor").
+// list ("Driver, Supervisor, Operations Supervisor and Regional Supervisor").
 // Drivers raise theirs through the separate driver-auth endpoint below,
 // since drivers authenticate on a different token system entirely.
 const REPAIR_REQUEST_ROLES = ["site_supervisor", "ops_manager", "area_supervisor"];
@@ -725,7 +752,7 @@ app.get("/api/meta", requireAuth, (req, res) => {
   res.json({
     clients: db.clients,
     sites: db.sites,
-    // A driver a Site Supervisor has just onboarded isn't a real, assignable
+    // A driver an Area Supervisor has just onboarded isn't a real, assignable
     // driver yet - see driverIsApproved(). Meta feeds every driver dropdown/
     // lookup across the whole app, so filtering here is what actually keeps
     // a pending driver from being selectable anywhere until HR or the Owner
@@ -751,7 +778,7 @@ const VALID_ROLES = [
 
 // People-management permission tiers:
 // - Owner can create/edit anyone, including other Owner/Ops Manager/HR accounts.
-// - HR is the primary staff onboarder: can create/edit Site Supervisor, Area
+// - HR is the primary staff onboarder: can create/edit Area Supervisor, Area
 //   Supervisor, Operations Manager, Data Team, Bookings Department and every
 //   Workshop role (everyone except Owner and other HR accounts).
 // - Ops Manager can create/edit everyone EXCEPT Owner, Ops Manager, and HR
@@ -760,7 +787,7 @@ const VALID_ROLES = [
 // - Data Team can view the People screen (needed for corrections/audit
 //   context) but cannot create or edit anyone - enforced by simply not being
 //   in PEOPLE_EDITOR_ROLES below.
-// - Site/Area Supervisors have no People access at all (no route, no tab).
+// - Area/Regional Supervisors have no People access at all (no route, no tab).
 const PEOPLE_EDITOR_ROLES = ["ops_manager", "owner", "hr"];
 const PEOPLE_VIEWER_ROLES = ["ops_manager", "owner", "hr", "data_team"];
 const ROLE_MANAGEMENT_ALLOWED = {
@@ -924,6 +951,24 @@ app.post(
   })
 );
 
+// Rename an existing client - same access as creating one (ADMIN_ROLES,
+// which already includes Data Team).
+app.patch(
+  "/api/clients/:id",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const { name } = req.body || {};
+    if (name === undefined || !String(name).trim()) return res.status(400).json({ error: "name is required." });
+    const before = client.name;
+    client.name = String(name).trim();
+    await audit(req.user, "update_client", `${req.user.name} renamed client "${before}" to "${client.name}"`);
+    res.json(client);
+  })
+);
+
 // Route cap - how many routes this client is allowed to have entered below.
 // Owner-only by design: Operations Manager fills in the actual routes, but
 // only the Owner controls how many they're allowed to add.
@@ -945,10 +990,11 @@ app.patch(
 );
 
 // Individual routes (starting point name + route number, e.g. "Alwal" / "6A")
-// - Owner and Operations Manager only, and never more than the client's
-// route cap. Data Team and Site/Area Supervisors can see this (it's already
-// in /api/meta) but have no route to write to it.
-const ROUTE_EDITOR_ROLES = ["owner", "ops_manager"];
+// - Owner, Operations Manager and Data Team, and never more than the
+// client's route cap. Area/Regional Supervisors can see this (it's already in
+// /api/meta) but propose changes via the route-request flow instead
+// (see ROUTE_REQUEST_APPROVAL_ROLES below), which Data Team also approves.
+const ROUTE_EDITOR_ROLES = ["owner", "ops_manager", "data_team"];
 app.post(
   "/api/clients/:id/routes",
   requireAuth,
@@ -1002,9 +1048,9 @@ app.delete(
   })
 );
 
-// ---------- Route creation requests (Site Supervisor proposes, Data Team /
+// ---------- Route creation requests (Area Supervisor proposes, Data Team /
 // Ops Manager / Owner approves) ----------
-// Site Supervisors aren't in ROUTE_EDITOR_ROLES - they can't add a route
+// Area Supervisors aren't in ROUTE_EDITOR_ROLES - they can't add a route
 // directly - but they CAN propose one for an existing client. Nothing is
 // added to the client's route catalog until the request is approved.
 const ROUTE_REQUEST_APPROVAL_ROLES = ["data_team", "ops_manager", "owner"];
@@ -1106,7 +1152,33 @@ app.post(
     if (!name) return res.status(400).json({ error: "name is required." });
     const site = { id: uid("s"), name, lat: lat != null ? Number(lat) : null, lng: lng != null ? Number(lng) : null, areaSupervisorId: areaSupervisorId || null };
     db.sites.push(site);
-    await audit(req.user, "create_site", `${req.user.name} added site ${name}`);
+    await audit(req.user, "create_site", `${req.user.name} added area ${name}`);
+    res.json(site);
+  })
+);
+
+// Edit an existing site/area - same access as creating one (ADMIN_ROLES,
+// which already includes Data Team).
+app.patch(
+  "/api/sites/:id",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const site = db.sites.find((s) => s.id === req.params.id);
+    if (!site) return res.status(404).json({ error: "Area not found." });
+    const { name, lat, lng, areaSupervisorId } = req.body || {};
+    let changed = false;
+    if (name !== undefined) {
+      if (!String(name).trim()) return res.status(400).json({ error: "name is required." });
+      site.name = String(name).trim();
+      changed = true;
+    }
+    if (lat !== undefined) { site.lat = lat != null && lat !== "" ? Number(lat) : null; changed = true; }
+    if (lng !== undefined) { site.lng = lng != null && lng !== "" ? Number(lng) : null; changed = true; }
+    if (areaSupervisorId !== undefined) { site.areaSupervisorId = areaSupervisorId || null; changed = true; }
+    if (changed) {
+      await audit(req.user, "update_site", `${req.user.name} updated area ${site.name} (${site.id})`);
+    }
     res.json(site);
   })
 );
@@ -1117,13 +1189,70 @@ app.post(
 // already add drivers from the Operations screen's quick-add form.
 const DRIVER_EDITOR_ROLES = ["owner", "ops_manager", "hr", "data_team"];
 const DRIVING_LEVELS = ["Trainee", "Standard", "Senior", "Expert"];
-const DRIVER_APPROVAL_ROLES = ["hr", "owner"];
-// A driver a Site Supervisor has just onboarded isn't real/assignable yet -
+const DRIVER_APPROVAL_ROLES = ["hr", "owner", "data_team"];
+// A driver an Area Supervisor has just onboarded isn't real/assignable yet -
 // see the /api/meta filtering above. Drivers created before this feature
 // existed have no `approvalStatus` at all and are treated as already-
 // approved (same grandfathering approach as vehicles' `status` field).
 function driverIsApproved(d) {
   return (d.approvalStatus || "approved") === "approved";
+}
+// ---------- Mandatory driver documents: 5-day deadline, then archive ----------
+// The compliance-critical document copies (not every optional one, like
+// Bank Cheque/PAN/Health Record/Training Certificate) - every one of these
+// must be on file for a driver to stay active. Whoever onboarded/manages
+// the driver has 5 days from approval to get them all uploaded; if the
+// deadline passes with any still missing, the driver is automatically
+// archived (see archiveOverdueDriverDocs()) until they're completed and the
+// driver is explicitly reactivated.
+const MANDATORY_DRIVER_DOC_FIELDS = ["licenseCopyUrl", "aadharCopyUrl", "esiCertificateUrl", "pfCertificateUrl", "policeVerificationCopyUrl"];
+const DRIVER_DOC_DEADLINE_DAYS = 5;
+function driverDocsComplete(d) {
+  return MANDATORY_DRIVER_DOC_FIELDS.every((f) => !!d[f]);
+}
+function addDaysToDateStr(dateStr, days) {
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+// Called whenever a driver becomes approved, or whenever their documents
+// are edited - starts (or clears) the 5-day countdown as appropriate.
+// Never touches an already-archived driver - that only ever clears via an
+// explicit reactivation (see /api/drivers/:id/reactivate).
+function evaluateDriverDocsDeadline(driver) {
+  if (!driverIsApproved(driver) || driver.docsArchived) return;
+  if (driverDocsComplete(driver)) {
+    driver.docsDeadline = null;
+  } else if (!driver.docsDeadline) {
+    driver.docsDeadline = addDaysToDateStr(todayStr(), DRIVER_DOC_DEADLINE_DAYS);
+  }
+}
+// Boot-time + daily sweep: any active, approved driver whose deadline has
+// passed with documents still incomplete gets archived - same shape as a
+// manual exit (mark-left), so it shows up in their employment history with
+// a clear reason, and rehireEligible=true since this is an admin gap, not
+// a conduct issue.
+async function archiveOverdueDriverDocs() {
+  const today = todayStr();
+  for (const driver of db.drivers || []) {
+    if (!driver.active || driver.docsArchived) continue;
+    if (!driver.docsDeadline || driver.docsDeadline >= today) continue;
+    if (driverDocsComplete(driver)) continue;
+    const stint = currentEmploymentStint(driver);
+    const missing = MANDATORY_DRIVER_DOC_FIELDS.filter((f) => !driver[f]).map((f) => f.replace(/CopyUrl$|Url$/, ""));
+    const reason = `Mandatory documents (${missing.join(", ")}) were not uploaded within the ${DRIVER_DOC_DEADLINE_DAYS}-day deadline (due ${driver.docsDeadline}).`;
+    if (stint) {
+      stint.leftDate = today;
+      stint.exitReason = reason;
+      stint.rehireEligible = true;
+      stint.recordedBy = null;
+      stint.recordedByName = "System (documents deadline)";
+      stint.recordedAt = nowIso();
+    }
+    driver.active = false;
+    driver.docsArchived = true;
+    await audit({ id: null, name: "System" }, "driver_docs_archived", `${driver.name} was automatically archived - ${reason}`);
+  }
 }
 // Every driver's mobile number must be unique - it's their driver-app login
 // identifier, so two drivers sharing one would make login ambiguous.
@@ -1136,7 +1265,7 @@ function findDriverPhoneClash(phone, excludeDriverId) {
   if (!norm) return null;
   return db.drivers.find((d) => d.id !== excludeDriverId && d.phone && String(d.phone).trim() === norm) || null;
 }
-// Site Supervisors can onboard drivers directly (full control, for faster
+// Area Supervisors can onboard drivers directly (full control, for faster
 // driver addition at the site level) but the result starts out "pending"
 // and is filtered out of /api/meta - so it can't be assigned to a vehicle
 // or a trip - until HR or the Owner approves it. Everyone else in
@@ -1145,7 +1274,7 @@ function findDriverPhoneClash(phone, excludeDriverId) {
 app.post(
   "/api/drivers",
   requireAuth,
-  requireRole(...DRIVER_EDITOR_ROLES, "site_supervisor"),
+  requireRole(...DRIVER_EDITOR_ROLES, "site_supervisor", "area_supervisor"),
   h(async (req, res) => {
     const { name, phone, licenseNumber, aadharNumber, dateOfJoining, drivingLevel } = req.body || {};
     if (!name) return res.status(400).json({ error: "name is required." });
@@ -1156,7 +1285,9 @@ app.post(
     if (phoneClash) {
       return res.status(400).json({ error: `Mobile number ${phone} is already registered to driver ${phoneClash.name} - it must be unique. If this is the same person rejoining, reactivate their existing driver record instead of adding a new one.` });
     }
-    const selfOnboarded = req.user.role === "site_supervisor";
+    // An Area Supervisor onboarding a driver for a site they directly hold
+    // goes through the same pending-approval flow a Site Supervisor's does.
+    const selfOnboarded = req.user.role === "site_supervisor" || req.user.role === "area_supervisor";
     const driver = {
       id: uid("d"),
       name,
@@ -1199,14 +1330,20 @@ app.post(
       decidedByName: null,
       decidedAt: null,
       rejectionComment: "",
+      // Mandatory documents deadline/archive - see MANDATORY_DRIVER_DOC_FIELDS.
+      // Only starts ticking once a driver is actually approved (a
+      // still-pending self-onboarded driver isn't usable yet regardless).
+      docsDeadline: null,
+      docsArchived: false,
     };
+    if (!selfOnboarded) evaluateDriverDocsDeadline(driver);
     db.drivers.push(driver);
-    await audit(req.user, "create_driver", `${req.user.name} added driver ${name}${selfOnboarded? " - pending HR/Owner approval" : ""}`);
+    await audit(req.user, "create_driver", `${req.user.name} added driver ${name}${selfOnboarded? " - pending HR, Data Team, or Owner approval" : ""}`);
     res.json(publicDriverForStaff(driver));
   })
 );
 
-// HR/Owner's queue of Site-Supervisor-onboarded drivers awaiting a
+// HR/Owner's queue of Area-Supervisor-onboarded drivers awaiting a
 // decision - not mixed into /api/meta since a pending driver isn't real yet.
 app.get(
   "/api/drivers/pending-approvals",
@@ -1217,11 +1354,11 @@ app.get(
   }
 );
 
-// A Site Supervisor's own driver-onboarding history (any status).
+// A Area/Site Supervisor's own driver-onboarding history (any status).
 app.get(
   "/api/drivers/my-submissions",
   requireAuth,
-  requireRole("site_supervisor"),
+  requireRole("site_supervisor", "area_supervisor"),
   (req, res) => {
     res.json(
       db.drivers
@@ -1250,6 +1387,7 @@ app.patch(
     driver.decidedByName = req.user.name;
     driver.decidedAt = nowIso();
     driver.rejectionComment = status === "rejected" ? comment.trim() : "";
+    if (status === "approved") evaluateDriverDocsDeadline(driver);
     await audit(req.user, "driver_approval_decision", `${req.user.name} ${status} driver ${driver.name} submitted by ${driver.submittedByName}${comment ? ": " + comment : ""}`);
     res.json(publicDriverForStaff(driver));
   })
@@ -1264,10 +1402,17 @@ app.patch(
 app.patch(
   "/api/drivers/:id",
   requireAuth,
-  requireRole(...DRIVER_EDITOR_ROLES),
+  // A Site/Area Supervisor who onboarded a driver themselves can also come
+  // back and fill in/upload that driver's documents (license, Aadhar, PF,
+  // etc.) - not just HR/Ops Manager/Owner/Data Team - but only for drivers
+  // they personally submitted, checked just below.
+  requireRole(...DRIVER_EDITOR_ROLES, "site_supervisor", "area_supervisor"),
   h(async (req, res) => {
     const driver = db.drivers.find((d) => d.id === req.params.id);
     if (!driver) return res.status(404).json({ error: "Driver not found." });
+    if (["site_supervisor", "area_supervisor"].includes(req.user.role) && driver.submittedBy !== req.user.id) {
+      return res.status(403).json({ error: "You can only edit documents for a driver you submitted yourself." });
+    }
     const {
       name, phone, licenseNumber, aadharNumber, esiNumber, pfNumber, uanNumber,
       dateOfJoining, drivingLevel, esiCertificate, pfCertificate,
@@ -1348,6 +1493,9 @@ app.patch(
       const url = await savePhoto(policeVerificationCopy, "driver_police_" + driver.id);
       if (url) { driver.policeVerificationCopyUrl = url; changed = true; }
     }
+    // Re-check the mandatory-documents deadline any time documents change -
+    // uploading the last missing one clears the deadline immediately.
+    if (changed) evaluateDriverDocsDeadline(driver);
     if (changed) {
       await audit(req.user, "update_driver", `${req.user.name} updated driver ${driver.name} (${driver.id})`);
     }
@@ -1487,6 +1635,17 @@ app.post(
     const driver = db.drivers.find((d) => d.id === req.params.id);
     if (!driver) return res.status(404).json({ error: "Driver not found." });
     if (driver.active) return res.status(400).json({ error: "This driver is already active." });
+    // A driver auto-archived for missing mandatory documents can't be
+    // reactivated until every one of those documents is actually uploaded -
+    // otherwise reactivation would just immediately re-trigger the same
+    // deadline/archive cycle.
+    if (driver.docsArchived && !driverDocsComplete(driver)) {
+      const missing = MANDATORY_DRIVER_DOC_FIELDS.filter((f) => !driver[f]).map((f) => f.replace(/CopyUrl$|Url$/, ""));
+      return res.status(403).json({
+        error: `${driver.name} was archived for missing mandatory documents - upload the outstanding documents (${missing.join(", ")}) before reactivating.`,
+        blockedByMissingDocs: true,
+      });
+    }
     const lastStint = currentEmploymentStint(driver);
     const { force } = req.body || {};
     if (lastStint && lastStint.rehireEligible === false && !(force && req.user.role === "owner")) {
@@ -1505,6 +1664,10 @@ app.post(
       recordedAt: nowIso(),
     });
     driver.active = true;
+    if (driver.docsArchived) {
+      driver.docsArchived = false;
+      driver.docsDeadline = null;
+    }
     const overrideNote = lastStint && lastStint.rehireEligible === false ? " (Owner override of a not-eligible-for-rehire record)" : "";
     await audit(req.user, "driver_reactivated", `${req.user.name} reactivated driver ${driver.name} (${driver.id})${overrideNote}`);
     res.json(publicDriverForStaff(driver));
@@ -1553,7 +1716,7 @@ app.get(
 );
 
 // ---------- VEHICLES ----------
-// A vehicle a Site Supervisor has just onboarded isn't a real, usable fleet
+// A vehicle an Area Supervisor has just onboarded isn't a real, usable fleet
 // vehicle yet - it doesn't count for trips, assignments, dashboards, or
 // anything else operational until Data Team or the Owner approves it. Every
 // vehicle created before this feature existed has no `status` field at all,
@@ -1561,12 +1724,12 @@ app.get(
 function vehicleIsApproved(v) {
   return (v.status || "approved") === "approved";
 }
-// An Area Supervisor can, in addition to overseeing their own Site
+// An Regional Supervisor can, in addition to overseeing their own Area
 // Supervisors' vehicles, directly hold some vehicles/sites themselves - the
-// same "special sites assigned to him" pattern as a Site Supervisor, just
+// same "special sites assigned to him" pattern as an Area Supervisor, just
 // layered on top of the area role rather than needing a separate account.
 // A vehicle counts as directly held when its supervisorId IS this Area
-// Supervisor's own user id (exactly how a Site Supervisor's vehicles are
+// Supervisor's own user id (exactly how an Area Supervisor's vehicles are
 // scoped), so no new field is needed - just widening who supervisorId can
 // point to and who's allowed to see/act on it.
 function visibleVehiclesFor(user) {
@@ -1579,10 +1742,10 @@ function visibleVehiclesFor(user) {
   }
   return approved;
 }
-// True when this vehicle is directly held by an Area Supervisor themselves
-// (supervisorId === their own id) rather than belonging to one of the Site
+// True when this vehicle is directly held by an Regional Supervisor themselves
+// (supervisorId === their own id) rather than belonging to one of the Area
 // Supervisors they oversee - used to gate verification (see below) so an
-// Area Supervisor can't approve their own daily submissions.
+// Regional Supervisor can't approve their own daily submissions.
 function isDirectlyHeldByAreaSupervisor(vehicle, user) {
   return user.role === "area_supervisor" && vehicle.supervisorId === user.id;
 }
@@ -1601,7 +1764,7 @@ app.get("/api/vehicles", requireAuth, (req, res) => {
   res.json(visibleVehiclesFor(req.user));
 });
 
-// Site Supervisors can add vehicles directly (full control over onboarding,
+// Area Supervisors can add vehicles directly (full control over onboarding,
 // for faster fleet growth at the site level) but the result starts out
 // "pending" and stays invisible to normal fleet operations until Data Team
 // or the Owner approves it - see vehicleIsApproved()/visibleVehiclesFor().
@@ -1610,7 +1773,7 @@ app.get("/api/vehicles", requireAuth, (req, res) => {
 app.post(
   "/api/vehicles",
   requireAuth,
-  requireRole(...ADMIN_ROLES, "site_supervisor"),
+  requireRole(...ADMIN_ROLES, "site_supervisor", "area_supervisor"),
   h(async (req, res) => {
     const { reg, route, usage, standardMileage, make, model, engineNo, chassisNo, rcDate, seatingCapacity, vehicleType, fuelType } = req.body || {};
     // A vehicle record without its full onboarding data is not usable for
@@ -1638,7 +1801,7 @@ app.post(
     if (typeFuelError) return res.status(400).json({ error: typeFuelError });
     const uniqueError = vehicleUniquenessError({ reg, engineNo, chassisNo }, null);
     if (uniqueError) return res.status(400).json({ error: uniqueError });
-    const selfOnboarded = req.user.role === "site_supervisor";
+    const selfOnboarded = req.user.role === "site_supervisor" || req.user.role === "area_supervisor";
     const vehicle = {
       id: uid("v"),
       reg,
@@ -1647,7 +1810,7 @@ app.post(
       usage: usage || "fixed_route",
       clientId: null,
       siteId: null,
-      // A Site Supervisor onboarding a vehicle IS that vehicle's supervisor
+      // A Area Supervisor onboarding a vehicle IS that vehicle's supervisor
       // from the start - no separate assignment step needed. Admin-created
       // vehicles are unassigned until someone explicitly assigns them, same
       // as before this feature existed.
@@ -1683,7 +1846,7 @@ app.post(
       docs: {
         RC: { number: "", expiry: computeRcExpiry(rcDate), updatedAt: null, copyUrl: null },
         Permit: { number: "", expiry: "", isStatePermit: false, districtCount: 0, districtNames: "", updatedAt: null, copyUrl: null },
-        Insurance: { number: "", expiry: "" },
+        Insurance: { number: "", expiry: "", updatedAt: null, copyUrl: null },
         Fitness: { number: "", expiry: "", updatedAt: null, copyUrl: null },
         Tax: { number: "", expiry: "", updatedAt: null, copyUrl: null },
         PUC: { number: "", expiry: "", updatedAt: null, copyUrl: null },
@@ -1697,7 +1860,7 @@ app.post(
   })
 );
 
-// Data Team/Owner's queue of Site-Supervisor-onboarded vehicles awaiting a
+// Data Team/Owner's queue of Area-Supervisor-onboarded vehicles awaiting a
 // decision - not mixed into the regular vehicle list (visibleVehiclesFor)
 // since a pending vehicle isn't a real fleet vehicle yet.
 app.get(
@@ -1709,14 +1872,14 @@ app.get(
   }
 );
 
-// A Site Supervisor's own onboarding history (any status) so they can track
+// A Area Supervisor's own onboarding history (any status) so they can track
 // what they've submitted, whether it's been approved yet, and why it was
 // rejected if it was - separate from the main vehicle list since those
 // vehicles don't show up there until approved.
 app.get(
   "/api/vehicles/my-submissions",
   requireAuth,
-  requireRole("site_supervisor"),
+  requireRole("site_supervisor", "area_supervisor"),
   (req, res) => {
     res.json(db.vehicles.filter((v) => v.submittedBy === req.user.id).sort((a, b) => (b.submittedAt || "").localeCompare(a.submittedAt || "")));
   }
@@ -1808,7 +1971,7 @@ app.patch(
 );
 
 // Core assignment mutation, factored out so it can be reused both by the
-// direct admin endpoint below AND by the approval decision for a Site
+// direct admin endpoint below AND by the approval decision for an Area
 // Supervisor's assignment request (see /assignment-requests/:id/approve) -
 // an approved request must apply to the vehicle exactly the same way a
 // direct admin edit would, including the driverAssignmentHistory
@@ -1897,10 +2060,10 @@ app.patch(
   })
 );
 
-// ---------- Driver/Route/Company assignment requests (Site Supervisor
+// ---------- Driver/Route/Company assignment requests (Area Supervisor
 // proposes for a vehicle under their own site, Data Team/Ops Manager/Owner
 // approves) ----------
-// A Site Supervisor can't call /assign directly (ADMIN_ROLES only), but can
+// A Area Supervisor can't call /assign directly (ADMIN_ROLES only), but can
 // propose assigning one of their own vehicles to a specific company +
 // Route ID + driver. Nothing changes on the vehicle until it's approved -
 // see applyVehicleAssignmentPatch(), reused here so an approved request
@@ -1914,7 +2077,7 @@ app.post(
     const vehicle = db.vehicles.find((v) => v.id === req.params.id);
     if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
     if (vehicle.supervisorId !== req.user.id) {
-      return res.status(403).json({ error: "You can only request an assignment change for a vehicle under your own site." });
+      return res.status(403).json({ error: "You can only request an assignment change for a vehicle under your own area." });
     }
     if (!vehicleIsApproved(vehicle)) {
       return res.status(400).json({ error: "This vehicle is still pending approval itself - it needs to be approved before it can be assigned." });
@@ -2003,8 +2166,8 @@ app.patch(
 );
 
 // Usage (Fixed / Client on demand / Booking) is deliberately editable by a
-// wider set of roles than the rest of the vehicle assignment - Site
-// Supervisors, Area Supervisors and the Bookings Department all need to be
+// wider set of roles than the rest of the vehicle assignment - Area
+// Supervisors, Regional Supervisors and the Bookings Department all need to be
 // able to flip this without going through Operations Manager. Supervisors
 // are still scoped to vehicles they can already see elsewhere in the app.
 const USAGE_EDITOR_ROLES = [...ADMIN_ROLES, "site_supervisor", "area_supervisor", "bookings"];
@@ -2150,7 +2313,7 @@ app.get("/api/records", requireAuth, (req, res) => {
 
 // Every vehicle fuelled on a given day, plus that day's total fuel spend
 // broken out by station brand (IOCL/BPCL/HPCL/Other) and by payment mode
-// (Cash/UPI/Card/Other) - Site Supervisor, Area Supervisor, Operations
+// (Cash/UPI/Card/Other) - Area Supervisor, Regional Supervisor, Operations
 // Manager and Owner all use this to get a one-glance picture of the day's
 // fuel filling, scoped to whichever vehicles they can already see elsewhere.
 // Shared by the on-screen overview and the CSV/XLSX download below, so both
@@ -2233,9 +2396,9 @@ app.get("/api/reports/vehicles-running", requireAuth, requireRole(...FUEL_OVERVI
   const columns = [
     { label: "Vehicle", key: "reg" },
     { label: "Company", key: "company" },
-    { label: "Area Supervisor", key: "areaSupervisor" },
-    { label: "Site Supervisor", key: "siteSupervisor" },
-    { label: "Site Supervisor Mobile", key: "siteSupervisorMobile" },
+    { label: "Regional Supervisor", key: "areaSupervisor" },
+    { label: "Area Supervisor", key: "siteSupervisor" },
+    { label: "Area Supervisor Mobile", key: "siteSupervisorMobile" },
     { label: "Driver", key: "driver" },
     { label: "Driver Mobile", key: "driverMobile" },
     { label: "Route ID", key: "route" },
@@ -2265,11 +2428,11 @@ app.get("/api/reports/fuel-overview", requireAuth, requireRole(...FUEL_OVERVIEW_
 app.post(
   "/api/records",
   requireAuth,
-  // An Area Supervisor can now directly hold some vehicles themselves (see
+  // An Regional Supervisor can now directly hold some vehicles themselves (see
   // isDirectlyHeldByAreaSupervisor) and submits daily records for those
-  // exactly like a Site Supervisor would. The supervisorId===self check
+  // exactly like an Area Supervisor would. The supervisorId===self check
   // below already scopes this to only vehicles they personally hold, not
-  // every vehicle under the Site Supervisors they oversee.
+  // every vehicle under the Area Supervisors they oversee.
   requireRole("site_supervisor", "area_supervisor"),
   h(async (req, res) => {
     const body = req.body || {};
@@ -2390,6 +2553,10 @@ app.post(
         totalCost: Math.round(litres * fuelPrice),
         belowStandard,
         receiptUrls: fuelReceiptUrls,
+        // Separate from the overall record verification below - Data Team
+        // specifically double-checks the fuel figures (litres/price/station/
+        // odometer) whenever fuel was actually filled that day.
+        crossVerification: { status: litres > 0 ? "pending" : "not_applicable", verifiedBy: null, verifiedByName: null, verifiedAt: null, comment: "" },
       },
       verification: { status: "pending", verifiedBy: null, comment: "" },
       submittedBy: req.user.id,
@@ -2409,20 +2576,104 @@ app.patch(
     const key = recordKey(req.params.vehicleId, req.params.date);
     const record = db.records[key];
     if (!record) return res.status(404).json({ error: "Record not found." });
-    // An Area Supervisor can directly hold some vehicles themselves (see
+    // An Regional Supervisor can directly hold some vehicles themselves (see
     // isDirectlyHeldByAreaSupervisor) - they submit daily records for those
-    // exactly like a Site Supervisor would, so they can't also be the one
+    // exactly like an Area Supervisor would, so they can't also be the one
     // who verifies them. Only Data Team/Owner can approve those specific
-    // records; everything under the Site Supervisors they oversee still
+    // records; everything under the Area Supervisors they oversee still
     // works as before.
     const vehicleForRecord = db.vehicles.find((v) => v.id === req.params.vehicleId);
     if (req.user.role === "area_supervisor" && vehicleForRecord && isDirectlyHeldByAreaSupervisor(vehicleForRecord, req.user)) {
-      return res.status(403).json({ error: "You directly hold this vehicle as a site, so you can't verify your own submission for it - only Data Team or the Owner can." });
+      return res.status(403).json({ error: "You directly hold this vehicle as an area, so you can't verify your own submission for it - only Data Team or the Owner can." });
     }
     const { status, comment } = req.body || {};
     if (!["approved", "rejected"].includes(status)) return res.status(400).json({ error: "status must be approved or rejected." });
     record.verification = { status, verifiedBy: req.user.id, comment: comment || "" };
     await audit(req.user, status === "approved" ? "approve" : "reject", `${req.user.name} ${status} ${req.params.vehicleId} (${req.params.date})${comment ? ": " + comment : ""}`);
+    res.json(record);
+  })
+);
+
+// ---------- Fuel cross-verification (Data Team) ----------
+// A second, independent check specifically on the fuel numbers (litres,
+// price, station, odometer) a Site/Area Supervisor or Ops Manager entered -
+// separate from whoever already verified the record as a whole. Only ever
+// applies to days fuel was actually filled (crossVerification stays
+// "not_applicable" otherwise, so it never shows up as a pending item).
+const FUEL_CROSS_VERIFY_ROLES = ["data_team", "owner"];
+app.get(
+  "/api/fuel-verification/pending",
+  requireAuth,
+  requireRole(...FUEL_CROSS_VERIFY_ROLES),
+  (req, res) => {
+    const rows = Object.values(db.records)
+      .filter((r) => r.fuel && r.fuel.crossVerification && r.fuel.crossVerification.status === "pending")
+      .map((r) => {
+        const vehicle = db.vehicles.find((v) => v.id === r.vehicleId);
+        const submitter = db.users.find((u) => u.id === r.submittedBy);
+        return {
+          vehicleId: r.vehicleId,
+          date: r.date,
+          reg: vehicle ? vehicle.reg : r.vehicleId,
+          submittedByName: submitter ? submitter.name : "",
+          fuel: r.fuel,
+          overallVerification: r.verification,
+        };
+      })
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    res.json(rows);
+  }
+);
+app.patch(
+  "/api/records/:vehicleId/:date/fuel-verify",
+  requireAuth,
+  requireRole(...FUEL_CROSS_VERIFY_ROLES),
+  h(async (req, res) => {
+    const key = recordKey(req.params.vehicleId, req.params.date);
+    const record = db.records[key];
+    if (!record) return res.status(404).json({ error: "Record not found." });
+    if (!record.fuel || record.fuel.crossVerification.status === "not_applicable") {
+      return res.status(400).json({ error: "This day has no fuel entry to cross-verify." });
+    }
+    const { status, comment, edits } = req.body || {};
+    if (!["approved", "flagged"].includes(status)) return res.status(400).json({ error: "status must be approved or flagged." });
+    if (status === "flagged" && !(comment || "").trim()) {
+      return res.status(400).json({ error: "A comment is required when flagging a fuel entry." });
+    }
+    // Data Team can correct the figures right here if something looks off,
+    // instead of having to use the separate free-form /correct endpoint for
+    // every field - recomputed the same way the original submission was.
+    if (edits && typeof edits === "object") {
+      const f = record.fuel;
+      const litres = edits.litres !== undefined ? Number(edits.litres) || 0 : f.litres;
+      const fuelPrice = edits.fuelPrice !== undefined ? Number(edits.fuelPrice) || 0 : f.fuelPrice;
+      const odometer = edits.odometer !== undefined ? Number(edits.odometer) || f.odometer : f.odometer;
+      const distance = Math.max(odometer - f.previousOdometer, 0);
+      const vehicle = db.vehicles.find((v) => v.id === record.vehicleId);
+      const standardMileage = vehicle ? vehicle.standardMileage : 4;
+      const mileage = litres > 0 ? Math.round((distance / litres) * 10) / 10 : 0;
+      f.litres = litres;
+      f.fuelPrice = fuelPrice;
+      f.odometer = odometer;
+      f.distance = distance;
+      f.mileage = mileage;
+      f.totalCost = Math.round(litres * fuelPrice);
+      f.belowStandard = litres > 0 && distance > 0 && mileage < standardMileage;
+      if (edits.station !== undefined) f.station = edits.station || "";
+      if (edits.paymentMode !== undefined) f.paymentMode = edits.paymentMode || "";
+    }
+    record.fuel.crossVerification = {
+      status,
+      verifiedBy: req.user.id,
+      verifiedByName: req.user.name,
+      verifiedAt: nowIso(),
+      comment: comment || "",
+    };
+    await audit(
+      req.user,
+      "fuel_cross_verify",
+      `${req.user.name} ${status === "approved" ? "approved" : "flagged"} the fuel entry for ${req.params.vehicleId} (${req.params.date})${comment ? ": " + comment : ""}`
+    );
     res.json(record);
   })
 );
@@ -2448,7 +2699,7 @@ app.patch(
 );
 
 // ---------- DAY-START / DAY-CLOSE ODOMETER (separate from the fuel entry) ----------
-// Site supervisors log two odometer readings per vehicle per day - one when
+// Area supervisors log two odometer readings per vehicle per day - one when
 // the vehicle starts its day, one when it closes - independent of whether
 // fuel was filled that day. These are saved immediately (like clock in/out),
 // not held in a draft.
@@ -2563,7 +2814,7 @@ app.post(
     }
     const billUrl = await savePhoto(bill, "bill");
     if (!billUrl) return res.status(400).json({ error: "Could not read the bill photo - please try again." });
-    // Every vehicle-tagged expense is snapshotted with the vehicle's Site at
+    // Every vehicle-tagged expense is snapshotted with the vehicle's Area at
     // the moment it's filed - not looked up live later - so cost-by-site
     // reporting stays accurate even if the vehicle moves sites afterward.
     // Office Expenditure has no vehicle/site of its own; it gets divided
@@ -2728,7 +2979,7 @@ app.get("/api/driver-attendance", requireAuth, requireRole("hr", "owner", "ops_m
 // ---------- ATTENDANCE DOWNLOADS + BACKUP (HR, Owner only) ----------
 // HR is the one who actually needs the last-month attendance picture (for
 // payroll/discipline review), so unlike the general Reports tab (Owner/Ops
-// Manager/Area Supervisor), these downloads are scoped to HR and Owner only.
+// Manager/Regional Supervisor), these downloads are scoped to HR and Owner only.
 const ATTENDANCE_DOWNLOAD_ROLES = ["hr", "owner"];
 app.get("/api/reports/attendance-supervisors", requireAuth, requireRole(...ATTENDANCE_DOWNLOAD_ROLES), (req, res) => {
   const { from, to, format } = req.query;
@@ -2744,8 +2995,8 @@ app.get("/api/reports/attendance-supervisors", requireAuth, requireRole(...ATTEN
     { label: "Role", key: (a) => roleLabelServer(a.role) },
     { label: "Type", key: (a) => (a.type === "clockin" ? "Clock In" : "Clock Out") },
     { label: "Time", key: (a) => new Date(a.ts).toLocaleTimeString() },
-    { label: "Site", key: (a) => a.siteName || "" },
-    { label: "Distance From Site (m)", key: "distanceMeters" },
+    { label: "Area", key: (a) => a.siteName || "" },
+    { label: "Distance From Area (m)", key: "distanceMeters" },
     { label: "Within Geofence", key: (a) => (a.withinGeofence == null ? "n/a" : a.withinGeofence ? "Yes" : "No") },
   ];
   sendDownload(res, rows, columns, `supervisor_attendance_${from || "all"}_${to || "all"}`, format);
@@ -2832,7 +3083,7 @@ function personLabel(personType, personId) {
 function getPayrollProfile(personType, personId) {
   return db.payrollProfiles[payrollKey(personType, personId)] || null;
 }
-// Drivers a Site Supervisor can see payroll for - whichever vehicle(s) are
+// Drivers an Area Supervisor can see payroll for - whichever vehicle(s) are
 // currently assigned to them, same scoping rule used everywhere else
 // (visibleVehiclesFor), narrowed down to just the driver on each one.
 function visibleDriverIdsFor(user) {
@@ -2886,7 +3137,7 @@ function computePayslip(personType, personId, month) {
 
 // People this role is allowed to browse payroll for, beyond their own -
 // used to populate the management/view list. Empty for roles that only
-// ever see their own payslip (Area Supervisor, Data Team, Bookings).
+// ever see their own payslip (Regional Supervisor, Data Team, Bookings).
 app.get("/api/payroll/people", requireAuth, (req, res) => {
   const user = req.user;
   const people = [];
@@ -3025,7 +3276,7 @@ app.get("/api/payroll/payslip/:personType/:personId", requireAuth, (req, res) =>
 });
 
 // Payroll register for a month - every person this role can see, with
-// their computed net pay, so HR/Owner/Ops Manager/Site Supervisor get an
+// their computed net pay, so HR/Owner/Ops Manager/Area Supervisor get an
 // at-a-glance table instead of opening each person one at a time.
 app.get("/api/payroll/summary", requireAuth, (req, res) => {
   const user = req.user;
@@ -3124,7 +3375,7 @@ app.get("/api/payroll/approval/:personType/:personId", requireAuth, (req, res) =
 });
 
 // ---------- TRIPS ----------
-// Trips are allocated to a driver by whichever Site Supervisor runs that
+// Trips are allocated to a driver by whichever Area Supervisor runs that
 // driver's vehicle (Owner can also allocate, as an administrative
 // override, same as Owner's override on vehicle Assignments elsewhere).
 const TRIP_ASSIGN_ROLES = ["site_supervisor", "owner", "ops_manager", "data_team", "bookings"];
@@ -3252,7 +3503,7 @@ app.delete(
 // (Diesel/Advance/Repair/Other) and interest we've recorded against them.
 const SUBVENDOR_MANAGE_ROLES = ["owner", "ops_manager"];
 // Recording a payment (Diesel/Advance/Repair/Other) TO a subvendor is a
-// day-to-day site expense, not an account-management action - Site
+// day-to-day site expense, not an account-management action - Area
 // Supervisors file these for whichever of their own subvendor vehicles are
 // running at their site, same scoping as trips/assignments/expenses
 // (vehicle.supervisorId === their own id). Everything else about a
@@ -3584,7 +3835,7 @@ app.post(
     const validTypes = ["Diesel", "Advance", "Repair", "Other"];
     if (!validTypes.includes(type)) return res.status(400).json({ error: "Payment type must be one of: " + validTypes.join(", ") + "." });
     if (!amount || Number(amount) <= 0) return res.status(400).json({ error: "A valid amount is required." });
-    // Site Supervisors only file expenses for their own subvendor vehicles -
+    // Area Supervisors only file expenses for their own subvendor vehicles -
     // same scoping as trips/assignments (vehicle.supervisorId === them).
     if (req.user.role === "site_supervisor") {
       if (!vehicleId) return res.status(400).json({ error: "Select which of your vehicles this expense is for." });
@@ -3632,7 +3883,7 @@ app.post(
   })
 );
 
-// Lightweight payments list - lets a Site Supervisor see (and double-check)
+// Lightweight payments list - lets an Area Supervisor see (and double-check)
 // what they've filed for their own vehicles without exposing the full
 // subvendor summary (company-wide income entries, other sites' payments,
 // advance/interest details) that owner/ops_manager get via /summary.
@@ -3910,7 +4161,7 @@ app.post(
 
 // Adds everything the driver app's trip screens display beyond the bare
 // trip record: the vehicle's registration, its client/site (so the driver
-// knows who the run is for), its route, and the Site Supervisor who owns
+// knows who the run is for), its route, and the Area Supervisor who owns
 // that vehicle - name + mobile number, so the driver has someone to call.
 function enrichTripForDriver(trip) {
   const vehicle = db.vehicles.find((v) => v.id === trip.vehicleId);
@@ -4238,7 +4489,7 @@ app.get(
   })
 );
 
-// ---------- ODOMETER VERIFICATION (Site Supervisor / Data Team / Ops / Owner) ----------
+// ---------- ODOMETER VERIFICATION (Area Supervisor / Data Team / Ops / Owner) ----------
 // Every odometer reading a driver enters needs a human to actually look at
 // the photo and confirm it's real before it's trusted - that's the
 // Supervisor of whichever vehicle the driver is on. Vehicles don't always
@@ -4250,7 +4501,7 @@ const ODOMETER_VERIFY_ROLES = ["site_supervisor", "data_team", "ops_manager", "o
 function shiftVehicleFor(shift) {
   return db.vehicles.find((v) => v.driverId === shift.driverId) || null;
 }
-// Owner/Ops Manager: everything. Site Supervisor: only shifts for drivers
+// Owner/Ops Manager: everything. Area Supervisor: only shifts for drivers
 // currently assigned to one of their own vehicles. Data Team: everything,
 // but full detail (reading + photo) only for vehicles with no Supervisor -
 // see publicDriverShiftRow for how the "status only" redaction works for
@@ -4359,12 +4610,12 @@ app.patch(
     if (!shift) return res.status(404).json({ error: "Shift not found." });
     const vehicle = shiftVehicleFor(shift);
     const hasSupervisor = !!(vehicle && vehicle.supervisorId);
-    // A vehicle's supervisorId can now point to an Area Supervisor (one who
-    // directly holds it as a site, same as a Site Supervisor would) rather
-    // than only a Site Supervisor. Data Team's carve-out was originally meant
+    // A vehicle's supervisorId can now point to an Regional Supervisor (one who
+    // directly holds it as a site, same as an Area Supervisor would) rather
+    // than only an Area Supervisor. Data Team's carve-out was originally meant
     // to cover "nobody else can act on this vehicle" - that's still true when
-    // the supervisor is an Area Supervisor, since only Data Team/Owner (never
-    // the Area Supervisor themselves) may act on their own directly-held
+    // the supervisor is an Regional Supervisor, since only Data Team/Owner (never
+    // the Regional Supervisor themselves) may act on their own directly-held
     // vehicles, so widen the check accordingly instead of leaving Data Team
     // locked out.
     const supervisorUser = hasSupervisor ? db.users.find((u) => u.id === vehicle.supervisorId) : null;
@@ -4407,7 +4658,7 @@ app.post(
     const hasSupervisor = !!(vehicle && vehicle.supervisorId);
     // See the matching comment in /api/driver-shifts/:id/verify above - the
     // Data Team carve-out needs to also cover vehicles directly held by an
-    // Area Supervisor, not just vehicles with no supervisor at all.
+    // Regional Supervisor, not just vehicles with no supervisor at all.
     const supervisorUser = hasSupervisor ? db.users.find((u) => u.id === vehicle.supervisorId) : null;
     const supervisorIsSiteSupervisorRole = !!(supervisorUser && supervisorUser.role === "site_supervisor");
     const canAct =
@@ -4503,7 +4754,7 @@ function repairRequestVehicle(r) {
   return db.vehicles.find((v) => v.id === r.vehicleId) || null;
 }
 // Same visibility shape as driverShiftsVisibleTo/visibleVehiclesFor - a
-// Site Supervisor only sees requests for their own vehicles, an Area
+// Area Supervisor only sees requests for their own vehicles, an Area
 // Supervisor sees requests for vehicles under the supervisors they manage,
 // everyone else who has any business with Workshop (Ops Manager, Owner, and
 // every Workshop role) sees all of it, since it's a small central team.
@@ -5061,7 +5312,7 @@ app.get("/api/audit", requireAuth, requireRole("owner", "data_team", "hr", "ops_
   res.json(rows.slice(0, limit));
 });
 
-// ---------- REPORTS (Owner, Operations Manager, Area Supervisor) ----------
+// ---------- REPORTS (Owner, Operations Manager, Regional Supervisor) ----------
 // Downloadable CSV/Excel exports so these three roles can pull the raw data
 // out and analyze it however they like, outside the app. Each dataset is
 // scoped to what that role can already see elsewhere in the app - an Area
@@ -5250,8 +5501,8 @@ function buildReport(dataset, user, query) {
       { label: "Role", key: "role" },
       { label: "Type", key: (a) => (a.type === "clockin" ? "Clock In" : "Clock Out") },
       { label: "Time", key: (a) => new Date(a.ts).toLocaleTimeString() },
-      { label: "Site", key: (a) => a.siteName || "" },
-      { label: "Distance From Site (m)", key: "distanceMeters" },
+      { label: "Area", key: (a) => a.siteName || "" },
+      { label: "Distance From Area (m)", key: "distanceMeters" },
       { label: "Within Geofence", key: (a) => (a.withinGeofence == null ? "n/a" : a.withinGeofence ? "Yes" : "No") },
     ];
     return { rows, columns };
@@ -5266,7 +5517,7 @@ function buildReport(dataset, user, query) {
       { label: "Route", key: "route" },
       { label: "Usage", key: "usage" },
       { label: "Client", key: (v) => (v.clientId ? clientNameServer(v.clientId) : "") },
-      { label: "Site", key: (v) => (v.siteId ? siteNameServer(v.siteId) : "") },
+      { label: "Area", key: (v) => (v.siteId ? siteNameServer(v.siteId) : "") },
       { label: "Supervisor", key: (v) => (v.supervisorId ? userNameServer(v.supervisorId) : "") },
       { label: "Driver", key: (v) => (v.driverId ? driverNameServer(v.driverId) : "") },
       { label: "Driver Since", key: "driverAssignedDate" },
@@ -5342,7 +5593,7 @@ function buildReport(dataset, user, query) {
       { label: "State Permit", key: (r) => (r.docType === "Permit" ? (r.doc.isStatePermit ? "Yes" : "No") : "") },
       { label: "Districts", key: (r) => (r.docType === "Permit" ? r.doc.districtCount || 0 : "") },
       { label: "District Names", key: (r) => (r.docType === "Permit" ? r.doc.districtNames || "" : "") },
-      { label: "Site", key: (r) => (r.vehicle.siteId ? siteNameServer(r.vehicle.siteId) : "") },
+      { label: "Area", key: (r) => (r.vehicle.siteId ? siteNameServer(r.vehicle.siteId) : "") },
       { label: "Supervisor", key: (r) => (r.vehicle.supervisorId ? userNameServer(r.vehicle.supervisorId) : "") },
     ];
     return { rows, columns };
@@ -5426,12 +5677,12 @@ function buildReport(dataset, user, query) {
   throw err;
 }
 
-// ---------- Operational Cost Analysis (Vehicle-wise + Site-wise) ----------
+// ---------- Operational Cost Analysis (Vehicle-wise + Area-wise) ----------
 // Every vehicle-tagged expense already carries the vehicle's registration
-// (vehicleId) and a Site snapshot (siteId, taken at the moment it was
+// (vehicleId) and an Area snapshot (siteId, taken at the moment it was
 // filed - see POST /api/expenses). Office Expenditure has neither, so per
-// the Owner's explicit instruction it's divided evenly across every Site
-// when computing each Site's Total Operational Cost, rather than being
+// the Owner's explicit instruction it's divided evenly across every Area
+// when computing each Area's Total Operational Cost, rather than being
 // left out of the picture entirely. Only approved expenses count as real
 // spend - pending/rejected requests aren't money that's actually gone out
 // yet.

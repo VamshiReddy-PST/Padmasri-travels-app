@@ -156,7 +156,7 @@ let myLeaveRequests = [];
 let attendanceMonth = new Date().toISOString().slice(0,7);
 let attendanceRows = [];
 let documentsData = null;
-const DOC_TYPE_LABELS = { RC:"RC", Permit:"Permit", Fitness:"Fitness Certificate", Tax:"Road Tax", PUC:"PUC", TemporaryPermit:"Temporary Permit", BorderTax:"Border Tax" };
+const DOC_TYPE_LABELS = { RC:"RC", Permit:"Permit", Insurance:"Insurance", Fitness:"Fitness Certificate", Tax:"Road Tax", PUC:"PUC", TemporaryPermit:"Temporary Permit", BorderTax:"Border Tax" };
 let lastPos = { lat: null, lng: null };
 let locationOk = false;
 let pingTimer = null;
@@ -331,7 +331,7 @@ async function requestLeaveForTrip(tripId, date){
     await api("/driver-auth/leave-request", {method:"POST", body: JSON.stringify({date, tripId, reason})});
     await fetchMyLeaveRequests();
     render();
-    alert("Leave request submitted - your Site Supervisor / Operations Manager will review it.");
+    alert("Leave request submitted - your Area Supervisor / Operations Manager will review it.");
   }catch(e){ alert(e.message); }
 }
 async function fetchAttendance(){
@@ -703,12 +703,12 @@ function currentTripTabHtml(){
       ${(t.clientName || t.siteName || t.route) ? `
       <div class="doc-row" style="display:block;">
         ${t.clientName ? `<div><b>Client:</b> ${t.clientName}</div>` : ""}
-        ${t.siteName ? `<div><b>Site:</b> ${t.siteName}</div>` : ""}
+        ${t.siteName ? `<div><b>Area:</b> ${t.siteName}</div>` : ""}
         ${t.route ? `<div><b>Route:</b> ${t.route}</div>` : ""}
       </div>` : ""}
       ${t.supervisorName ? `
       <div class="doc-row" style="display:block;">
-        <div><b>Site Supervisor:</b> ${t.supervisorName}${t.supervisorPhone ? ` &middot; <a href="tel:${t.supervisorPhone}">${t.supervisorPhone}</a>` : ""}</div>
+        <div><b>Area Supervisor:</b> ${t.supervisorName}${t.supervisorPhone ? ` &middot; <a href="tel:${t.supervisorPhone}">${t.supervisorPhone}</a>` : ""}</div>
       </div>` : ""}
       <div class="trip-point">
         <div class="trip-point-label">Pickup Point</div>
@@ -840,7 +840,7 @@ function manualEntryCodeCardHtml(){
   return `
   <div class="card">
     <h2 class="section-title">Can't Enter This Yourself?</h2>
-    <p class="muted">If you genuinely can't enter the reading (phone trouble, injury, etc.), generate a code below and read it out to your Site Supervisor - they can enter it for you. Note: this applies a ₹100 penalty for the missed entry.</p>
+    <p class="muted">If you genuinely can't enter the reading (phone trouble, injury, etc.), generate a code below and read it out to your Area Supervisor - they can enter it for you. Note: this applies a ₹100 penalty for the missed entry.</p>
     ${hasCode ? `
     <div class="countdown" id="manualCodeDisplay" style="letter-spacing:6px;">${shift.manualEntryPin}</div>
     <p class="muted" style="text-align:center;">Valid until ${fmtTime(shift.manualEntryPinExpiresAt)} - share this with your Supervisor only.</p>
