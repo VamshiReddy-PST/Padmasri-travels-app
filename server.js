@@ -1561,14 +1561,30 @@ app.get(
 function vehicleIsApproved(v) {
   return (v.status || "approved") === "approved";
 }
+// An Area Supervisor can, in addition to overseeing their own Site
+// Supervisors' vehicles, directly hold some vehicles/sites themselves - the
+// same "special sites assigned to him" pattern as a Site Supervisor, just
+// layered on top of the area role rather than needing a separate account.
+// A vehicle counts as directly held when its supervisorId IS this Area
+// Supervisor's own user id (exactly how a Site Supervisor's vehicles are
+// scoped), so no new field is needed - just widening who supervisorId can
+// point to and who's allowed to see/act on it.
 function visibleVehiclesFor(user) {
   const approved = db.vehicles.filter(vehicleIsApproved);
   if (user.role === "site_supervisor") return approved.filter((v) => v.supervisorId === user.id);
   if (user.role === "area_supervisor") {
     const mySupervisors = new Set(user.supervises || []);
+    mySupervisors.add(user.id); // his own directly-held vehicles/sites
     return approved.filter((v) => mySupervisors.has(v.supervisorId));
   }
   return approved;
+}
+// True when this vehicle is directly held by an Area Supervisor themselves
+// (supervisorId === their own id) rather than belonging to one of the Site
+// Supervisors they oversee - used to gate verification (see below) so an
+// Area Supervisor can't approve their own daily submissions.
+function isDirectlyHeldByAreaSupervisor(vehicle, user) {
+  return user.role === "area_supervisor" && vehicle.supervisorId === user.id;
 }
 const VEHICLE_APPROVAL_ROLES = ["data_team", "owner"];
 // A route entry's "name" field is what the route catalog UI labels
@@ -2043,7 +2059,7 @@ app.patch(
   h(async (req, res) => {
     const vehicle = db.vehicles.find((v) => v.id === req.params.id);
     if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
-    const isOwnerSupervisor = req.user.role === "site_supervisor" && vehicle.supervisorId === req.user.id;
+    const isOwnerSupervisor = ["site_supervisor", "area_supervisor"].includes(req.user.role) && vehicle.supervisorId === req.user.id;
     if (!isOwnerSupervisor && !ADMIN_ROLES.includes(req.user.role)) {
       return res.status(403).json({ error: "Not allowed to edit this vehicle's documents." });
     }
@@ -2249,7 +2265,12 @@ app.get("/api/reports/fuel-overview", requireAuth, requireRole(...FUEL_OVERVIEW_
 app.post(
   "/api/records",
   requireAuth,
-  requireRole("site_supervisor"),
+  // An Area Supervisor can now directly hold some vehicles themselves (see
+  // isDirectlyHeldByAreaSupervisor) and submits daily records for those
+  // exactly like a Site Supervisor would. The supervisorId===self check
+  // below already scopes this to only vehicles they personally hold, not
+  // every vehicle under the Site Supervisors they oversee.
+  requireRole("site_supervisor", "area_supervisor"),
   h(async (req, res) => {
     const body = req.body || {};
     const vehicle = db.vehicles.find((v) => v.id === body.vehicleId);
@@ -2388,6 +2409,16 @@ app.patch(
     const key = recordKey(req.params.vehicleId, req.params.date);
     const record = db.records[key];
     if (!record) return res.status(404).json({ error: "Record not found." });
+    // An Area Supervisor can directly hold some vehicles themselves (see
+    // isDirectlyHeldByAreaSupervisor) - they submit daily records for those
+    // exactly like a Site Supervisor would, so they can't also be the one
+    // who verifies them. Only Data Team/Owner can approve those specific
+    // records; everything under the Site Supervisors they oversee still
+    // works as before.
+    const vehicleForRecord = db.vehicles.find((v) => v.id === req.params.vehicleId);
+    if (req.user.role === "area_supervisor" && vehicleForRecord && isDirectlyHeldByAreaSupervisor(vehicleForRecord, req.user)) {
+      return res.status(403).json({ error: "You directly hold this vehicle as a site, so you can't verify your own submission for it - only Data Team or the Owner can." });
+    }
     const { status, comment } = req.body || {};
     if (!["approved", "rejected"].includes(status)) return res.status(400).json({ error: "status must be approved or rejected." });
     record.verification = { status, verifiedBy: req.user.id, comment: comment || "" };
@@ -2434,7 +2465,7 @@ app.get("/api/odometer", requireAuth, (req, res) => {
 app.post(
   "/api/odometer/:vehicleId/:type(start|close)",
   requireAuth,
-  requireRole("site_supervisor"),
+  requireRole("site_supervisor", "area_supervisor"),
   h(async (req, res) => {
     const vehicle = db.vehicles.find((v) => v.id === req.params.vehicleId);
     if (!vehicle) return res.status(400).json({ error: "Unknown vehicle." });
@@ -2507,6 +2538,7 @@ function visibleExpensesFor(user) {
   if (user.role === "site_supervisor") return db.expenses.filter((e) => e.userId === user.id);
   if (user.role === "area_supervisor") {
     const mine = new Set(user.supervises || []);
+    mine.add(user.id); // his own directly-submitted expenses (for sites he holds himself)
     return db.expenses.filter((e) => mine.has(e.userId));
   }
   return db.expenses; // ops_manager, owner, data_team, hr(read-only via audit) see all
@@ -4327,11 +4359,21 @@ app.patch(
     if (!shift) return res.status(404).json({ error: "Shift not found." });
     const vehicle = shiftVehicleFor(shift);
     const hasSupervisor = !!(vehicle && vehicle.supervisorId);
+    // A vehicle's supervisorId can now point to an Area Supervisor (one who
+    // directly holds it as a site, same as a Site Supervisor would) rather
+    // than only a Site Supervisor. Data Team's carve-out was originally meant
+    // to cover "nobody else can act on this vehicle" - that's still true when
+    // the supervisor is an Area Supervisor, since only Data Team/Owner (never
+    // the Area Supervisor themselves) may act on their own directly-held
+    // vehicles, so widen the check accordingly instead of leaving Data Team
+    // locked out.
+    const supervisorUser = hasSupervisor ? db.users.find((u) => u.id === vehicle.supervisorId) : null;
+    const supervisorIsSiteSupervisorRole = !!(supervisorUser && supervisorUser.role === "site_supervisor");
     const canAct =
       req.user.role === "owner" ||
       req.user.role === "ops_manager" ||
       (req.user.role === "site_supervisor" && vehicle && vehicle.supervisorId === req.user.id) ||
-      (req.user.role === "data_team" && !hasSupervisor);
+      (req.user.role === "data_team" && (!hasSupervisor || !supervisorIsSiteSupervisorRole));
     if (!canAct) return res.status(403).json({ error: "You don't have access to verify this driver's readings." });
     const { point } = req.body || {};
     if (!odometerPointHtmlSafe(point)) return res.status(400).json({ error: "point must be 'open' or 'close'." });
@@ -4363,11 +4405,16 @@ app.post(
     if (!shift) return res.status(404).json({ error: "Shift not found." });
     const vehicle = shiftVehicleFor(shift);
     const hasSupervisor = !!(vehicle && vehicle.supervisorId);
+    // See the matching comment in /api/driver-shifts/:id/verify above - the
+    // Data Team carve-out needs to also cover vehicles directly held by an
+    // Area Supervisor, not just vehicles with no supervisor at all.
+    const supervisorUser = hasSupervisor ? db.users.find((u) => u.id === vehicle.supervisorId) : null;
+    const supervisorIsSiteSupervisorRole = !!(supervisorUser && supervisorUser.role === "site_supervisor");
     const canAct =
       req.user.role === "owner" ||
       req.user.role === "ops_manager" ||
       (req.user.role === "site_supervisor" && vehicle && vehicle.supervisorId === req.user.id) ||
-      (req.user.role === "data_team" && !hasSupervisor);
+      (req.user.role === "data_team" && (!hasSupervisor || !supervisorIsSiteSupervisorRole));
     if (!canAct) return res.status(403).json({ error: "You don't have access to enter a reading for this driver." });
     if (shift.status === "closed") return res.status(400).json({ error: "This shift is already closed." });
     const { point, odometer, pin, photo } = req.body || {};

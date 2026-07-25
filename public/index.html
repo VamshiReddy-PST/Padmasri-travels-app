@@ -791,7 +791,7 @@ async function submitVoluntaryPasswordChange(){
 // screen stays first/most prominent.
 function tabsFor(role){
   if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
@@ -877,8 +877,13 @@ async function routeView(){
   if(tab==="smart_assistant") return smartAssistantScreen();
   if(tab==="onboarding") return supervisorOnboardingScreen();
   if(tab==="approvals") return fleetApprovalsScreen();
+  // "My Vehicles" is shared by Site Supervisor and Area Supervisor - an Area
+  // Supervisor can directly hold some vehicles/sites themselves (same as a
+  // Site Supervisor would), so they get the exact same checklist screen for
+  // those, scoped down to just the vehicles supervisorId===them (see
+  // supervisorHome()) rather than everything they oversee.
+  if(tab==="my_vehicles") return view.name==="vehicle_detail" ? vehicleChecklistScreen(view.vehicleId) : supervisorHome();
   if(role==="site_supervisor"){
-    if(tab==="my_vehicles") return view.name==="vehicle_detail" ? vehicleChecklistScreen(view.vehicleId) : supervisorHome();
     if(tab==="my_attendance") return myAttendanceScreen();
     if(tab==="my_expenses") return myExpensesScreen();
     if(tab==="usage") return vehicleUsageScreen();
@@ -977,7 +982,12 @@ async function setVehicleUsage(vehicleId, usage){
 
 // ================= SITE SUPERVISOR =================
 function supervisorHome(){
-  const mine = vehicles;
+  // For a Site Supervisor, `vehicles` (from GET /api/vehicles) is already
+  // just their own. For an Area Supervisor it's wider - it also includes
+  // every vehicle under the Site Supervisors they oversee - so narrow down
+  // to only the ones they directly hold themselves (supervisorId === them),
+  // the same "special sites assigned to him" set a Site Supervisor would see.
+  const mine = currentUser.role==="area_supervisor" ? vehicles.filter(v=>v.supervisorId===currentUser.id) : vehicles;
   const cards = mine.map(v=>{
     const rec = records[v.id];
     const status = rec ? rec.verification.status : "not_submitted";
@@ -989,9 +999,12 @@ function supervisorHome(){
       <span class="badge ${badgeClass}">${label}</span>
     </div>`;
   }).join("");
+  const note = currentUser.role==="area_supervisor"
+    ? "These are the sites you hold directly yourself, separate from the Site Supervisors you oversee. Complete the daily checklist, document check, breathalyzer test, attendance, and fuel/mileage entry for each before it goes on route - Data Team or the Owner verifies these, not you."
+    : "Complete the daily checklist, document check, breathalyzer test, attendance, and fuel/mileage entry for each vehicle before it goes on route.";
   return `
   <h1 class="page-title">My Vehicles - ${mine.length} allotted</h1>
-  <div class="banner">Complete the daily checklist, document check, breathalyzer test, attendance, and fuel/mileage entry for each vehicle before it goes on route.</div>
+  <div class="banner">${note}</div>
   <div class="vehicle-list">${cards || "<div class='empty'>No vehicles allotted to you yet - ask Operations to assign one.</div>"}</div>
   `;
 }
@@ -1859,9 +1872,16 @@ async function setExpensePaymentStage(id, paymentStage){
 
 // ================= AREA SUPERVISOR =================
 async function areaQueueScreen(){
-  const pending = vehicles.map(v=>records[v.id]).filter(r=>r && r.verification.status==='pending');
-  const approvedToday = vehicles.map(v=>records[v.id]).filter(r=>r && r.verification.status==='approved').length;
-  const rejectedToday = vehicles.map(v=>records[v.id]).filter(r=>r && r.verification.status==='rejected').length;
+  // `vehicles` includes both the Site Supervisors this Area Supervisor
+  // oversees AND any vehicles/sites he directly holds himself (see "My
+  // Vehicles"). He can't verify his own directly-held vehicles' records -
+  // only Data Team/Owner can - so this queue only ever needs to show the
+  // ones he's actually able to act on.
+  const teamVehicles = vehicles.filter(v=>v.supervisorId!==currentUser.id);
+  const selfHeldPending = vehicles.filter(v=>v.supervisorId===currentUser.id).map(v=>records[v.id]).filter(r=>r && r.verification.status==='pending').length;
+  const pending = teamVehicles.map(v=>records[v.id]).filter(r=>r && r.verification.status==='pending');
+  const approvedToday = teamVehicles.map(v=>records[v.id]).filter(r=>r && r.verification.status==='approved').length;
+  const rejectedToday = teamVehicles.map(v=>records[v.id]).filter(r=>r && r.verification.status==='rejected').length;
   const rows = pending.map(r=>{
     const v = vehicles.find(x=>x.id===r.vehicleId);
     return `<tr>
@@ -1878,6 +1898,7 @@ async function areaQueueScreen(){
     <div class="kpi good"><div class="num">${approvedToday}</div><div class="label">Approved today</div></div>
     <div class="kpi bad"><div class="num">${rejectedToday}</div><div class="label">Needs correction</div></div>
   </div>
+  ${selfHeldPending ? `<div class="banner">${selfHeldPending} record(s) from your own directly-held vehicle(s) are also awaiting verification, but only Data Team or the Owner can review those - check "My Vehicles" for their status.</div>` : ""}
   <div class="card"><h2 class="section-title">Awaiting cross-verification</h2>
     <table><tr><th>Vehicle</th><th>Route/Site</th><th>Submitted by</th><th>Flags</th><th>Action</th></tr>${rows || "<tr><td colspan='5' class='empty'>Nothing pending.</td></tr>"}</table>
   </div>`;
