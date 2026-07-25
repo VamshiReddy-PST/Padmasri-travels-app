@@ -721,7 +721,12 @@ app.get("/api/meta", requireAuth, (req, res) => {
   res.json({
     clients: db.clients,
     sites: db.sites,
-    drivers: db.drivers.map(publicDriverForStaff),
+    // A driver a Site Supervisor has just onboarded isn't a real, assignable
+    // driver yet - see driverIsApproved(). Meta feeds every driver dropdown/
+    // lookup across the whole app, so filtering here is what actually keeps
+    // a pending driver from being selectable anywhere until HR or the Owner
+    // approves them.
+    drivers: db.drivers.filter(driverIsApproved).map(publicDriverForStaff),
     users: db.users.map(publicUser),
     me: publicUser(req.user),
   });
@@ -1014,6 +1019,14 @@ app.post(
 // already add drivers from the Operations screen's quick-add form.
 const DRIVER_EDITOR_ROLES = ["owner", "ops_manager", "hr", "data_team"];
 const DRIVING_LEVELS = ["Trainee", "Standard", "Senior", "Expert"];
+const DRIVER_APPROVAL_ROLES = ["hr", "owner"];
+// A driver a Site Supervisor has just onboarded isn't real/assignable yet -
+// see the /api/meta filtering above. Drivers created before this feature
+// existed have no `approvalStatus` at all and are treated as already-
+// approved (same grandfathering approach as vehicles' `status` field).
+function driverIsApproved(d) {
+  return (d.approvalStatus || "approved") === "approved";
+}
 // Every driver's mobile number must be unique - it's their driver-app login
 // identifier, so two drivers sharing one would make login ambiguous.
 // Checked against every driver record regardless of active/left status,
@@ -1025,10 +1038,16 @@ function findDriverPhoneClash(phone, excludeDriverId) {
   if (!norm) return null;
   return db.drivers.find((d) => d.id !== excludeDriverId && d.phone && String(d.phone).trim() === norm) || null;
 }
+// Site Supervisors can onboard drivers directly (full control, for faster
+// driver addition at the site level) but the result starts out "pending"
+// and is filtered out of /api/meta - so it can't be assigned to a vehicle
+// or a trip - until HR or the Owner approves it. Everyone else in
+// DRIVER_EDITOR_ROLES is trusted staff already, so their drivers go
+// straight to "approved" exactly as before this feature existed.
 app.post(
   "/api/drivers",
   requireAuth,
-  requireRole(...DRIVER_EDITOR_ROLES),
+  requireRole(...DRIVER_EDITOR_ROLES, "site_supervisor"),
   h(async (req, res) => {
     const { name, phone, licenseNumber, aadharNumber, dateOfJoining, drivingLevel } = req.body || {};
     if (!name) return res.status(400).json({ error: "name is required." });
@@ -1039,6 +1058,7 @@ app.post(
     if (phoneClash) {
       return res.status(400).json({ error: `Mobile number ${phone} is already registered to driver ${phoneClash.name} - it must be unique. If this is the same person rejoining, reactivate their existing driver record instead of adding a new one.` });
     }
+    const selfOnboarded = req.user.role === "site_supervisor";
     const driver = {
       id: uid("d"),
       name,
@@ -1070,9 +1090,69 @@ app.post(
         { joinedDate: dateOfJoining || todayStr(), leftDate: null, exitReason: null, rehireEligible: null, recordedBy: req.user.id, recordedByName: req.user.name, recordedAt: nowIso() },
       ],
       uniformHistory: [],
+      // Onboarding/approval trail - see driverIsApproved(). Drivers created
+      // before this feature existed have no `approvalStatus` and are
+      // treated as already-approved.
+      approvalStatus: selfOnboarded ? "pending" : "approved",
+      submittedBy: req.user.id,
+      submittedByName: req.user.name,
+      submittedAt: nowIso(),
+      decidedBy: null,
+      decidedByName: null,
+      decidedAt: null,
+      rejectionComment: "",
     };
     db.drivers.push(driver);
-    await audit(req.user, "create_driver", `${req.user.name} added driver ${name}`);
+    await audit(req.user, "create_driver", `${req.user.name} added driver ${name}${selfOnboarded? " - pending HR/Owner approval" : ""}`);
+    res.json(publicDriverForStaff(driver));
+  })
+);
+
+// HR/Owner's queue of Site-Supervisor-onboarded drivers awaiting a
+// decision - not mixed into /api/meta since a pending driver isn't real yet.
+app.get(
+  "/api/drivers/pending-approvals",
+  requireAuth,
+  requireRole(...DRIVER_APPROVAL_ROLES),
+  (req, res) => {
+    res.json(db.drivers.filter((d) => d.approvalStatus === "pending").map(publicDriverForStaff));
+  }
+);
+
+// A Site Supervisor's own driver-onboarding history (any status).
+app.get(
+  "/api/drivers/my-submissions",
+  requireAuth,
+  requireRole("site_supervisor"),
+  (req, res) => {
+    res.json(
+      db.drivers
+        .filter((d) => d.submittedBy === req.user.id)
+        .sort((a, b) => (b.submittedAt || "").localeCompare(a.submittedAt || ""))
+        .map(publicDriverForStaff)
+    );
+  }
+);
+
+app.patch(
+  "/api/drivers/:id/approve",
+  requireAuth,
+  requireRole(...DRIVER_APPROVAL_ROLES),
+  h(async (req, res) => {
+    const driver = db.drivers.find((d) => d.id === req.params.id);
+    if (!driver) return res.status(404).json({ error: "Driver not found." });
+    if (driver.approvalStatus !== "pending") return res.status(400).json({ error: "This driver has already been decided on." });
+    const { status, comment } = req.body || {};
+    if (!["approved", "rejected"].includes(status)) return res.status(400).json({ error: "status must be approved or rejected." });
+    if (status === "rejected" && !(comment || "").trim()) {
+      return res.status(400).json({ error: "A reason is required when rejecting a driver submission." });
+    }
+    driver.approvalStatus = status;
+    driver.decidedBy = req.user.id;
+    driver.decidedByName = req.user.name;
+    driver.decidedAt = nowIso();
+    driver.rejectionComment = status === "rejected" ? comment.trim() : "";
+    await audit(req.user, "driver_approval_decision", `${req.user.name} ${status} driver ${driver.name} submitted by ${driver.submittedByName}${comment ? ": " + comment : ""}`);
     res.json(publicDriverForStaff(driver));
   })
 );
@@ -1375,14 +1455,24 @@ app.get(
 );
 
 // ---------- VEHICLES ----------
+// A vehicle a Site Supervisor has just onboarded isn't a real, usable fleet
+// vehicle yet - it doesn't count for trips, assignments, dashboards, or
+// anything else operational until Data Team or the Owner approves it. Every
+// vehicle created before this feature existed has no `status` field at all,
+// so it's treated as "approved" (grandfathered in) rather than hidden.
+function vehicleIsApproved(v) {
+  return (v.status || "approved") === "approved";
+}
 function visibleVehiclesFor(user) {
-  if (user.role === "site_supervisor") return db.vehicles.filter((v) => v.supervisorId === user.id);
+  const approved = db.vehicles.filter(vehicleIsApproved);
+  if (user.role === "site_supervisor") return approved.filter((v) => v.supervisorId === user.id);
   if (user.role === "area_supervisor") {
     const mySupervisors = new Set(user.supervises || []);
-    return db.vehicles.filter((v) => mySupervisors.has(v.supervisorId));
+    return approved.filter((v) => mySupervisors.has(v.supervisorId));
   }
-  return db.vehicles;
+  return approved;
 }
+const VEHICLE_APPROVAL_ROLES = ["data_team", "owner"];
 // A route entry's "name" field is what the route catalog UI labels
 // "Starting Point" - this just looks it up for a given vehicle's routeId.
 function vehicleRouteInfo(v) {
@@ -1397,10 +1487,16 @@ app.get("/api/vehicles", requireAuth, (req, res) => {
   res.json(visibleVehiclesFor(req.user));
 });
 
+// Site Supervisors can add vehicles directly (full control over onboarding,
+// for faster fleet growth at the site level) but the result starts out
+// "pending" and stays invisible to normal fleet operations until Data Team
+// or the Owner approves it - see vehicleIsApproved()/visibleVehiclesFor().
+// Everyone else in ADMIN_ROLES is trusted staff already, so their vehicles
+// go straight to "approved" exactly as before this feature existed.
 app.post(
   "/api/vehicles",
   requireAuth,
-  requireRole(...ADMIN_ROLES),
+  requireRole(...ADMIN_ROLES, "site_supervisor"),
   h(async (req, res) => {
     const { reg, route, usage, standardMileage, make, model, engineNo, chassisNo, rcDate, seatingCapacity, vehicleType, fuelType } = req.body || {};
     // A vehicle record without its full onboarding data is not usable for
@@ -1428,6 +1524,7 @@ app.post(
     if (typeFuelError) return res.status(400).json({ error: typeFuelError });
     const uniqueError = vehicleUniquenessError({ reg, engineNo, chassisNo }, null);
     if (uniqueError) return res.status(400).json({ error: uniqueError });
+    const selfOnboarded = req.user.role === "site_supervisor";
     const vehicle = {
       id: uid("v"),
       reg,
@@ -1436,7 +1533,11 @@ app.post(
       usage: usage || "fixed_route",
       clientId: null,
       siteId: null,
-      supervisorId: null,
+      // A Site Supervisor onboarding a vehicle IS that vehicle's supervisor
+      // from the start - no separate assignment step needed. Admin-created
+      // vehicles are unassigned until someone explicitly assigns them, same
+      // as before this feature existed.
+      supervisorId: selfOnboarded ? req.user.id : null,
       driverId: null,
       driverAssignedDate: null,
       // Every driver this vehicle has ever had, as a stint list (mirrors the
@@ -1454,6 +1555,17 @@ app.post(
       fuelType,
       standardMileage: Number(standardMileage) || 4.0,
       lastOdometer: null,
+      // Onboarding/approval trail - see vehicleIsApproved(). Vehicles
+      // created before this feature existed have no `status` at all and are
+      // treated as already-approved.
+      status: selfOnboarded ? "pending" : "approved",
+      submittedBy: req.user.id,
+      submittedByName: req.user.name,
+      submittedAt: nowIso(),
+      decidedBy: null,
+      decidedByName: null,
+      decidedAt: null,
+      rejectionComment: "",
       docs: {
         RC: { number: "", expiry: computeRcExpiry(rcDate), updatedAt: null, copyUrl: null },
         Permit: { number: "", expiry: "", isStatePermit: false, districtCount: 0, districtNames: "", updatedAt: null, copyUrl: null },
@@ -1466,7 +1578,55 @@ app.post(
       },
     };
     db.vehicles.push(vehicle);
-    await audit(req.user, "create_vehicle", `${req.user.name} added vehicle ${reg}${make||model? ` (${make||''} ${model||''})`.trim() : ""}`);
+    await audit(req.user, "create_vehicle", `${req.user.name} added vehicle ${reg}${make||model? ` (${make||''} ${model||''})`.trim() : ""}${selfOnboarded? " - pending Data Team/Owner approval" : ""}`);
+    res.json(vehicle);
+  })
+);
+
+// Data Team/Owner's queue of Site-Supervisor-onboarded vehicles awaiting a
+// decision - not mixed into the regular vehicle list (visibleVehiclesFor)
+// since a pending vehicle isn't a real fleet vehicle yet.
+app.get(
+  "/api/vehicles/pending-approvals",
+  requireAuth,
+  requireRole(...VEHICLE_APPROVAL_ROLES),
+  (req, res) => {
+    res.json(db.vehicles.filter((v) => v.status === "pending"));
+  }
+);
+
+// A Site Supervisor's own onboarding history (any status) so they can track
+// what they've submitted, whether it's been approved yet, and why it was
+// rejected if it was - separate from the main vehicle list since those
+// vehicles don't show up there until approved.
+app.get(
+  "/api/vehicles/my-submissions",
+  requireAuth,
+  requireRole("site_supervisor"),
+  (req, res) => {
+    res.json(db.vehicles.filter((v) => v.submittedBy === req.user.id).sort((a, b) => (b.submittedAt || "").localeCompare(a.submittedAt || "")));
+  }
+);
+
+app.patch(
+  "/api/vehicles/:id/approve",
+  requireAuth,
+  requireRole(...VEHICLE_APPROVAL_ROLES),
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+    if (vehicle.status !== "pending") return res.status(400).json({ error: "This vehicle has already been decided on." });
+    const { status, comment } = req.body || {};
+    if (!["approved", "rejected"].includes(status)) return res.status(400).json({ error: "status must be approved or rejected." });
+    if (status === "rejected" && !(comment || "").trim()) {
+      return res.status(400).json({ error: "A reason is required when rejecting a vehicle submission." });
+    }
+    vehicle.status = status;
+    vehicle.decidedBy = req.user.id;
+    vehicle.decidedByName = req.user.name;
+    vehicle.decidedAt = nowIso();
+    vehicle.rejectionComment = status === "rejected" ? comment.trim() : "";
+    await audit(req.user, "vehicle_approval_decision", `${req.user.name} ${status} vehicle ${vehicle.reg} submitted by ${vehicle.submittedByName}${comment ? ": " + comment : ""}`);
     res.json(vehicle);
   })
 );

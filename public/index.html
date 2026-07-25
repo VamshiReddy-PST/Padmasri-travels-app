@@ -228,6 +228,22 @@ let loading = false;
 let lastError = "";
 let loginPortal = null; // null = chooser screen, "staff" = staff/supervisor login form
 
+// ---- Site Supervisor vehicle/driver onboarding (pending approval) ----
+// Deliberately kept OUT of the `vehicles`/`meta.drivers` arrays above - a
+// pending submission isn't a real fleet vehicle/driver yet (see
+// vehicleIsApproved/driverIsApproved on the backend), so it must never leak
+// into trip/usage/assignment dropdowns just because the submitting
+// supervisor is looking at their own onboarding history.
+let mySubmittedVehicles = [];
+let mySubmittedDrivers = [];
+let onboardingSubmissionsLoaded = false;
+let onboardingBusy = false;
+// ---- Fleet Approvals queue (Data Team/Owner for vehicles, HR/Owner for drivers) ----
+let pendingVehicleApprovals = [];
+let pendingDriverApprovals = [];
+let approvalsLoaded = false;
+let approvalsBusy = false;
+
 // ---- AI Assistant (Owner only) ----
 let aiChatHistory = []; // [{role:"user"|"assistant", content:string, toolsUsed?:string[]}]
 let aiChatBusy = false;
@@ -762,12 +778,12 @@ async function submitVoluntaryPasswordChange(){
 // the assistant sits right next to it) so each role's actual primary
 // screen stays first/most prominent.
 function tabsFor(role){
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["people","People"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="hr") return [["attendance","Attendance"],["people","People"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   return [];
@@ -781,11 +797,11 @@ function tabsFor(role){
 // Built once, shared by every role - a role simply won't render a group
 // that has none of its tabs in it.
 const NAV_GROUPS = [
-  { key:"trips_vehicles", icon:"🚐", label:"Trips & Vehicles", tabs:["trips","usage","assignments","routes","subvendor_expenses"] },
+  { key:"trips_vehicles", icon:"🚐", label:"Trips & Vehicles", tabs:["trips","usage","assignments","routes","subvendor_expenses","onboarding"] },
   { key:"verification", icon:"🛠️", label:"Verification & Repairs", tabs:["odometer_verify","repairs","workshop"] },
   { key:"money", icon:"💰", label:"Money", tabs:["expenses","expenses_view","my_expenses","payroll","subvendors","reports","backup"] },
   { key:"people", icon:"👥", label:"People", tabs:["people","attendance","my_attendance"] },
-  { key:"admin", icon:"📋", label:"Admin", tabs:["audit"] },
+  { key:"admin", icon:"📋", label:"Admin", tabs:["audit","approvals"] },
 ];
 function navBarHtml(tabs){
   const tabMap = new Map(tabs); // key -> label, and lets us know which keys actually exist for this role
@@ -847,6 +863,8 @@ async function routeView(){
   if(tab==="repairs") return repairRequestsScreen();
   if(tab==="workshop") return workshopScreen();
   if(tab==="smart_assistant") return smartAssistantScreen();
+  if(tab==="onboarding") return supervisorOnboardingScreen();
+  if(tab==="approvals") return fleetApprovalsScreen();
   if(role==="site_supervisor"){
     if(tab==="my_vehicles") return view.name==="vehicle_detail" ? vehicleChecklistScreen(view.vehicleId) : supervisorHome();
     if(tab==="my_attendance") return myAttendanceScreen();
@@ -964,6 +982,235 @@ function supervisorHome(){
   <div class="banner">Complete the daily checklist, document check, breathalyzer test, attendance, and fuel/mileage entry for each vehicle before it goes on route.</div>
   <div class="vehicle-list">${cards || "<div class='empty'>No vehicles allotted to you yet - ask Operations to assign one.</div>"}</div>
   `;
+}
+
+// ---- Site Supervisor: Add Vehicle/Driver (full control over onboarding,
+// but each submission starts "pending" and needs Data Team/Owner (vehicle)
+// or HR/Owner (driver) approval before it's a real, usable fleet
+// vehicle/driver - it stays invisible everywhere else in the app until then. ----
+async function loadMySubmissions(){
+  try{
+    const [v, d] = await Promise.all([api("/vehicles/my-submissions"), api("/drivers/my-submissions")]);
+    mySubmittedVehicles = v; mySubmittedDrivers = d;
+  }catch(e){ lastError = e.message; }
+  onboardingSubmissionsLoaded = true;
+}
+function submissionStatusBadge(status){
+  const cls = status==="approved" ? "approved" : status==="rejected" ? "rejected" : "pending";
+  return `<span class="badge ${cls}">${status.toUpperCase()}</span>`;
+}
+async function supervisorOnboardingScreen(){
+  if(!onboardingSubmissionsLoaded) await loadMySubmissions();
+  const vehicleRows = mySubmittedVehicles.map(v=>`
+    <tr>
+      <td><b>${v.reg}</b></td><td>${v.make||''} ${v.model||''}</td>
+      <td>${submissionStatusBadge(v.status)}</td>
+      <td>${v.status==="rejected" ? (v.rejectionComment||'-') : '-'}</td>
+    </tr>`).join("");
+  const driverRows = mySubmittedDrivers.map(d=>`
+    <tr>
+      <td><b>${d.name}</b></td><td>${d.phone||'-'}</td>
+      <td>${submissionStatusBadge(d.approvalStatus)}</td>
+      <td>${d.approvalStatus==="rejected" ? (d.rejectionComment||'-') : '-'}</td>
+    </tr>`).join("");
+  return `
+  <h1 class="page-title">Add Vehicle / Driver</h1>
+  <div class="banner">You have full control over adding new vehicles and drivers here - once submitted, a vehicle needs Data Team or Owner approval, and a driver needs HR or Owner approval, before it's usable across the app (trips, assignments, etc.). You cannot delete a vehicle or driver once added.</div>
+
+  <div class="card">
+    <h2 class="section-title">Add a Vehicle</h2>
+    <div class="banner">Every field below is required.</div>
+    <form class="inline-form" onsubmit="return submitVehicleOnboarding(event)">
+      <div class="f"><label>Registration number *</label><input type="text" id="obVehicleReg" placeholder="TS 09 XX 1234" required /></div>
+      <div class="f"><label>Vehicle Type *</label>
+        <select id="obVehicleType" required onchange="onObVehicleTypeChange()">
+          <option value="">- select -</option>
+          <option value="Bus">Bus</option>
+          <option value="Cab">Cab</option>
+        </select>
+      </div>
+      <div class="f"><label>Fuel Type *</label>
+        <select id="obVehicleFuel" required>
+          <option value="">- select -</option>
+          <option value="Diesel">Diesel</option>
+          <option value="Petrol">Petrol</option>
+          <option value="CNG">CNG</option>
+          <option value="EV">EV</option>
+          <option value="Hybrid">Hybrid</option>
+        </select>
+      </div>
+      <div class="f"><label>Usage *</label>
+        <select id="obVehicleUsage" required>
+          <option value="fixed_route">Fixed Route</option>
+          <option value="client_on_demand">Client on demand</option>
+          <option value="booking">Booking</option>
+        </select>
+      </div>
+      <div class="f"><label>Make *</label><input type="text" id="obVehicleMake" placeholder="e.g. Tata" style="width:100px" required /></div>
+      <div class="f"><label>Model *</label><input type="text" id="obVehicleModel" placeholder="e.g. Winger" style="width:100px" required /></div>
+      <div class="f"><label>Engine No. *</label><input type="text" id="obVehicleEngineNo" style="width:110px" required /></div>
+      <div class="f"><label>Chassis No. *</label><input type="text" id="obVehicleChassisNo" style="width:110px" required /></div>
+      <div class="f"><label>RC Date (registration date) *</label><input type="date" id="obVehicleRcDate" style="width:140px" required /></div>
+      <div class="f"><label>Seating Capacity *</label><input type="number" id="obVehicleSeating" min="1" style="width:80px" required /></div>
+      <button class="btn small" type="submit" ${onboardingBusy?"disabled":""}>${onboardingBusy?'<span class="spinner"></span>':'+ Submit vehicle for approval'}</button>
+    </form>
+    <h3 style="margin:16px 0 8px;">Your vehicle submissions</h3>
+    <table><tr><th>Vehicle</th><th>Make/Model</th><th>Status</th><th>Rejection reason</th></tr>
+    ${vehicleRows || "<tr><td colspan='4' class='empty'>You haven't submitted any vehicles yet.</td></tr>"}
+    </table>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Add a Driver</h2>
+    <form class="inline-form" onsubmit="return submitDriverOnboarding(event)">
+      <div class="f"><label>Driver name *</label><input type="text" id="obDriverName" required /></div>
+      <div class="f"><label>Phone</label><input type="tel" id="obDriverPhone" /></div>
+      <div class="f"><label>License Number</label><input type="text" id="obDriverLicense" /></div>
+      <div class="f"><label>Date of Joining</label><input type="date" id="obDriverDoj" /></div>
+      <button class="btn small" type="submit" ${onboardingBusy?"disabled":""}>${onboardingBusy?'<span class="spinner"></span>':'+ Submit driver for approval'}</button>
+    </form>
+    <h3 style="margin:16px 0 8px;">Your driver submissions</h3>
+    <table><tr><th>Driver</th><th>Phone</th><th>Status</th><th>Rejection reason</th></tr>
+    ${driverRows || "<tr><td colspan='4' class='empty'>You haven't submitted any drivers yet.</td></tr>"}
+    </table>
+  </div>
+  `;
+}
+function onObVehicleTypeChange(){
+  const typeEl = document.getElementById("obVehicleType");
+  const fuelEl = document.getElementById("obVehicleFuel");
+  if(!typeEl || !fuelEl) return;
+  if(typeEl.value === "Bus"){ fuelEl.value = "Diesel"; fuelEl.disabled = true; }
+  else { fuelEl.disabled = false; }
+}
+async function submitVehicleOnboarding(evt){
+  evt.preventDefault();
+  const body = {
+    reg: document.getElementById("obVehicleReg").value,
+    vehicleType: document.getElementById("obVehicleType").value,
+    fuelType: document.getElementById("obVehicleFuel").value,
+    usage: document.getElementById("obVehicleUsage").value,
+    make: document.getElementById("obVehicleMake").value,
+    model: document.getElementById("obVehicleModel").value,
+    engineNo: document.getElementById("obVehicleEngineNo").value,
+    chassisNo: document.getElementById("obVehicleChassisNo").value,
+    rcDate: document.getElementById("obVehicleRcDate").value,
+    seatingCapacity: document.getElementById("obVehicleSeating").value,
+  };
+  const requiredLabels = {
+    reg: "Registration number", vehicleType: "Vehicle Type", fuelType: "Fuel Type", usage: "Usage",
+    make: "Make", model: "Model", engineNo: "Engine No", chassisNo: "Chassis No",
+    rcDate: "RC Date", seatingCapacity: "Seating Capacity",
+  };
+  const missing = Object.entries(requiredLabels).filter(([k])=>!String(body[k]||"").trim()).map(([,label])=>label);
+  if(missing.length){
+    alert("Cannot add vehicle - missing required field(s): " + missing.join(", "));
+    return false;
+  }
+  onboardingBusy = true; await renderMain();
+  try{
+    const v = await api("/vehicles", {method:"POST", body: JSON.stringify(body)});
+    // NOT pushed into `vehicles` - it's pending and isn't a real fleet
+    // vehicle yet, so it must not appear in any operational screen.
+    mySubmittedVehicles.unshift(v);
+    alert(`${v.reg} submitted - waiting on Data Team/Owner approval before it's usable.`);
+  }catch(e){ alert(e.message); }
+  onboardingBusy = false; await renderMain();
+  return false;
+}
+async function submitDriverOnboarding(evt){
+  evt.preventDefault();
+  const name = document.getElementById("obDriverName").value;
+  const phone = document.getElementById("obDriverPhone").value;
+  const licenseNumber = document.getElementById("obDriverLicense").value;
+  const dateOfJoining = document.getElementById("obDriverDoj").value;
+  if(!name || !String(name).trim()){ alert("Driver name is required."); return false; }
+  onboardingBusy = true; await renderMain();
+  try{
+    const d = await api("/drivers", {method:"POST", body: JSON.stringify({name, phone, licenseNumber, dateOfJoining})});
+    // NOT pushed into meta.drivers - same reasoning as vehicles above.
+    mySubmittedDrivers.unshift(d);
+    alert(`${d.name} submitted - waiting on HR/Owner approval before they're assignable.`);
+  }catch(e){ alert(e.message); }
+  onboardingBusy = false; await renderMain();
+  return false;
+}
+
+// ---- Fleet Approvals (Data Team/Owner for vehicles, HR/Owner for drivers) ----
+async function loadPendingApprovals(){
+  const role = currentUser.role;
+  const canSeeVehicles = role==="data_team" || role==="owner";
+  const canSeeDrivers = role==="hr" || role==="owner";
+  try{
+    const [v, d] = await Promise.all([
+      canSeeVehicles ? api("/vehicles/pending-approvals") : Promise.resolve([]),
+      canSeeDrivers ? api("/drivers/pending-approvals") : Promise.resolve([]),
+    ]);
+    pendingVehicleApprovals = v; pendingDriverApprovals = d;
+  }catch(e){ lastError = e.message; }
+  approvalsLoaded = true;
+}
+async function fleetApprovalsScreen(){
+  if(!approvalsLoaded) await loadPendingApprovals();
+  const role = currentUser.role;
+  const canSeeVehicles = role==="data_team" || role==="owner";
+  const canSeeDrivers = role==="hr" || role==="owner";
+  const vehicleRows = pendingVehicleApprovals.map(v=>`
+    <tr>
+      <td><b>${v.reg}</b></td><td>${v.make||''} ${v.model||''}</td><td>${v.vehicleType||''} / ${v.fuelType||''}</td>
+      <td>${v.submittedByName||'-'}</td><td>${v.submittedAt? new Date(v.submittedAt).toLocaleDateString() : '-'}</td>
+      <td>
+        <button class="btn small" ${approvalsBusy?"disabled":""} onclick="decideVehicleApproval('${v.id}','approved')">Approve</button>
+        <button class="btn small danger" ${approvalsBusy?"disabled":""} onclick="decideVehicleApproval('${v.id}','rejected')">Reject</button>
+      </td>
+    </tr>`).join("");
+  const driverRows = pendingDriverApprovals.map(d=>`
+    <tr>
+      <td><b>${d.name}</b></td><td>${d.phone||'-'}</td><td>${d.licenseNumber||'-'}</td>
+      <td>${d.submittedByName||'-'}</td><td>${d.submittedAt? new Date(d.submittedAt).toLocaleDateString() : '-'}</td>
+      <td>
+        <button class="btn small" ${approvalsBusy?"disabled":""} onclick="decideDriverApproval('${d.id}','approved')">Approve</button>
+        <button class="btn small danger" ${approvalsBusy?"disabled":""} onclick="decideDriverApproval('${d.id}','rejected')">Reject</button>
+      </td>
+    </tr>`).join("");
+  return `
+  <h1 class="page-title">Fleet Approvals</h1>
+  <div class="banner">Vehicles and drivers onboarded by Site Supervisors land here first - they aren't usable anywhere else in the app (trips, assignments, etc.) until approved.</div>
+  ${canSeeVehicles ? `
+  <div class="card">
+    <h2 class="section-title">Pending Vehicles (${pendingVehicleApprovals.length})</h2>
+    <table><tr><th>Vehicle</th><th>Make/Model</th><th>Type/Fuel</th><th>Submitted by</th><th>Date</th><th></th></tr>
+    ${vehicleRows || "<tr><td colspan='6' class='empty'>Nothing pending.</td></tr>"}
+    </table>
+  </div>` : ''}
+  ${canSeeDrivers ? `
+  <div class="card">
+    <h2 class="section-title">Pending Drivers (${pendingDriverApprovals.length})</h2>
+    <table><tr><th>Driver</th><th>Phone</th><th>License</th><th>Submitted by</th><th>Date</th><th></th></tr>
+    ${driverRows || "<tr><td colspan='6' class='empty'>Nothing pending.</td></tr>"}
+    </table>
+  </div>` : ''}
+  `;
+}
+async function decideVehicleApproval(vehicleId, status){
+  let comment = "";
+  if(status==="rejected"){ comment = prompt("Reason for rejecting this vehicle (sent back to the supervisor):",""); if(comment===null) return; if(!comment.trim()){ alert("A reason is required when rejecting."); return; } }
+  approvalsBusy = true; await renderMain();
+  try{
+    await api(`/vehicles/${vehicleId}/approve`, {method:"PATCH", body: JSON.stringify({status, comment})});
+    pendingVehicleApprovals = pendingVehicleApprovals.filter(v=>v.id!==vehicleId);
+  }catch(e){ alert(e.message); }
+  approvalsBusy = false; await renderMain();
+}
+async function decideDriverApproval(driverId, status){
+  let comment = "";
+  if(status==="rejected"){ comment = prompt("Reason for rejecting this driver (sent back to the supervisor):",""); if(comment===null) return; if(!comment.trim()){ alert("A reason is required when rejecting."); return; } }
+  approvalsBusy = true; await renderMain();
+  try{
+    await api(`/drivers/${driverId}/approve`, {method:"PATCH", body: JSON.stringify({status, comment})});
+    pendingDriverApprovals = pendingDriverApprovals.filter(d=>d.id!==driverId);
+  }catch(e){ alert(e.message); }
+  approvalsBusy = false; await renderMain();
 }
 
 // in-memory draft for the vehicle currently being edited (not saved until Submit)
@@ -5003,6 +5250,8 @@ Object.assign(window, {
   openDocumentScanner, handleScannerFile, closeScannerModal, retakeScan, confirmScan, onWorkshopInvoiceScanned,
   toggleExpenditureBucket, openMileageDetail, openInsight,
   askAiSuggested, sendAiChatMessage, loadAiInsights,
+  onObVehicleTypeChange, submitVehicleOnboarding, submitDriverOnboarding,
+  decideVehicleApproval, decideDriverApproval,
 });
 
 boot();
