@@ -244,6 +244,18 @@ let pendingDriverApprovals = [];
 let approvalsLoaded = false;
 let approvalsBusy = false;
 
+// ---- Site Supervisor: propose a new route, or a driver/route/company
+// assignment for one of their own vehicles - both need Data Team/Ops
+// Manager/Owner approval before taking effect. ----
+let myRouteRequests = [];
+let myAssignmentRequests = [];
+let routeAssignmentSubmissionsLoaded = false;
+let routeAssignmentBusy = false;
+// Shared with the Fleet Approvals screen (data_team/ops_manager/owner)
+let pendingRouteRequests = [];
+let pendingAssignmentRequests = [];
+let routeAssignmentApprovalsLoaded = false;
+
 // ---- AI Assistant (Owner only) ----
 let aiChatHistory = []; // [{role:"user"|"assistant", content:string, toolsUsed?:string[]}]
 let aiChatBusy = false;
@@ -780,7 +792,7 @@ async function submitVoluntaryPasswordChange(){
 function tabsFor(role){
   if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="area_supervisor") return [["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
@@ -1141,20 +1153,26 @@ async function loadPendingApprovals(){
   const role = currentUser.role;
   const canSeeVehicles = role==="data_team" || role==="owner";
   const canSeeDrivers = role==="hr" || role==="owner";
+  const canSeeRoutesAndAssignments = role==="data_team" || role==="ops_manager" || role==="owner";
   try{
-    const [v, d] = await Promise.all([
+    const [v, d, rr, ar] = await Promise.all([
       canSeeVehicles ? api("/vehicles/pending-approvals") : Promise.resolve([]),
       canSeeDrivers ? api("/drivers/pending-approvals") : Promise.resolve([]),
+      canSeeRoutesAndAssignments ? api("/clients/route-requests/pending-approvals") : Promise.resolve([]),
+      canSeeRoutesAndAssignments ? api("/vehicles/assignment-requests/pending-approvals") : Promise.resolve([]),
     ]);
     pendingVehicleApprovals = v; pendingDriverApprovals = d;
+    pendingRouteRequests = rr; pendingAssignmentRequests = ar;
   }catch(e){ lastError = e.message; }
   approvalsLoaded = true;
+  routeAssignmentApprovalsLoaded = true;
 }
 async function fleetApprovalsScreen(){
   if(!approvalsLoaded) await loadPendingApprovals();
   const role = currentUser.role;
   const canSeeVehicles = role==="data_team" || role==="owner";
   const canSeeDrivers = role==="hr" || role==="owner";
+  const canSeeRoutesAndAssignments = role==="data_team" || role==="ops_manager" || role==="owner";
   const vehicleRows = pendingVehicleApprovals.map(v=>`
     <tr>
       <td><b>${v.reg}</b></td><td>${v.make||''} ${v.model||''}</td><td>${v.vehicleType||''} / ${v.fuelType||''}</td>
@@ -1173,9 +1191,27 @@ async function fleetApprovalsScreen(){
         <button class="btn small danger" ${approvalsBusy?"disabled":""} onclick="decideDriverApproval('${d.id}','rejected')">Reject</button>
       </td>
     </tr>`).join("");
+  const routeRequestRows = pendingRouteRequests.map(r=>`
+    <tr>
+      <td>${r.clientName}</td><td>${r.routeNumber||'-'} - ${r.name}</td>
+      <td>${r.requestedByName||'-'}</td><td>${r.createdAt? new Date(r.createdAt).toLocaleDateString() : '-'}</td>
+      <td>
+        <button class="btn small" ${approvalsBusy?"disabled":""} onclick="decideRouteRequest('${r.id}','approved')">Approve</button>
+        <button class="btn small danger" ${approvalsBusy?"disabled":""} onclick="decideRouteRequest('${r.id}','rejected')">Reject</button>
+      </td>
+    </tr>`).join("");
+  const assignmentRequestRows = pendingAssignmentRequests.map(r=>`
+    <tr>
+      <td><b>${r.vehicleReg}</b></td><td>${r.clientName}</td><td>${r.routeNumber||r.routeName}</td><td>${r.driverName}</td>
+      <td>${r.requestedByName||'-'}</td><td>${r.createdAt? new Date(r.createdAt).toLocaleDateString() : '-'}</td>
+      <td>
+        <button class="btn small" ${approvalsBusy?"disabled":""} onclick="decideAssignmentRequest('${r.id}','approved')">Approve</button>
+        <button class="btn small danger" ${approvalsBusy?"disabled":""} onclick="decideAssignmentRequest('${r.id}','rejected')">Reject</button>
+      </td>
+    </tr>`).join("");
   return `
   <h1 class="page-title">Fleet Approvals</h1>
-  <div class="banner">Vehicles and drivers onboarded by Site Supervisors land here first - they aren't usable anywhere else in the app (trips, assignments, etc.) until approved.</div>
+  <div class="banner">Vehicles, drivers, routes and assignments submitted by Site Supervisors land here first - they aren't usable anywhere else in the app until approved.</div>
   ${canSeeVehicles ? `
   <div class="card">
     <h2 class="section-title">Pending Vehicles (${pendingVehicleApprovals.length})</h2>
@@ -1188,6 +1224,19 @@ async function fleetApprovalsScreen(){
     <h2 class="section-title">Pending Drivers (${pendingDriverApprovals.length})</h2>
     <table><tr><th>Driver</th><th>Phone</th><th>License</th><th>Submitted by</th><th>Date</th><th></th></tr>
     ${driverRows || "<tr><td colspan='6' class='empty'>Nothing pending.</td></tr>"}
+    </table>
+  </div>` : ''}
+  ${canSeeRoutesAndAssignments ? `
+  <div class="card">
+    <h2 class="section-title">Pending Route Proposals (${pendingRouteRequests.length})</h2>
+    <table><tr><th>Company</th><th>Route</th><th>Submitted by</th><th>Date</th><th></th></tr>
+    ${routeRequestRows || "<tr><td colspan='5' class='empty'>Nothing pending.</td></tr>"}
+    </table>
+  </div>
+  <div class="card">
+    <h2 class="section-title">Pending Assignment Requests (${pendingAssignmentRequests.length})</h2>
+    <table><tr><th>Vehicle</th><th>Company</th><th>Route</th><th>Driver</th><th>Submitted by</th><th>Date</th><th></th></tr>
+    ${assignmentRequestRows || "<tr><td colspan='7' class='empty'>Nothing pending.</td></tr>"}
     </table>
   </div>` : ''}
   `;
@@ -1209,6 +1258,26 @@ async function decideDriverApproval(driverId, status){
   try{
     await api(`/drivers/${driverId}/approve`, {method:"PATCH", body: JSON.stringify({status, comment})});
     pendingDriverApprovals = pendingDriverApprovals.filter(d=>d.id!==driverId);
+  }catch(e){ alert(e.message); }
+  approvalsBusy = false; await renderMain();
+}
+async function decideRouteRequest(requestId, status){
+  let comment = "";
+  if(status==="rejected"){ comment = prompt("Reason for rejecting this route (sent back to the supervisor):",""); if(comment===null) return; if(!comment.trim()){ alert("A reason is required when rejecting."); return; } }
+  approvalsBusy = true; await renderMain();
+  try{
+    await api(`/clients/route-requests/${requestId}/approve`, {method:"PATCH", body: JSON.stringify({status, comment})});
+    pendingRouteRequests = pendingRouteRequests.filter(r=>r.id!==requestId);
+  }catch(e){ alert(e.message); }
+  approvalsBusy = false; await renderMain();
+}
+async function decideAssignmentRequest(requestId, status){
+  let comment = "";
+  if(status==="rejected"){ comment = prompt("Reason for rejecting this assignment (sent back to the supervisor):",""); if(comment===null) return; if(!comment.trim()){ alert("A reason is required when rejecting."); return; } }
+  approvalsBusy = true; await renderMain();
+  try{
+    await api(`/vehicles/assignment-requests/${requestId}/approve`, {method:"PATCH", body: JSON.stringify({status, comment})});
+    pendingAssignmentRequests = pendingAssignmentRequests.filter(r=>r.id!==requestId);
   }catch(e){ alert(e.message); }
   approvalsBusy = false; await renderMain();
 }
@@ -3353,21 +3422,139 @@ const REPORT_DATASETS = [
   {key:"audit", label:"Audit Log", desc:"Every action taken in the app, who did it, and when.", dateRange:true, roles:["owner","ops_manager"]},
 ];
 // ================= ROUTES (read-only for Site/Area Supervisors) =================
-function routesViewScreen(){
+async function routesViewScreen(){
   const rows = meta.clients.filter(c=>(c.routes||[]).length).map(c=>`
     <tr>
       <td><b>${c.name}</b></td>
       <td>${(c.routes||[]).length} / ${c.routeCap||0}</td>
       <td>${(c.routes||[]).map(r=>`<span class="badge">${r.routeNumber?r.routeNumber+' - ':''}${r.name}</span>`).join(" ")}</td>
     </tr>`).join("");
+  const isSupervisor = currentUser.role==="site_supervisor";
   return `
   <h1 class="page-title">Routes</h1>
-  <div class="banner">Reference only - route numbers and starting points are set by Operations Manager and the Owner.</div>
+  <div class="banner">${isSupervisor ? "Route numbers and starting points here are the approved catalog - propose a new one below if what you need isn't listed yet." : "Reference only - route numbers and starting points are set by Operations Manager and the Owner."}</div>
   <div class="card">
     <table><tr><th>Client</th><th>Routes</th><th>Route list</th></tr>
     ${rows || "<tr><td colspan='3' class='empty'>No routes have been entered yet.</td></tr>"}
     </table>
+  </div>
+  ${isSupervisor ? await supervisorRouteAssignmentSectionHtml() : ""}
+  `;
+}
+
+// ---- Site Supervisor: propose a route, or a driver/route/company
+// assignment for one of their own vehicles - both go to Data Team/Ops
+// Manager/Owner for approval before taking effect. ----
+async function loadRouteAssignmentSubmissions(){
+  try{
+    const [rr, ar] = await Promise.all([api("/clients/route-requests/my-submissions"), api("/vehicles/assignment-requests/my-submissions")]);
+    myRouteRequests = rr; myAssignmentRequests = ar;
+  }catch(e){ lastError = e.message; }
+  routeAssignmentSubmissionsLoaded = true;
+}
+async function supervisorRouteAssignmentSectionHtml(){
+  if(!routeAssignmentSubmissionsLoaded) await loadRouteAssignmentSubmissions();
+  const clientOptions = meta.clients.map(c=>`<option value="${c.id}">${c.name}</option>`).join("");
+  const routeRequestRows = myRouteRequests.map(r=>`
+    <tr>
+      <td>${r.clientName}</td><td>${r.routeNumber||'-'} - ${r.name}</td>
+      <td>${submissionStatusBadge(r.status)}</td>
+      <td>${r.status==="rejected" ? (r.rejectionComment||'-') : '-'}</td>
+    </tr>`).join("");
+  const assignmentRows = myAssignmentRequests.map(r=>`
+    <tr>
+      <td><b>${r.vehicleReg}</b></td><td>${r.clientName}</td><td>${r.routeNumber||r.routeName}</td><td>${r.driverName}</td>
+      <td>${submissionStatusBadge(r.status)}</td>
+      <td>${r.status==="rejected" ? (r.rejectionComment||'-') : '-'}</td>
+    </tr>`).join("");
+  return `
+  <div class="card">
+    <h2 class="section-title">Propose a New Route</h2>
+    <div class="banner">Adding a route here needs Data Team, Operations Manager or Owner approval before it's added to the company's route catalog.</div>
+    <form class="inline-form" onsubmit="return submitRouteRequest(event)">
+      <div class="f"><label>Company *</label><select id="rrClientId" required>${clientOptions || '<option value="">No companies yet</option>'}</select></div>
+      <div class="f"><label>Route ID / number</label><input type="text" id="rrRouteNumber" placeholder="e.g. 6A" style="width:100px" /></div>
+      <div class="f"><label>Starting Point *</label><input type="text" id="rrRouteName" placeholder="e.g. Alwal" required /></div>
+      <button class="btn small" type="submit" ${routeAssignmentBusy?"disabled":""}>${routeAssignmentBusy?'<span class="spinner"></span>':'+ Submit for approval'}</button>
+    </form>
+    <h3 style="margin:16px 0 8px;">Your route proposals</h3>
+    <table><tr><th>Company</th><th>Route</th><th>Status</th><th>Rejection reason</th></tr>
+    ${routeRequestRows || "<tr><td colspan='4' class='empty'>You haven't proposed any routes yet.</td></tr>"}
+    </table>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Assign a Driver to a Route</h2>
+    <div class="banner">Assign one of your own vehicles to a company + Route ID + driver. This also needs Data Team, Operations Manager or Owner approval before it takes effect.</div>
+    <form class="inline-form" onsubmit="return submitAssignmentRequest(event)">
+      <div class="f"><label>Vehicle *</label>
+        <select id="arVehicleId" required>
+          <option value="">- select -</option>
+          ${vehicles.map(v=>`<option value="${v.id}">${v.reg}</option>`).join("")}
+        </select>
+      </div>
+      <div class="f"><label>Company *</label>
+        <select id="arClientId" required onchange="onArClientChange()">
+          <option value="">- select -</option>
+          ${clientOptions}
+        </select>
+      </div>
+      <div class="f"><label>Route ID *</label><select id="arRouteId" required><option value="">- select a company first -</option></select></div>
+      <div class="f"><label>Driver *</label>
+        <select id="arDriverId" required>
+          <option value="">- select -</option>
+          ${meta.drivers.map(d=>`<option value="${d.id}">${d.name}</option>`).join("")}
+        </select>
+      </div>
+      <button class="btn small" type="submit" ${routeAssignmentBusy?"disabled":""}>${routeAssignmentBusy?'<span class="spinner"></span>':'+ Submit for approval'}</button>
+    </form>
+    <h3 style="margin:16px 0 8px;">Your assignment requests</h3>
+    <table><tr><th>Vehicle</th><th>Company</th><th>Route</th><th>Driver</th><th>Status</th><th>Rejection reason</th></tr>
+    ${assignmentRows || "<tr><td colspan='6' class='empty'>You haven't requested any assignments yet.</td></tr>"}
+    </table>
   </div>`;
+}
+function onArClientChange(){
+  const clientId = document.getElementById("arClientId").value;
+  const routeSel = document.getElementById("arRouteId");
+  if(!routeSel) return;
+  const client = meta.clients.find(c=>c.id===clientId);
+  const routes = client ? (client.routes||[]) : [];
+  routeSel.innerHTML = routes.length
+    ? routes.map(r=>`<option value="${r.id}">${r.routeNumber?r.routeNumber+' - ':''}${r.name}</option>`).join("")
+    : '<option value="">No routes for this company yet</option>';
+}
+async function submitRouteRequest(evt){
+  evt.preventDefault();
+  const clientId = document.getElementById("rrClientId").value;
+  const routeNumber = document.getElementById("rrRouteNumber").value;
+  const name = document.getElementById("rrRouteName").value;
+  if(!clientId){ alert("Select a company."); return false; }
+  if(!name || !name.trim()){ alert("Starting Point is required."); return false; }
+  routeAssignmentBusy = true; await renderMain();
+  try{
+    const r = await api(`/clients/${clientId}/route-requests`, {method:"POST", body: JSON.stringify({name, routeNumber})});
+    myRouteRequests.unshift(r);
+    alert("Route proposal submitted - waiting on Data Team/Ops Manager/Owner approval.");
+  }catch(e){ alert(e.message); }
+  routeAssignmentBusy = false; await renderMain();
+  return false;
+}
+async function submitAssignmentRequest(evt){
+  evt.preventDefault();
+  const vehicleId = document.getElementById("arVehicleId").value;
+  const clientId = document.getElementById("arClientId").value;
+  const routeId = document.getElementById("arRouteId").value;
+  const driverId = document.getElementById("arDriverId").value;
+  if(!vehicleId || !clientId || !routeId || !driverId){ alert("Vehicle, Company, Route ID and Driver are all required."); return false; }
+  routeAssignmentBusy = true; await renderMain();
+  try{
+    const r = await api(`/vehicles/${vehicleId}/assignment-requests`, {method:"POST", body: JSON.stringify({clientId, routeId, driverId})});
+    myAssignmentRequests.unshift(r);
+    alert("Assignment request submitted - waiting on Data Team/Ops Manager/Owner approval.");
+  }catch(e){ alert(e.message); }
+  routeAssignmentBusy = false; await renderMain();
+  return false;
 }
 
 function reportsScreen(){
@@ -5252,6 +5439,8 @@ Object.assign(window, {
   askAiSuggested, sendAiChatMessage, loadAiInsights,
   onObVehicleTypeChange, submitVehicleOnboarding, submitDriverOnboarding,
   decideVehicleApproval, decideDriverApproval,
+  onArClientChange, submitRouteRequest, submitAssignmentRequest,
+  decideRouteRequest, decideAssignmentRequest,
 });
 
 boot();

@@ -315,6 +315,10 @@ function backfillDefaults() {
       e.siteId = v ? v.siteId || null : null;
     }
   });
+  // ---------- Route creation + driver/route/company assignment requests
+  // (Site Supervisor onboarding, pending Data Team/Ops Manager/Owner approval) ----------
+  if (!Array.isArray(db.routeRequests)) db.routeRequests = [];
+  if (!Array.isArray(db.assignmentRequests)) db.assignmentRequests = [];
   // ---------- Workshop / Maintenance module ----------
   if (!Array.isArray(db.repairRequests)) db.repairRequests = [];
   if (!Array.isArray(db.workshopPurchases)) db.workshopPurchases = [];
@@ -995,6 +999,100 @@ app.delete(
     const [removed] = client.routes.splice(idx, 1);
     await audit(req.user, "remove_route", `${req.user.name} removed route "${removed.name}" from ${client.name}`);
     res.json(client);
+  })
+);
+
+// ---------- Route creation requests (Site Supervisor proposes, Data Team /
+// Ops Manager / Owner approves) ----------
+// Site Supervisors aren't in ROUTE_EDITOR_ROLES - they can't add a route
+// directly - but they CAN propose one for an existing client. Nothing is
+// added to the client's route catalog until the request is approved.
+const ROUTE_REQUEST_APPROVAL_ROLES = ["data_team", "ops_manager", "owner"];
+app.post(
+  "/api/clients/:id/route-requests",
+  requireAuth,
+  requireRole("site_supervisor"),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const { name, routeNumber } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "Route name (starting point) is required." });
+    // An early, friendly check - the authoritative one happens again at
+    // approval time, since the cap or catalog could change in the meantime.
+    if (client.routes.length >= client.routeCap) {
+      return res.status(400).json({
+        error: `${client.name} is already at its route cap (${client.routeCap}). Ask the Owner to raise it before proposing another route.`,
+      });
+    }
+    const request = {
+      id: uid("rtreq"),
+      clientId: client.id,
+      clientName: client.name,
+      name: String(name).trim(),
+      routeNumber: routeNumber || "",
+      status: "pending",
+      requestedBy: req.user.id,
+      requestedByName: req.user.name,
+      decidedBy: null,
+      decidedByName: null,
+      decidedAt: null,
+      rejectionComment: "",
+      createdAt: nowIso(),
+    };
+    db.routeRequests.unshift(request);
+    await audit(req.user, "request_route", `${req.user.name} proposed route "${request.name}" (${request.routeNumber || "no number"}) for ${client.name} - pending approval`);
+    res.json(request);
+  })
+);
+app.get(
+  "/api/clients/route-requests/pending-approvals",
+  requireAuth,
+  requireRole(...ROUTE_REQUEST_APPROVAL_ROLES),
+  (req, res) => {
+    res.json(db.routeRequests.filter((r) => r.status === "pending"));
+  }
+);
+app.get(
+  "/api/clients/route-requests/my-submissions",
+  requireAuth,
+  requireRole("site_supervisor"),
+  (req, res) => {
+    res.json(db.routeRequests.filter((r) => r.requestedBy === req.user.id).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")));
+  }
+);
+app.patch(
+  "/api/clients/route-requests/:id/approve",
+  requireAuth,
+  requireRole(...ROUTE_REQUEST_APPROVAL_ROLES),
+  h(async (req, res) => {
+    const request = db.routeRequests.find((r) => r.id === req.params.id);
+    if (!request) return res.status(404).json({ error: "Route request not found." });
+    if (request.status !== "pending") return res.status(400).json({ error: "This route request has already been decided on." });
+    const { status, comment } = req.body || {};
+    if (!["approved", "rejected"].includes(status)) return res.status(400).json({ error: "status must be approved or rejected." });
+    if (status === "rejected" && !(comment || "").trim()) {
+      return res.status(400).json({ error: "A reason is required when rejecting a route request." });
+    }
+    if (status === "approved") {
+      const client = db.clients.find((c) => c.id === request.clientId);
+      if (!client) return res.status(400).json({ error: "The client for this route request no longer exists." });
+      if (client.routes.length >= client.routeCap) {
+        return res.status(400).json({ error: `${client.name} is already at its route cap (${client.routeCap}) - raise the cap before approving.` });
+      }
+      const route = { id: uid("rt"), name: request.name, routeNumber: request.routeNumber || "" };
+      client.routes.push(route);
+      request.createdRouteId = route.id;
+      await audit(req.user, "add_route", `${req.user.name} approved and added route "${route.name}" (${route.routeNumber || "no number"}) to ${client.name}, proposed by ${request.requestedByName}`);
+    }
+    request.status = status;
+    request.decidedBy = req.user.id;
+    request.decidedByName = req.user.name;
+    request.decidedAt = nowIso();
+    request.rejectionComment = status === "rejected" ? comment.trim() : "";
+    if (status === "rejected") {
+      await audit(req.user, "route_request_rejected", `${req.user.name} rejected the route "${request.name}" proposed by ${request.requestedByName} for ${request.clientName}: ${comment}`);
+    }
+    res.json(request);
   })
 );
 
@@ -1693,6 +1791,75 @@ app.patch(
   })
 );
 
+// Core assignment mutation, factored out so it can be reused both by the
+// direct admin endpoint below AND by the approval decision for a Site
+// Supervisor's assignment request (see /assignment-requests/:id/approve) -
+// an approved request must apply to the vehicle exactly the same way a
+// direct admin edit would, including the driverAssignmentHistory
+// bookkeeping, so there's only one place this logic can drift.
+function applyVehicleAssignmentPatch(vehicle, patch) {
+  const { siteId, supervisorId, driverId, clientId, routeId, usage, standardMileage, driverAssignedDate } = patch || {};
+  if (siteId !== undefined) vehicle.siteId = siteId || null;
+  if (supervisorId !== undefined) vehicle.supervisorId = supervisorId || null;
+  if (driverId !== undefined) {
+    const driverChanged = vehicle.driverId !== (driverId || null);
+    vehicle.driverId = driverId || null;
+    // A new driver being put on this vehicle - stamp the date it happened
+    // (today, unless the caller explicitly sent a date in the same request,
+    // e.g. to backdate a correction) so "Driver since" has something to show.
+    if (driverChanged) {
+      const changeDate = driverAssignedDate || todayStr();
+      vehicle.driverAssignedDate = vehicle.driverId ? changeDate : null;
+      if (!Array.isArray(vehicle.driverAssignmentHistory)) vehicle.driverAssignmentHistory = [];
+      // Close out whichever stint was still open (the outgoing driver).
+      const openStint = vehicle.driverAssignmentHistory.find((s) => s.assignedTo === null);
+      if (openStint) openStint.assignedTo = changeDate;
+      // Open a new stint for the incoming driver, if there is one.
+      if (vehicle.driverId) {
+        const newDriver = db.drivers.find((d) => d.id === vehicle.driverId);
+        vehicle.driverAssignmentHistory.push({
+          driverId: vehicle.driverId,
+          driverName: newDriver ? newDriver.name : "",
+          assignedFrom: changeDate,
+          assignedTo: null,
+          recordedAt: nowIso(),
+        });
+      }
+    }
+  } else if (driverAssignedDate !== undefined) {
+    // Manual edit of the date only, without changing the driver.
+    vehicle.driverAssignedDate = driverAssignedDate || null;
+  }
+  if (clientId !== undefined) {
+    const clientChanged = vehicle.clientId !== (clientId || null);
+    vehicle.clientId = clientId || null;
+    // A route belongs to a single client's catalog - switching the
+    // client invalidates whatever route was picked before, unless the
+    // caller also sent a new routeId in this same request (handled below).
+    if (clientChanged && routeId === undefined) {
+      vehicle.routeId = null;
+      vehicle.route = "";
+    }
+  }
+  if (routeId !== undefined) {
+    if (!routeId) {
+      vehicle.routeId = null;
+      vehicle.route = "";
+    } else {
+      const client = db.clients.find((c) => c.id === vehicle.clientId);
+      const routeEntry = client ? (client.routes || []).find((r) => r.id === routeId) : null;
+      if (!routeEntry) {
+        return "Select a company for this vehicle first, then choose one of its Route IDs.";
+      }
+      vehicle.routeId = routeEntry.id;
+      vehicle.route = routeEntry.routeNumber || "";
+    }
+  }
+  if (usage !== undefined) vehicle.usage = usage;
+  if (standardMileage !== undefined) vehicle.standardMileage = Number(standardMileage) || vehicle.standardMileage;
+  return null; // no error
+}
+
 // Assignment - Ops Manager / Owner / Data Team can assign a vehicle (and
 // its driver) to a site + supervisor + client.
 app.patch(
@@ -1703,71 +1870,119 @@ app.patch(
     const vehicle = db.vehicles.find((v) => v.id === req.params.id);
     if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
     const before = { siteId: vehicle.siteId, supervisorId: vehicle.supervisorId, driverId: vehicle.driverId, clientId: vehicle.clientId, routeId: vehicle.routeId, driverAssignedDate: vehicle.driverAssignedDate };
-    const { siteId, supervisorId, driverId, clientId, routeId, usage, standardMileage, driverAssignedDate } = req.body || {};
-    if (siteId !== undefined) vehicle.siteId = siteId || null;
-    if (supervisorId !== undefined) vehicle.supervisorId = supervisorId || null;
-    if (driverId !== undefined) {
-      const driverChanged = vehicle.driverId !== (driverId || null);
-      vehicle.driverId = driverId || null;
-      // A new driver being put on this vehicle - stamp the date it happened
-      // (today, unless the caller explicitly sent a date in the same request,
-      // e.g. to backdate a correction) so "Driver since" has something to show.
-      if (driverChanged) {
-        const changeDate = driverAssignedDate || todayStr();
-        vehicle.driverAssignedDate = vehicle.driverId ? changeDate : null;
-        if (!Array.isArray(vehicle.driverAssignmentHistory)) vehicle.driverAssignmentHistory = [];
-        // Close out whichever stint was still open (the outgoing driver).
-        const openStint = vehicle.driverAssignmentHistory.find((s) => s.assignedTo === null);
-        if (openStint) openStint.assignedTo = changeDate;
-        // Open a new stint for the incoming driver, if there is one.
-        if (vehicle.driverId) {
-          const newDriver = db.drivers.find((d) => d.id === vehicle.driverId);
-          vehicle.driverAssignmentHistory.push({
-            driverId: vehicle.driverId,
-            driverName: newDriver ? newDriver.name : "",
-            assignedFrom: changeDate,
-            assignedTo: null,
-            recordedAt: nowIso(),
-          });
-        }
-      }
-    } else if (driverAssignedDate !== undefined) {
-      // Manual edit of the date only, without changing the driver.
-      vehicle.driverAssignedDate = driverAssignedDate || null;
-    }
-    if (clientId !== undefined) {
-      const clientChanged = vehicle.clientId !== (clientId || null);
-      vehicle.clientId = clientId || null;
-      // A route belongs to a single client's catalog - switching the
-      // client invalidates whatever route was picked before, unless the
-      // caller also sent a new routeId in this same request (handled below).
-      if (clientChanged && routeId === undefined) {
-        vehicle.routeId = null;
-        vehicle.route = "";
-      }
-    }
-    if (routeId !== undefined) {
-      if (!routeId) {
-        vehicle.routeId = null;
-        vehicle.route = "";
-      } else {
-        const client = db.clients.find((c) => c.id === vehicle.clientId);
-        const routeEntry = client ? (client.routes || []).find((r) => r.id === routeId) : null;
-        if (!routeEntry) {
-          return res.status(400).json({ error: "Select a company for this vehicle first, then choose one of its Route IDs." });
-        }
-        vehicle.routeId = routeEntry.id;
-        vehicle.route = routeEntry.routeNumber || "";
-      }
-    }
-    if (usage !== undefined) vehicle.usage = usage;
-    if (standardMileage !== undefined) vehicle.standardMileage = Number(standardMileage) || vehicle.standardMileage;
+    const patchError = applyVehicleAssignmentPatch(vehicle, req.body || {});
+    if (patchError) return res.status(400).json({ error: patchError });
     await audit(
       req.user,
       "assign_vehicle",
       `${req.user.name} reassigned ${vehicle.reg}: ${JSON.stringify(before)} -> ${JSON.stringify({ siteId: vehicle.siteId, supervisorId: vehicle.supervisorId, driverId: vehicle.driverId, clientId: vehicle.clientId, routeId: vehicle.routeId, driverAssignedDate: vehicle.driverAssignedDate })}`
     );
     res.json(vehicle);
+  })
+);
+
+// ---------- Driver/Route/Company assignment requests (Site Supervisor
+// proposes for a vehicle under their own site, Data Team/Ops Manager/Owner
+// approves) ----------
+// A Site Supervisor can't call /assign directly (ADMIN_ROLES only), but can
+// propose assigning one of their own vehicles to a specific company +
+// Route ID + driver. Nothing changes on the vehicle until it's approved -
+// see applyVehicleAssignmentPatch(), reused here so an approved request
+// applies identically to a direct admin edit.
+const ASSIGNMENT_REQUEST_APPROVAL_ROLES = ["data_team", "ops_manager", "owner"];
+app.post(
+  "/api/vehicles/:id/assignment-requests",
+  requireAuth,
+  requireRole("site_supervisor"),
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+    if (vehicle.supervisorId !== req.user.id) {
+      return res.status(403).json({ error: "You can only request an assignment change for a vehicle under your own site." });
+    }
+    if (!vehicleIsApproved(vehicle)) {
+      return res.status(400).json({ error: "This vehicle is still pending approval itself - it needs to be approved before it can be assigned." });
+    }
+    const { clientId, routeId, driverId } = req.body || {};
+    if (!clientId) return res.status(400).json({ error: "Select a company." });
+    const client = db.clients.find((c) => c.id === clientId);
+    if (!client) return res.status(400).json({ error: "Company not found." });
+    if (!routeId) return res.status(400).json({ error: "Select a Route ID." });
+    const routeEntry = (client.routes || []).find((r) => r.id === routeId);
+    if (!routeEntry) return res.status(400).json({ error: "Select a company first, then choose one of its Route IDs." });
+    if (!driverId) return res.status(400).json({ error: "Select a driver." });
+    const driver = db.drivers.find((d) => d.id === driverId);
+    if (!driver || !driverIsApproved(driver)) return res.status(400).json({ error: "Select an approved driver." });
+    const request = {
+      id: uid("asgreq"),
+      vehicleId: vehicle.id,
+      vehicleReg: vehicle.reg,
+      clientId: client.id,
+      clientName: client.name,
+      routeId: routeEntry.id,
+      routeNumber: routeEntry.routeNumber || "",
+      routeName: routeEntry.name || "",
+      driverId: driver.id,
+      driverName: driver.name,
+      status: "pending",
+      requestedBy: req.user.id,
+      requestedByName: req.user.name,
+      decidedBy: null,
+      decidedByName: null,
+      decidedAt: null,
+      rejectionComment: "",
+      createdAt: nowIso(),
+    };
+    db.assignmentRequests.unshift(request);
+    await audit(req.user, "request_assignment", `${req.user.name} requested assigning ${vehicle.reg} to ${client.name} / Route ${routeEntry.routeNumber || routeEntry.name} with driver ${driver.name} - pending approval`);
+    res.json(request);
+  })
+);
+app.get(
+  "/api/vehicles/assignment-requests/pending-approvals",
+  requireAuth,
+  requireRole(...ASSIGNMENT_REQUEST_APPROVAL_ROLES),
+  (req, res) => {
+    res.json(db.assignmentRequests.filter((r) => r.status === "pending"));
+  }
+);
+app.get(
+  "/api/vehicles/assignment-requests/my-submissions",
+  requireAuth,
+  requireRole("site_supervisor"),
+  (req, res) => {
+    res.json(db.assignmentRequests.filter((r) => r.requestedBy === req.user.id).sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")));
+  }
+);
+app.patch(
+  "/api/vehicles/assignment-requests/:id/approve",
+  requireAuth,
+  requireRole(...ASSIGNMENT_REQUEST_APPROVAL_ROLES),
+  h(async (req, res) => {
+    const request = db.assignmentRequests.find((r) => r.id === req.params.id);
+    if (!request) return res.status(404).json({ error: "Assignment request not found." });
+    if (request.status !== "pending") return res.status(400).json({ error: "This assignment request has already been decided on." });
+    const { status, comment } = req.body || {};
+    if (!["approved", "rejected"].includes(status)) return res.status(400).json({ error: "status must be approved or rejected." });
+    if (status === "rejected" && !(comment || "").trim()) {
+      return res.status(400).json({ error: "A reason is required when rejecting an assignment request." });
+    }
+    if (status === "approved") {
+      const vehicle = db.vehicles.find((v) => v.id === request.vehicleId);
+      if (!vehicle) return res.status(400).json({ error: "The vehicle for this request no longer exists." });
+      const patchError = applyVehicleAssignmentPatch(vehicle, { clientId: request.clientId, routeId: request.routeId, driverId: request.driverId });
+      if (patchError) return res.status(400).json({ error: patchError });
+      await audit(req.user, "assign_vehicle", `${req.user.name} approved assigning ${vehicle.reg} to ${request.clientName} / Route ${request.routeNumber || request.routeName} with driver ${request.driverName}, requested by ${request.requestedByName}`);
+    }
+    request.status = status;
+    request.decidedBy = req.user.id;
+    request.decidedByName = req.user.name;
+    request.decidedAt = nowIso();
+    request.rejectionComment = status === "rejected" ? comment.trim() : "";
+    if (status === "rejected") {
+      await audit(req.user, "assignment_request_rejected", `${req.user.name} rejected the assignment request for ${request.vehicleReg} from ${request.requestedByName}: ${comment}`);
+    }
+    res.json(request);
   })
 );
 
