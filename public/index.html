@@ -2377,11 +2377,22 @@ function docStatusBadge(daysLeft){
   if(daysLeft<15) return `<span class="badge low">${daysLeft} days left</span>`;
   return `<span class="badge ok">${daysLeft} days left</span>`;
 }
+function adminDocRowsHtml(rows){
+  return `<table><tr><th>Vehicle</th><th>Document</th><th>Number</th><th>Expiry</th><th>Status</th><th>Copy</th></tr>
+    ${rows.map(d=>`<tr>
+      <td><b>${d.reg}</b></td><td>${d.docType}</td><td>${d.number||'-'}</td><td>${d.expiry?fmtDMY(d.expiry):'-'}</td>
+      <td>${docStatusBadge(d.daysLeft)}</td>
+      <td>${d.copyUrl?`<a href="${d.copyUrl}" target="_blank" rel="noopener">View</a>`:'<span class="muted">Not uploaded</span>'}</td>
+    </tr>`).join("") || "<tr><td colspan='6' class='empty'>Nothing here.</td></tr>"}
+    </table>`;
+}
 async function adminDashboardScreen(){
   const allDocs = allVehicleDocRows();
   const expired = allDocs.filter(d=>d.daysLeft!=null && d.daysLeft<0);
   const expiringSoon = allDocs.filter(d=>d.daysLeft!=null && d.daysLeft>=0 && d.daysLeft<15);
   const missing = allDocs.filter(d=>!d.expiry);
+  const needsAttention = [...expired, ...expiringSoon];
+  const everythingElse = allDocs.filter(d=>!needsAttention.includes(d));
   const kpi = (cls, num, label) => `<div class="cmd-kpi ${cls}"><div class="num">${num}</div><div class="label">${label}</div></div>`;
   return `
   <div class="cmd-hero">
@@ -2398,17 +2409,12 @@ async function adminDashboardScreen(){
       ${kpi('good', allDocs.length - expired.length - expiringSoon.length, 'Valid / not urgent')}
     </div>
   </div>
-  <div class="card">
-    <h2 class="section-title">All vehicle documents (${allDocs.length})</h2>
-    <div class="muted" style="margin-bottom:8px;">Sorted by most urgent first. Covers RC, Permit, Insurance, Fitness, Tax, PUC, Temporary Permit and Border Tax across every vehicle. Go to the Vehicles tab to update a document.</div>
-    <table><tr><th>Vehicle</th><th>Document</th><th>Number</th><th>Expiry</th><th>Status</th><th>Copy</th></tr>
-    ${allDocs.map(d=>`<tr>
-      <td><b>${d.reg}</b></td><td>${d.docType}</td><td>${d.number||'-'}</td><td>${d.expiry?fmtDMY(d.expiry):'-'}</td>
-      <td>${docStatusBadge(d.daysLeft)}</td>
-      <td>${d.copyUrl?`<a href="${d.copyUrl}" target="_blank" rel="noopener">View</a>`:'<span class="muted">Not uploaded</span>'}</td>
-    </tr>`).join("") || "<tr><td colspan='6' class='empty'>No documents on file yet.</td></tr>"}
-    </table>
-  </div>`;
+  ${collapsibleSection('admin_needs_attention', 'Needs attention (expired or expiring soon)', needsAttention.length, `
+    <div class="muted" style="margin-bottom:8px;">Sorted by most urgent first. Go to the Vehicles tab to update a document.</div>
+    ${adminDocRowsHtml(needsAttention)}`, {defaultOpen:true})}
+  ${collapsibleSection('admin_all_other_docs', 'All other documents (valid / no expiry on file)', everythingElse.length, `
+    <div class="muted" style="margin-bottom:8px;">Covers RC, Permit, Insurance, Fitness, Tax, PUC, Temporary Permit and Border Tax across every vehicle.</div>
+    ${adminDocRowsHtml(everythingElse)}`, {defaultOpen:false})}`;
 }
 
 // ================= ASSIGNMENTS (ops_manager, data_team, owner) =================
@@ -3647,7 +3653,7 @@ async function correctionsScreen(){
   <h1 class="page-title">Data Team - Corrections</h1>
   <div class="banner">Corrections are logged with a before/after value in the audit trail - nothing is silently overwritten.</div>
   <div class="card"><table><tr><th>Vehicle</th><th>Odometer</th><th>Mileage</th><th>Status</th><th></th></tr>${rows}</table></div>
-  <div class="card"><h2 class="section-title">Today's Audit Log</h2>${await auditTableHtml({limit: 15})}</div>
+  <div class="card"><h2 class="section-title">Today's Audit Log</h2>${(await auditTableHtml({limit: 15})).html}</div>
   `;
 }
 async function correctOdometer(vehicleId, date){
@@ -3906,8 +3912,9 @@ async function auditTableHtml(opts){
     params.set("to", opts.to || opts.from);
   } else if(opts.date) params.set("date", opts.date);
   let rows = [];
-  try{ rows = await api(`/audit?${params.toString()}`); }catch(e){ return "<div class='empty'>Audit log not available for your role.</div>"; }
-  return `<table><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr>${rows.map(a=>`<tr><td>${new Date(a.ts).toLocaleString('en-GB')}</td><td>${a.userName}</td><td>${a.action}</td><td>${a.detail}</td></tr>`).join("") || "<tr><td colspan='4' class='empty'>Nothing logged in this window.</td></tr>"}</table>`;
+  try{ rows = await api(`/audit?${params.toString()}`); }catch(e){ return {count:0, html:"<div class='empty'>Audit log not available for your role.</div>"}; }
+  const html = `<table><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr>${rows.map(a=>`<tr><td>${new Date(a.ts).toLocaleString('en-GB')}</td><td>${a.userName}</td><td>${a.action}</td><td>${a.detail}</td></tr>`).join("") || "<tr><td colspan='4' class='empty'>Nothing logged in this window.</td></tr>"}</table>`;
+  return {count: rows.length, html};
 }
 // Audit Log defaults to today only - pick a different date to look back
 // further, one day at a time.
@@ -3927,7 +3934,7 @@ async function auditScreen(){
         <button class="btn small secondary" onclick="setAuditRange('${todayStr()}','${todayStr()}')">Today only</button>
       </div>
     </div>
-    ${await auditTableHtml({from: auditFrom, to: auditTo, limit: 1000})}
+    ${(await auditTableHtml({from: auditFrom, to: auditTo, limit: 1000})).html}
   </div>`;
 }
 async function setAuditRange(from, to){
@@ -4485,6 +4492,46 @@ function vehicleTodayStatusScreen(vehicleId){
   `;
 }
 
+// ---------- Collapsible dashboard sections (Owner + Admin dashboards) ----------
+// In-memory only (resets on reload, same as other UI state like
+// editingVehicleId) - keeps long line-item lists out of the way by default
+// so both dashboards stay scannable at a glance. The header always shows
+// the item count, and clicking it either expands the list in place or
+// jumps straight to the existing full-detail screen for that data - never
+// both, so there's no confusion about what a click will do.
+let dashSectionOpen = {};
+function toggleDashSection(key){
+  dashSectionOpen[key] = !dashSectionOpen[key];
+  renderMain();
+}
+// key: unique id for this section's open/closed state.
+// title: header text - don't bake the count into it, it's appended automatically.
+// count: number shown next to the title.
+// bodyOrPreview: for in-place sections (no opts.redirect), the full body,
+//   rendered only while open. For opts.redirect sections, a small
+//   always-visible teaser instead - clicking never expands those, it
+//   always jumps to the full screen, so the teaser has to stand alone.
+// opts.defaultOpen: starts expanded the first time this key is seen.
+// opts.redirect: a JS call, as a string (e.g. "goto('dashboard_detail',{metric:'idle'})"),
+//   run on click instead of toggling open/closed.
+function collapsibleSection(key, title, count, bodyOrPreview, opts){
+  opts = opts || {};
+  if(dashSectionOpen[key]===undefined) dashSectionOpen[key] = !!opts.defaultOpen;
+  const open = !!dashSectionOpen[key];
+  const isRedirect = !!opts.redirect;
+  const clickAction = isRedirect ? opts.redirect : `toggleDashSection('${key}')`;
+  const chevron = isRedirect ? '&rsaquo;' : (open ? '&#9662;' : '&#9656;');
+  const hint = isRedirect ? 'Click to view the full list' : (open ? 'Click to collapse' : 'Click to expand');
+  return `
+  <div class="card">
+    <div class="flex-between" style="cursor:pointer" onclick="${clickAction}" title="${hint}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">${title} <span class="muted" style="font-weight:400;">(${count})</span></h2>
+      <span class="muted" style="font-size:15px;">${chevron}</span>
+    </div>
+    ${isRedirect ? `<div style="margin-top:8px;">${bodyOrPreview}</div>` : (open ? `<div style="margin-top:10px;">${bodyOrPreview}</div>` : '')}
+  </div>`;
+}
+
 async function ownerDashboardScreen(){
   const recs = vehicles.map(v=>records[v.id]).filter(Boolean);
   const total = vehicles.length;
@@ -4538,6 +4585,15 @@ async function ownerDashboardScreen(){
   const healthTier = healthScore>=85 ? 'good' : healthScore>=60 ? 'warn' : 'bad';
   const healthColor = healthTier==='good' ? '#8fd18f' : healthTier==='warn' ? '#f0c869' : '#f0908a';
 
+  // Reminders (backup / attendance backup / uniform renewal) each return ""
+  // when there's nothing to flag - combined into one collapsible so 0-3
+  // active reminders never stack up and push everything else down. Shown
+  // open by default since these are actionable warnings, not just data to
+  // browse.
+  const reminderBanners = [await backupReminderBannerHtml(), await attendanceBackupReminderBannerHtml(), uniformRenewalReminderBannerHtml()].filter(Boolean);
+
+  const recentActivity = await auditTableHtml({sinceMinutes: 60, limit: 100});
+
   return `
   <div class="cmd-hero">
     <div class="cmd-hero-top">
@@ -4558,9 +4614,7 @@ async function ownerDashboardScreen(){
     </div>
   </div>
 
-  ${await backupReminderBannerHtml()}
-  ${await attendanceBackupReminderBannerHtml()}
-  ${uniformRenewalReminderBannerHtml()}
+  ${reminderBanners.length ? collapsibleSection('reminders', '⏰ Reminders', reminderBanners.length, reminderBanners.join(""), {defaultOpen:true}) : ''}
 
   ${aiInsightsSectionHtml()}
 
@@ -4578,12 +4632,9 @@ async function ownerDashboardScreen(){
     <div class="card"><h2 class="section-title">Breathalyzer pass/fail</h2><canvas id="chartBreath" height="180"></canvas></div>
   </div>
 
-  <div class="card">
-    <h2 class="section-title">Vehicles by client</h2>
-    <table><tr><th>Client</th><th>Vehicles</th></tr>${Object.entries(byClient).map(([c,n])=>`<tr><td>${c}</td><td>${n}</td></tr>`).join("")}</table>
-  </div>
+  ${collapsibleSection('by_client', 'Vehicles by client', Object.keys(byClient).length, `<table><tr><th>Client</th><th>Vehicles</th></tr>${Object.entries(byClient).map(([c,n])=>`<tr><td>${c}</td><td>${n}</td></tr>`).join("")}</table>`, {defaultOpen:true})}
 
-  <div class="card"><h2 class="section-title">Recent activity (last 1 hour)</h2><p class="muted">The full audit trail lives on the Audit Log tab, filterable by date - this is just a quick pulse of what's happening right now.</p>${await auditTableHtml({sinceMinutes: 60, limit: 100})}</div>
+  ${collapsibleSection('recent_activity', 'Recent activity (last 1 hour)', recentActivity.count, `<p class="muted">The full audit trail lives on the Audit Log tab, filterable by date - this is just a quick pulse of what's happening right now. <a href="#" onclick="event.preventDefault();switchTab('audit')">Open full Audit Log &rsaquo;</a></p>${recentActivity.html}`, {defaultOpen:false})}
   `;
 }
 // The four things the owner asked to see first, above everything else on
@@ -4619,15 +4670,35 @@ async function priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpen
     </div>`;
   }).join("");
 
-  const idleRows = idleVehicles.map(({vehicle,reason})=>`
-    <tr style="cursor:pointer" onclick="goto('vehicle_status',{tab:'dashboard',vehicleId:'${vehicle.id}'})" title="Click to view and act on this vehicle">
+  const mileageWorstCount = (mileage.categories||[]).reduce((sum,cat)=>sum+(cat.worst||[]).length,0);
+
+  // Preview rows are plain (no per-row onclick) since the whole card
+  // redirects to the full dashboard_detail list on click - keeping both
+  // would mean a row click fires two navigations at once.
+  const IDLE_PREVIEW = 5;
+  const idlePreviewRows = idleVehicles.slice(0,IDLE_PREVIEW).map(({vehicle,reason})=>`
+    <tr>
       <td><b>${vehicle.reg}</b></td>
       <td>${vehicle.route || siteName(vehicle.siteId)}</td>
       <td>${userName(vehicle.supervisorId)}</td>
       <td>${reason}</td>
     </tr>`).join("");
+  const idlePreviewHtml = `
+    <p class="muted" style="margin:0 0 8px;">Click to view and act on the full list.</p>
+    <table><tr><th>Vehicle</th><th>Route/Area</th><th>Supervisor</th><th>Reason</th></tr>
+    ${idlePreviewRows || "<tr><td colspan='4' class='empty'>Every vehicle has moved today.</td></tr>"}
+    ${idleVehicles.length>IDLE_PREVIEW ? `<tr><td colspan="4" class="muted" style="text-align:center;">+ ${idleVehicles.length-IDLE_PREVIEW} more - click to see all</td></tr>` : ""}
+    </table>`;
 
-  const tempRows = tempDriverExpenses.map(e=>{
+  const DOC_PREVIEW = 4;
+  const docPreviewHtml = `
+    <table><tr><th>Vehicle</th><th>Document</th><th>Status</th></tr>
+    ${expiringDocs.slice(0,DOC_PREVIEW).map(d=>`<tr><td>${d.reg}</td><td>${d.docType}</td><td><span class="badge low">${d.daysLeft<0? 'EXPIRED': d.daysLeft+' days left'}</span></td></tr>`).join("") || "<tr><td colspan='3' class='empty'>None</td></tr>"}
+    ${expiringDocs.length>DOC_PREVIEW ? `<tr><td colspan="3" class="muted" style="text-align:center;">+ ${expiringDocs.length-DOC_PREVIEW} more - click to see all</td></tr>` : ""}
+    </table>`;
+
+  const TEMP_PREVIEW = 15;
+  const tempRows = tempDriverExpenses.slice(0,TEMP_PREVIEW).map(e=>{
     const v = e.vehicleId ? vehicles.find(x=>x.id===e.vehicleId) : null;
     return `<tr>
       <td>${new Date(e.submittedAt).toLocaleDateString('en-GB')}</td>
@@ -4642,45 +4713,24 @@ async function priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpen
       <td><span class="badge ${e.status}">${e.status.toUpperCase()}</span></td>
     </tr>`;
   }).join("");
+  const tempDriverBody = `
+    <p class="muted">Every time a temporary driver was arranged and paid for an absent driver - who, how much, and which vehicle/company they covered.${tempDriverExpenses.length>TEMP_PREVIEW ? ` Showing the ${TEMP_PREVIEW} most recent - <a href="#" onclick="event.preventDefault();switchTab('reports')">download the full history in Reports &rsaquo;</a>.` : ''}</p>
+    <table><tr><th>Date</th><th>Temp Driver</th><th>Phone</th><th>UPI</th><th>Amount</th><th>Vehicle</th><th>Route</th><th>Company</th><th>Covered For</th><th>Status</th></tr>
+    ${tempRows || "<tr><td colspan='10' class='empty'>No temporary drivers recorded yet.</td></tr>"}
+    </table>`;
 
   return `
-  <div class="card">
-    <h2 class="section-title">Mileage by vehicle type &amp; fuel - worst performers</h2>
+  ${collapsibleSection('mileage_worst', 'Mileage by vehicle type &amp; fuel - worst performers', mileageWorstCount, `
     <p class="muted">Each vehicle class/fuel combination gets its own average - a single blended fleet figure hides which class is actually underperforming. Only the lowest-mileage vehicles in each group are listed.</p>
     <div class="grid cols-2" style="gap:14px;">
       ${mileageCategoryCards || "<div class='empty'>No fuel entries recorded yet.</div>"}
-    </div>
-  </div>
+    </div>`, {defaultOpen:false})}
 
-  <div class="card" style="cursor:pointer" onclick="goto('dashboard_detail',{metric:'expiring_docs'})" title="Click to see the full list and act on it">
-    <div class="flex-between">
-      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:6px;">Document expiry alerts (&lt;15 days) &rsaquo;</h2>
-      <span class="muted">${expiringDocs.length} document(s) - click to view</span>
-    </div>
-    <table><tr><th>Vehicle</th><th>Document</th><th>Status</th></tr>
-    ${expiringDocs.slice(0,8).map(d=>`<tr><td>${d.reg}</td><td>${d.docType}</td><td><span class="badge low">${d.daysLeft<0? 'EXPIRED': d.daysLeft+' days left'}</span></td></tr>`).join("") || "<tr><td colspan='3' class='empty'>None</td></tr>"}
-    ${expiringDocs.length>8 ? `<tr><td colspan="3" class="muted" style="text-align:center;">+ ${expiringDocs.length-8} more - click to see all</td></tr>` : ""}
-    </table>
-  </div>
+  ${collapsibleSection('expiring_docs', 'Document expiry alerts (&lt;15 days)', expiringDocs.length, docPreviewHtml, {redirect:"goto('dashboard_detail',{metric:'expiring_docs'})"})}
 
-  <div class="card">
-    <div class="flex-between">
-      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:6px;">Idle vehicles today (${idleVehicles.length})</h2>
-      ${idleVehicles.length ? `<span class="muted" style="cursor:pointer" onclick="goto('dashboard_detail',{metric:'idle'})">See full list &rsaquo;</span>` : ''}
-    </div>
-    <p class="muted" style="margin:2px 0 12px;">Click a vehicle to view and act on it.</p>
-    <table><tr><th>Vehicle</th><th>Route/Area</th><th>Supervisor</th><th>Reason</th></tr>
-    ${idleRows || "<tr><td colspan='4' class='empty'>Every vehicle has moved today.</td></tr>"}
-    </table>
-  </div>
+  ${collapsibleSection('idle_vehicles', 'Idle vehicles today', idleVehicles.length, idlePreviewHtml, {redirect:"goto('dashboard_detail',{metric:'idle'})"})}
 
-  <div class="card">
-    <h2 class="section-title">Temporary driver usage</h2>
-    <p class="muted">Every time a temporary driver was arranged and paid for an absent driver - who, how much, and which vehicle/company they covered.</p>
-    <table><tr><th>Date</th><th>Temp Driver</th><th>Phone</th><th>UPI</th><th>Amount</th><th>Vehicle</th><th>Route</th><th>Company</th><th>Covered For</th><th>Status</th></tr>
-    ${tempRows || "<tr><td colspan='10' class='empty'>No temporary drivers recorded yet.</td></tr>"}
-    </table>
-  </div>`;
+  ${collapsibleSection('temp_drivers', 'Temporary driver usage', tempDriverExpenses.length, tempDriverBody, {defaultOpen:false})}`;
 }
 // ================= FLEET ASSISTANT (Owner only, free - no paid API) =================
 // Talks to POST /api/smart-assistant/query on the backend, which answers by
@@ -4796,17 +4846,26 @@ function aiInsightsSectionHtml(){
   } else {
     body = `<div class="empty">No insights yet - click Refresh to look over today's fleet data.</div>`;
   }
+  // Collapsible like the rest of the dashboard, but keeps its own custom
+  // header (Refresh button, last-updated time) instead of using the
+  // generic collapsibleSection() helper, which doesn't know about those.
+  // Open by default - unlike the data-table sections below, this is the
+  // dashboard's "read this first" summary.
+  const key = 'ai_insights';
+  if(dashSectionOpen[key]===undefined) dashSectionOpen[key] = true;
+  const open = !!dashSectionOpen[key];
+  const count = (aiInsights && aiInsights.insights) ? aiInsights.insights.length : 0;
   return `
   <div class="card">
     <div class="flex-between">
-      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:2px;">💡 Fleet Insights</h2>
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:2px;cursor:pointer" onclick="toggleDashSection('${key}')" title="${open?'Click to collapse':'Click to expand'}">💡 Fleet Insights <span class="muted" style="font-weight:400;">(${count})</span> <span class="muted" style="font-size:15px;">${open?'&#9662;':'&#9656;'}</span></h2>
       <div style="display:flex;align-items:center;gap:8px;">
         ${aiInsights? `<span class="muted">Updated ${new Date(aiInsights.generatedAt).toLocaleTimeString()}</span>` : ''}
         <button class="btn small secondary" ${aiInsightsLoading?"disabled":""} onclick="loadAiInsights(true)">${aiInsightsLoading? '<span class="spinner"></span>' : 'Refresh'}</button>
       </div>
     </div>
-    <p class="muted" style="margin:2px 0 12px;">Free, computed straight from today's real fleet data - a fast first read, not a substitute for the details below. <a href="#" onclick="event.preventDefault();switchTab('smart_assistant')">Ask a follow-up in the Fleet Assistant &rsaquo;</a></p>
-    ${body}
+    ${open ? `<p class="muted" style="margin:2px 0 12px;">Free, computed straight from today's real fleet data - a fast first read, not a substitute for the details below. <a href="#" onclick="event.preventDefault();switchTab('smart_assistant')">Ask a follow-up in the Fleet Assistant &rsaquo;</a></p>
+    ${body}` : ''}
   </div>`;
 }
 
@@ -5968,7 +6027,7 @@ Object.assign(window, {
   addPurchaseItemRow, handleWorkshopInvoiceFile, submitWorkshopPurchase,
   openDocumentScanner, handleScannerFile, closeScannerModal, retakeScan, confirmScan, onWorkshopInvoiceScanned,
   toggleExpenditureBucket, openMileageDetail, openInsight,
-  askAiSuggested, sendAiChatMessage, loadAiInsights,
+  askAiSuggested, sendAiChatMessage, loadAiInsights, toggleDashSection,
   onObVehicleTypeChange, submitVehicleOnboarding, submitDriverOnboarding, toggleOnboardingDriverDocs, saveOnboardingDriverDocs,
   decideVehicleApproval, decideDriverApproval,
   onArClientChange, submitRouteRequest, submitAssignmentRequest,
