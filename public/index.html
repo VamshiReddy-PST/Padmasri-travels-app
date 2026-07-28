@@ -87,6 +87,12 @@
   .org-box .org-phone{font-size:11px;color:var(--muted,#888);}
   .org-box.org-vacant{border-style:dashed;color:var(--muted,#888);font-style:italic;}
   .org-box.org-summary{background:var(--accent-light,#f7f7f9);}
+  /* Letterhead plugin (staff-only) - embeds the separate PCR Transport
+     Letterhead Portal (own login, own app, hosted on Render) in an iframe
+     inside a Fleet-app tab. Fixed viewport-relative height since the
+     embedded app manages its own internal scrolling. */
+  .letterhead-frame-wrap{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:#fff;}
+  .letterhead-frame-wrap iframe{width:100%;height:calc(100vh - 220px);min-height:520px;border:0;display:block;}
   table{width:100%;border-collapse:collapse;font-size:13px;}
   table th{text-align:left;background:var(--accent-light);color:var(--ink);padding:8px 10px;font-size:12px;}
   table td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
@@ -897,6 +903,26 @@ async function hierarchyScreen(){
   </div>`;
 }
 
+// ---------- LETTERHEAD (staff-only plugin) ----------
+// Embeds the separate PCR Transport Letterhead Portal
+// (pcr-letterhead-portal.onrender.com - its own app, own login, own
+// database, not part of this codebase) so staff can generate branded
+// letterheads without leaving the Fleet app. Staff log into the portal
+// with their own portal account inside the iframe below - there's no
+// single sign-on between the two apps, this is purely a visual embed.
+// Deliberately not added to driver.html/subvendor.html - staff-only, per
+// the original request. It's on Render's free tier, so the very first
+// load after a period of inactivity can take 30-60s to wake up.
+const LETTERHEAD_PORTAL_URL = "https://pcr-letterhead-portal.onrender.com/dashboard";
+function letterheadScreen(){
+  return `
+  <h1 class="page-title">Letterhead</h1>
+  <div class="card">
+    <div class="muted" style="margin-bottom:10px;">Generate company letterheads (blank branded sheets, or your own Word document placed onto the letterhead) via the Letterhead Portal below. Log in with your Letterhead Portal account the first time - it's separate from your Fleet app login. If it looks stuck loading, give it a minute; the portal can take a little while to wake up after being idle.</div>
+    <div class="letterhead-frame-wrap"><iframe src="${LETTERHEAD_PORTAL_URL}" title="PCR Transport Letterhead Portal"></iframe></div>
+  </div>`;
+}
+
 // ---------- shell ----------
 // Every role gets the free Fleet Assistant tab (["smart_assistant", ...]) -
 // it's a zero-cost, built-in tool, not a paid subscription seat, so there's
@@ -905,7 +931,7 @@ async function hierarchyScreen(){
 // the assistant sits right next to it) so each role's actual primary
 // screen stays first/most prominent.
 function tabsFor(role){
-  return tabsForInner(role).concat([["hierarchy","Company Hierarchy"]]);
+  return tabsForInner(role).concat([["hierarchy","Company Hierarchy"],["letterhead","Letterhead"]]);
 }
 // Every role, including the new Admin role, gets the Company Hierarchy tab
 // appended last (see tabsFor() above) - it's a zero-permission, read-only
@@ -1000,6 +1026,7 @@ async function routeView(){
   if(tab==="workshop") return workshopScreen();
   if(tab==="smart_assistant") return smartAssistantScreen();
   if(tab==="hierarchy") return hierarchyScreen();
+  if(tab==="letterhead") return letterheadScreen();
   if(tab==="onboarding") return supervisorOnboardingScreen();
   if(tab==="approvals") return fleetApprovalsScreen();
   // "My Vehicles" is shared by Area Supervisor and Regional Supervisor - an Area
