@@ -572,6 +572,14 @@ async function downloadDriverPayslip(format){
 function money(n){ return "₹" + Math.round(n||0).toLocaleString("en-IN"); }
 function fmtTime(iso){ if(!iso) return "-"; const d = new Date(iso); return d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"}); }
 function fmtDate(s){ if(!s) return "-"; const d = new Date(s+"T00:00:00"); return d.toLocaleDateString("en-IN",{day:"2-digit",month:"short"}); }
+// Full DD/MM/YYYY display (distinct from the compact fmtDate() above, which
+// is a deliberate "28 Jul" style used on trip cards) - use this wherever a
+// full date needs to be shown, e.g. document expiry.
+function fmtDMY(dateStr){
+  if(!dateStr) return "-";
+  const m = String(dateStr).slice(0,10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(dateStr);
+}
 
 function render(){
   const app = document.getElementById("app");
@@ -995,7 +1003,7 @@ function documentsTabHtml(){
     ? Object.keys(v.docs).map(docType=>{
         const doc = v.docs[docType];
         return docRowHtml(DOC_TYPE_LABELS[docType] || docType, doc.number, doc.copyUrl) +
-          (doc.expiry ? `<div class="muted" style="margin:-6px 0 8px;">Expiry: ${doc.expiry}</div>` : "");
+          (doc.expiry ? `<div class="muted" style="margin:-6px 0 8px;">Expiry: ${fmtDMY(doc.expiry)}</div>` : "");
       }).join("")
     : `<div class="empty">You're not currently mapped to a vehicle.</div>`;
   return `
@@ -1251,7 +1259,7 @@ function workshopPurchasesTabHtml(){
     <div class="field left"><label>Notes (optional)</label><input type="text" id="wsNotes" /></div>
     <div class="photo-box">
       ${pendingWorkshopInvoice ? `<img src="${pendingWorkshopInvoice}"/><br/>` : ""}
-      <input type="file" id="wsInvoiceFileInput" accept="image/*" capture="environment" style="display:none" onchange="handleWorkshopInvoicePhoto(event)" />
+      <input type="file" id="wsInvoiceFileInput" accept="image/*,application/pdf" capture="environment" style="display:none" onchange="handleWorkshopInvoicePhoto(event)" />
       <button type="button" class="big-btn secondary" style="margin-top:${pendingWorkshopInvoice?'10px':'0'};" onclick="document.getElementById('wsInvoiceFileInput').click()">${pendingWorkshopInvoice? "📷 Retake Invoice Photo" : "📷 Attach Invoice Photo"}</button>
     </div>
     <button class="big-btn" ${workshopBusy?"disabled":""} onclick="submitWorkshopPurchaseMobile()">${workshopBusy?'<span class="spinner"></span>Saving...':"Log Purchase"}</button>

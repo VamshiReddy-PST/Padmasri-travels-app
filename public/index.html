@@ -204,7 +204,7 @@
 <div id="app"></div>
 <input type="file" id="photoInput" accept="image/*" capture="environment" style="display:none" multiple />
 <input type="file" id="selfieInput" accept="image/*" capture="user" style="display:none" />
-<input type="file" id="billInput" accept="image/*" capture="environment" style="display:none" />
+<input type="file" id="billInput" accept="image/*,application/pdf" capture="environment" style="display:none" />
 <input type="file" id="scannerFileInput" accept="image/*" capture="environment" style="display:none" onchange="handleScannerFile(event)" />
 <div id="scannerOverlay"></div>
 <script>
@@ -282,6 +282,19 @@ function aiEscapeHtml(str){
 }
 
 function todayStr(){ return new Date().toISOString().slice(0,10); }
+// Every date is STORED as ISO (YYYY-MM-DD) - that never changes, since it's
+// what sorts/compares/round-trips correctly through the API and native
+// <input type="date"> pickers. This is purely a DISPLAY formatter: wrap any
+// raw ISO date string in fmtDMY() wherever it's shown to a person as text,
+// so it reads DD/MM/YYYY instead of the raw ISO order. Never use this on a
+// value bound to an <input type="date"> (those must stay ISO) or on a date
+// used as a lookup key/URL segment/onclick argument.
+function fmtDMY(dateStr){
+  if(!dateStr) return "-";
+  const s = String(dateStr).slice(0,10);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
+}
 function daysUntil(dateStr){
   if(!dateStr) return 9999;
   const d = new Date(dateStr), n = new Date(todayStr());
@@ -302,7 +315,7 @@ async function api(path, opts={}){
 }
 
 function roleLabel(r){
-  return {site_supervisor:"Area Supervisor", area_supervisor:"Regional Supervisor", ops_manager:"Operations Manager", data_team:"Data Team", owner:"Owner", hr:"HR", bookings:"Bookings Department",
+  return {site_supervisor:"Area Supervisor", area_supervisor:"Regional Supervisor", ops_manager:"Operations Manager", data_team:"Data Team", owner:"Owner", hr:"HR", bookings:"Bookings Department", admin:"Admin",
     workshop_manager:"Workshop Manager", workshop_supervisor:"Workshop Supervisor", mechanic:"Mechanic", helper:"Helper", electrician:"Electrician"}[r] || r;
 }
 const WORKSHOP_STAFF_ROLES = ["workshop_manager","workshop_supervisor","mechanic","helper","electrician"];
@@ -588,7 +601,7 @@ async function boot(){
 }
 function defaultTab(role){
   if(WORKSHOP_STAFF_ROLES.includes(role)) return "workshop";
-  return {site_supervisor:"my_vehicles", area_supervisor:"queue", ops_manager:"operations", data_team:"corrections", hr:"attendance", owner:"dashboard", bookings:"usage"}[role];
+  return {site_supervisor:"my_vehicles", area_supervisor:"queue", ops_manager:"operations", data_team:"corrections", hr:"attendance", owner:"dashboard", bookings:"usage", admin:"admin_dashboard"}[role];
 }
 async function loadCoreData(){
   const [v, r, o, l, ex] = await Promise.all([
@@ -807,6 +820,7 @@ function tabsFor(role){
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="admin") return [["admin_dashboard","Dashboard"],["admin_vehicles","Vehicles"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   return [];
 }
@@ -948,6 +962,10 @@ async function routeView(){
   if(role==="bookings"){
     if(tab==="usage") return vehicleUsageScreen();
     if(tab==="trips") return tripsScreen();
+  }
+  if(role==="admin"){
+    if(tab==="admin_dashboard") return adminDashboardScreen();
+    if(tab==="admin_vehicles") return adminVehiclesScreen();
   }
   return "<div class='empty'>Nothing here.</div>";
 }
@@ -1195,7 +1213,7 @@ function onboardingDriverDocsPanelHtml(d){
       <div class="label"><b>${f.label}</b></div>
       <div class="controls">
         <input type="text" placeholder="Number" value="${d[f.numberField]||''}" style="width:130px" id="obDoc_${f.key}_number_${d.id}" />
-        <input type="file" accept="image/*" id="obDoc_${f.key}_copy_${d.id}" style="width:180px" />
+        <input type="file" accept="image/*,application/pdf" id="obDoc_${f.key}_copy_${d.id}" style="width:180px" />
         ${d[f.urlField] ? `<a href="${d[f.urlField]}" target="_blank" rel="noopener">View uploaded copy</a>` : "<span class='muted'>No copy uploaded yet</span>"}
       </div>
     </div>`).join("");
@@ -1245,7 +1263,7 @@ async function fuelVerificationScreen(){
     const editing = editingFuelVerifyKey===key;
     return `
     <tr>
-      <td><b>${r.reg}</b></td><td>${r.date}</td><td>${r.submittedByName||'-'}</td>
+      <td><b>${r.reg}</b></td><td>${fmtDMY(r.date)}</td><td>${r.submittedByName||'-'}</td>
       <td>${r.fuel.litres} L</td><td>₹${r.fuel.fuelPrice}/L</td><td>₹${r.fuel.totalCost}</td>
       <td>${r.fuel.station||'-'} / ${r.fuel.paymentMode||'-'}</td>
       <td>${r.fuel.odometer} km ${r.fuel.belowStandard ? `<span class="badge low">below standard</span>` : ""}</td>
@@ -1257,7 +1275,7 @@ async function fuelVerificationScreen(){
     </tr>
     ${editing ? `<tr><td colspan="9">
       <div class="card" style="margin:6px 0;background:var(--panel-alt,#f7f7f9);">
-        <h2 class="section-title">Correct ${r.reg} - ${r.date}</h2>
+        <h2 class="section-title">Correct ${r.reg} - ${fmtDMY(r.date)}</h2>
         <div class="inline-form">
           <div class="f"><label>Litres</label><input type="number" step="0.1" id="fv_litres_${key}" value="${r.fuel.litres}" style="width:80px" /></div>
           <div class="f"><label>Fuel price (₹/L)</label><input type="number" step="0.1" id="fv_price_${key}" value="${r.fuel.fuelPrice}" style="width:90px" /></div>
@@ -1339,7 +1357,7 @@ async function fleetApprovalsScreen(){
   const vehicleRows = pendingVehicleApprovals.map(v=>`
     <tr>
       <td><b>${v.reg}</b></td><td>${v.make||''} ${v.model||''}</td><td>${v.vehicleType||''} / ${v.fuelType||''}</td>
-      <td>${v.submittedByName||'-'}</td><td>${v.submittedAt? new Date(v.submittedAt).toLocaleDateString() : '-'}</td>
+      <td>${v.submittedByName||'-'}</td><td>${v.submittedAt? new Date(v.submittedAt).toLocaleDateString('en-GB') : '-'}</td>
       <td>
         <button class="btn small" ${approvalsBusy?"disabled":""} onclick="decideVehicleApproval('${v.id}','approved')">Approve</button>
         <button class="btn small danger" ${approvalsBusy?"disabled":""} onclick="decideVehicleApproval('${v.id}','rejected')">Reject</button>
@@ -1348,7 +1366,7 @@ async function fleetApprovalsScreen(){
   const driverRows = pendingDriverApprovals.map(d=>`
     <tr>
       <td><b>${d.name}</b></td><td>${d.phone||'-'}</td><td>${d.licenseNumber||'-'}</td>
-      <td>${d.submittedByName||'-'}</td><td>${d.submittedAt? new Date(d.submittedAt).toLocaleDateString() : '-'}</td>
+      <td>${d.submittedByName||'-'}</td><td>${d.submittedAt? new Date(d.submittedAt).toLocaleDateString('en-GB') : '-'}</td>
       <td>
         <button class="btn small" ${approvalsBusy?"disabled":""} onclick="decideDriverApproval('${d.id}','approved')">Approve</button>
         <button class="btn small danger" ${approvalsBusy?"disabled":""} onclick="decideDriverApproval('${d.id}','rejected')">Reject</button>
@@ -1357,7 +1375,7 @@ async function fleetApprovalsScreen(){
   const routeRequestRows = pendingRouteRequests.map(r=>`
     <tr>
       <td>${r.clientName}</td><td>${r.routeNumber||'-'} - ${r.name}</td>
-      <td>${r.requestedByName||'-'}</td><td>${r.createdAt? new Date(r.createdAt).toLocaleDateString() : '-'}</td>
+      <td>${r.requestedByName||'-'}</td><td>${r.createdAt? new Date(r.createdAt).toLocaleDateString('en-GB') : '-'}</td>
       <td>
         <button class="btn small" ${approvalsBusy?"disabled":""} onclick="decideRouteRequest('${r.id}','approved')">Approve</button>
         <button class="btn small danger" ${approvalsBusy?"disabled":""} onclick="decideRouteRequest('${r.id}','rejected')">Reject</button>
@@ -1366,7 +1384,7 @@ async function fleetApprovalsScreen(){
   const assignmentRequestRows = pendingAssignmentRequests.map(r=>`
     <tr>
       <td><b>${r.vehicleReg}</b></td><td>${r.clientName}</td><td>${r.routeNumber||r.routeName}</td><td>${r.driverName}</td>
-      <td>${r.requestedByName||'-'}</td><td>${r.createdAt? new Date(r.createdAt).toLocaleDateString() : '-'}</td>
+      <td>${r.requestedByName||'-'}</td><td>${r.createdAt? new Date(r.createdAt).toLocaleDateString('en-GB') : '-'}</td>
       <td>
         <button class="btn small" ${approvalsBusy?"disabled":""} onclick="decideAssignmentRequest('${r.id}','approved')">Approve</button>
         <button class="btn small danger" ${approvalsBusy?"disabled":""} onclick="decideAssignmentRequest('${r.id}','rejected')">Reject</button>
@@ -1542,7 +1560,7 @@ function vehicleChecklistScreen(vehicleId){
       </div>
       ${canUploadCopy ? `
       <div class="controls" style="margin-top:4px;">
-        <input type="file" accept="image/*" id="checklistDoc_${k}_${vehicleId}" style="width:200px" />
+        <input type="file" accept="image/*,application/pdf" id="checklistDoc_${k}_${vehicleId}" style="width:200px" />
         <button class="btn small secondary" onclick="updateDocCopy('${vehicleId}','${k}')">Upload copy</button>
         ${doc.copyUrl ? `<a href="${doc.copyUrl}" target="_blank" rel="noopener">View uploaded copy</a>` : "<span class='muted'>No copy uploaded yet</span>"}
       </div>` : ""}
@@ -1815,7 +1833,7 @@ async function myAttendanceScreen(){
   const clockedOut = todayEntries.some(a=>a.type==="clockout");
   const rows = attendanceHistory.slice(0,20).map(a=>`
     <tr>
-      <td>${a.date}</td>
+      <td>${fmtDMY(a.date)}</td>
       <td>${a.type==='clockin'?'Clock in':'Clock out'}</td>
       <td>${new Date(a.ts).toLocaleTimeString()}</td>
       <td>${a.selfieUrl? `<img class="selfie-thumb" src="${a.selfieUrl}" />` : "-"}</td>
@@ -1912,7 +1930,7 @@ function myExpensesScreen(){
   const mine = expenses;
   const rows = mine.map(ex=>`
     <tr>
-      <td>${new Date(ex.submittedAt).toLocaleDateString()}</td>
+      <td>${new Date(ex.submittedAt).toLocaleDateString('en-GB')}</td>
       <td>${ex.category}</td>
       <td>₹${ex.amount}</td>
       <td>${expenseVehicleLabel(ex)}</td>
@@ -1995,7 +2013,7 @@ function expensesScreen(canDecide){
   const pending = expenses.filter(e=>e.status==='pending');
   const rows = expenses.map(ex=>`
     <tr>
-      <td>${new Date(ex.submittedAt).toLocaleDateString()}</td>
+      <td>${new Date(ex.submittedAt).toLocaleDateString('en-GB')}</td>
       <td>${ex.userName}</td>
       <td>${ex.category}</td>
       <td>₹${ex.amount}</td>
@@ -2099,7 +2117,7 @@ async function verify(vehicleId, date, status){
 async function operationsScreen(){
   const fails = vehicles.map(v=>records[v.id]).filter(r=>r && r.breathalyzer && r.breathalyzer.result==='fail');
   const rows = leaves.map(l=>`
-    <tr><td>${l.driver}</td><td>${l.type}</td><td>${l.start} → ${l.end}</td>
+    <tr><td>${l.driver}</td><td>${l.type}</td><td>${fmtDMY(l.start)} → ${fmtDMY(l.end)}</td>
     <td><span class="badge ${l.status}">${l.status.toUpperCase()}</span></td>
     <td>${l.status==='pending' ? `<button class="btn small" onclick="setLeave('${l.id}','approved')">Approve</button> <button class="btn small danger" onclick="setLeave('${l.id}','rejected')">Reject</button>` : "<span class='muted'>-</span>"}</td></tr>`).join("");
   return `
@@ -2142,6 +2160,128 @@ async function setLeave(id, status){
     const idx = leaves.findIndex(x=>x.id===id); leaves[idx] = l;
     await renderMain();
   }catch(e){ alert(e.message); }
+}
+
+// ================= ADMIN (Dashboard + Vehicle Documents + vehicle onboarding only) =================
+// A narrowly-scoped role, deliberately kept separate from the big Overview
+// screen (which also has route/client/driver-assignment editing that's out
+// of Admin's remit) - Admin gets its own compact vehicle list + onboarding
+// form, and reuses the same vehicleDetailsEditorHtml()/toggleVehicleDetails()
+// document editor that ADMIN_ROLES already uses elsewhere, since the backend
+// endpoints it calls (PATCH /vehicles/:id/details and /vehicles/:id/docs)
+// already grant "admin" access.
+async function adminVehiclesScreen(){
+  const rows = vehicles.map(v=>`
+    <tr>
+      <td><b>${v.reg}</b></td>
+      <td>${v.make||'-'} ${v.model||''}</td>
+      <td>${v.vehicleType||'-'} / ${v.fuelType||'-'}</td>
+      <td>${v.siteId ? siteName(v.siteId) : '<span class="muted">Unassigned</span>'}</td>
+      <td><button class="btn small secondary" onclick="toggleVehicleDetails('${v.id}')">${editingVehicleId===v.id?'Close':'Manage Documents'}</button></td>
+    </tr>`).join("");
+  return `
+  <h1 class="page-title">Vehicles</h1>
+  <div class="banner">Add new vehicles and manage every vehicle's documents (RC, Permit, Insurance, Fitness, Tax, PUC, Temporary Permit, Border Tax) here - numbers, expiry dates, and a photo or PDF copy of each.</div>
+  <div class="card">
+    <h2 class="section-title">Vehicles (${vehicles.length})</h2>
+    <table><tr><th>Vehicle</th><th>Make/Model</th><th>Type / Fuel</th><th>Area</th><th></th></tr>${rows || "<tr><td colspan='5' class='empty'>No vehicles yet.</td></tr>"}</table>
+    <div class="banner">Every field below is required - a vehicle cannot be added without its complete onboarding data.</div>
+    <form class="inline-form" onsubmit="return addVehicle(event)">
+      <div class="f"><label>New registration number *</label><input type="text" id="newVehicleReg" placeholder="TS 09 XX 1234" required /></div>
+      <div class="f"><label>Vehicle Type *</label>
+        <select id="newVehicleType" required onchange="onNewVehicleTypeChange()">
+          <option value="">- select -</option>
+          <option value="Bus">Bus</option>
+          <option value="Cab">Cab</option>
+        </select>
+      </div>
+      <div class="f"><label>Fuel Type *</label>
+        <select id="newVehicleFuel" required>
+          <option value="">- select -</option>
+          <option value="Diesel">Diesel</option>
+          <option value="Petrol">Petrol</option>
+          <option value="CNG">CNG</option>
+          <option value="EV">EV</option>
+          <option value="Hybrid">Hybrid</option>
+        </select>
+      </div>
+      <div class="f"><label>Usage *</label>
+        <select id="newVehicleUsage" required>
+          <option value="fixed_route">Fixed Route</option>
+          <option value="client_on_demand">Client on demand</option>
+          <option value="booking">Booking</option>
+        </select>
+      </div>
+      <div class="f"><label>Make *</label><input type="text" id="newVehicleMake" placeholder="e.g. Tata" style="width:100px" required /></div>
+      <div class="f"><label>Model *</label><input type="text" id="newVehicleModel" placeholder="e.g. Winger" style="width:100px" required /></div>
+      <div class="f"><label>Engine No. *</label><input type="text" id="newVehicleEngineNo" style="width:110px" required /></div>
+      <div class="f"><label>Chassis No. *</label><input type="text" id="newVehicleChassisNo" style="width:110px" required /></div>
+      <div class="f"><label>RC Date (registration date) *</label><input type="date" id="newVehicleRcDate" style="width:140px" required /></div>
+      <div class="f"><label>Seating Capacity *</label><input type="number" id="newVehicleSeating" min="1" style="width:80px" required /></div>
+      <button class="btn small" type="submit">+ Add vehicle</button>
+    </form>
+    <div class="muted" style="margin-top:6px;">Buses in this fleet only run on Diesel. A newly added vehicle isn't assigned to an Area/Route/Driver yet - that's done separately by Operations/Data Team.</div>
+    ${editingVehicleId ? await vehicleDetailsEditorHtml(editingVehicleId) : ""}
+  </div>`;
+}
+// All of a vehicle's documents (not just the <15-day-urgent ones the main
+// dashboard's alert card shows) - every doc with an expiry on file, most
+// urgent first, so Admin can plan renewals well ahead of the deadline.
+function allVehicleDocRows(){
+  const rows = [];
+  vehicles.forEach(v=>{
+    Object.entries(v.docs||{}).forEach(([docType,doc])=>{
+      if(!doc.expiry && !doc.number) return;
+      const daysLeft = doc.expiry ? daysUntil(doc.expiry) : null;
+      rows.push({vehicleId:v.id, reg:v.reg, docType, number:doc.number||"", expiry:doc.expiry||"", copyUrl:doc.copyUrl||null, daysLeft});
+    });
+  });
+  rows.sort((a,b)=>{
+    if(a.daysLeft==null && b.daysLeft==null) return 0;
+    if(a.daysLeft==null) return 1;
+    if(b.daysLeft==null) return -1;
+    return a.daysLeft - b.daysLeft;
+  });
+  return rows;
+}
+function docStatusBadge(daysLeft){
+  if(daysLeft==null) return '<span class="badge pending">No expiry set</span>';
+  if(daysLeft<0) return '<span class="badge fail">EXPIRED</span>';
+  if(daysLeft<15) return `<span class="badge low">${daysLeft} days left</span>`;
+  return `<span class="badge ok">${daysLeft} days left</span>`;
+}
+async function adminDashboardScreen(){
+  const allDocs = allVehicleDocRows();
+  const expired = allDocs.filter(d=>d.daysLeft!=null && d.daysLeft<0);
+  const expiringSoon = allDocs.filter(d=>d.daysLeft!=null && d.daysLeft>=0 && d.daysLeft<15);
+  const missing = allDocs.filter(d=>!d.expiry);
+  const kpi = (cls, num, label) => `<div class="cmd-kpi ${cls}"><div class="num">${num}</div><div class="label">${label}</div></div>`;
+  return `
+  <div class="cmd-hero">
+    <div class="cmd-hero-top">
+      <div>
+        <h1>Vehicle Documents</h1>
+        <p class="cmd-sub">Padmasri Travels &middot; ${vehicles.length} vehicles &middot; ${allDocs.length} documents on file &middot; live as of ${new Date().toLocaleTimeString('en-GB')}</p>
+      </div>
+    </div>
+    <div class="cmd-kpi-row">
+      ${kpi('bad', expired.length, 'Expired documents')}
+      ${kpi('warn', expiringSoon.length, 'Expiring within 15 days')}
+      ${kpi('', missing.length, 'No expiry date on file')}
+      ${kpi('good', allDocs.length - expired.length - expiringSoon.length, 'Valid / not urgent')}
+    </div>
+  </div>
+  <div class="card">
+    <h2 class="section-title">All vehicle documents (${allDocs.length})</h2>
+    <div class="muted" style="margin-bottom:8px;">Sorted by most urgent first. Covers RC, Permit, Insurance, Fitness, Tax, PUC, Temporary Permit and Border Tax across every vehicle. Go to the Vehicles tab to update a document.</div>
+    <table><tr><th>Vehicle</th><th>Document</th><th>Number</th><th>Expiry</th><th>Status</th><th>Copy</th></tr>
+    ${allDocs.map(d=>`<tr>
+      <td><b>${d.reg}</b></td><td>${d.docType}</td><td>${d.number||'-'}</td><td>${d.expiry?fmtDMY(d.expiry):'-'}</td>
+      <td>${docStatusBadge(d.daysLeft)}</td>
+      <td>${d.copyUrl?`<a href="${d.copyUrl}" target="_blank" rel="noopener">View</a>`:'<span class="muted">Not uploaded</span>'}</td>
+    </tr>`).join("") || "<tr><td colspan='6' class='empty'>No documents on file yet.</td></tr>"}
+    </table>
+  </div>`;
 }
 
 // ================= ASSIGNMENTS (ops_manager, data_team, owner) =================
@@ -2206,7 +2346,7 @@ async function assignmentsDateViewCardHtml(){
     </tr>`).join("");
   return `
   <div class="card">
-    <h2 class="section-title">Vehicles running on ${date}${date===todayStr()?' (today)':''}</h2>
+    <h2 class="section-title">Vehicles running on ${fmtDMY(date)}${date===todayStr()?' (today)':''}</h2>
     <div class="check-row">
       <div class="label">Date</div>
       <div class="controls">
@@ -2270,7 +2410,7 @@ async function fuelOverviewCardHtml(){
     </tr>`).join("");
   return `
   <div class="card">
-    <h2 class="section-title">Fuel filling overview - ${date}${date===todayStr()?' (today)':''}</h2>
+    <h2 class="section-title">Fuel filling overview - ${fmtDMY(date)}${date===todayStr()?' (today)':''}</h2>
     <p class="muted">${data.fillCount} vehicle${data.fillCount===1?'':'s'} fuelled, ${data.totalLitres} L total, ₹${data.totalCost} total spend.</p>
     <div class="check-row">
       <div class="label"></div>
@@ -2557,7 +2697,7 @@ function readFileAsDataUrl(fileInput){
   });
 }
 function lastUpdatedLabel(doc){
-  return doc && doc.updatedAt ? `Last updated: ${new Date(doc.updatedAt).toLocaleString()}` : "Last updated: never";
+  return doc && doc.updatedAt ? `Last updated: ${new Date(doc.updatedAt).toLocaleString('en-GB')}` : "Last updated: never";
 }
 // Selecting "State Permit" hides/disables the district fields (a permit is
 // one or the other, never both); unchecking it re-enables them with the
@@ -2593,7 +2733,7 @@ async function vehicleDetailsEditorHtml(vehicleId){
       </div>
       ${DOC_COPY_TYPES.includes(docType) ? `
       <div class="controls" style="margin-top:4px;">
-        <input type="file" accept="image/*" id="doc_${docType}_copy_${v.id}" style="width:220px" />
+        <input type="file" accept="image/*,application/pdf" id="doc_${docType}_copy_${v.id}" style="width:220px" />
         ${doc.copyUrl ? `<a href="${doc.copyUrl}" target="_blank" rel="noopener">View uploaded copy</a>` : "<span class='muted'>No copy uploaded yet</span>"}
         <span class="muted" style="margin-left:8px;">${lastUpdatedLabel(doc)}</span>
       </div>` : ""}
@@ -2841,7 +2981,7 @@ let editingSubvendorId = null;
 let odometerVerifyShowCompleted = false;
 const ROLE_OPTIONS = [
   ["site_supervisor","Area Supervisor"],["area_supervisor","Regional Supervisor"],["ops_manager","Operations Manager"],
-  ["data_team","Data Team"],["hr","HR"],["owner","Owner"],["bookings","Bookings Department"],
+  ["data_team","Data Team"],["hr","HR"],["owner","Owner"],["bookings","Bookings Department"],["admin","Admin"],
   ["workshop_manager","Workshop Manager"],["workshop_supervisor","Workshop Supervisor"],["mechanic","Mechanic"],["helper","Helper"],["electrician","Electrician"],
 ];
 // Mirrors the server's rule in server.js (canManageUserRole): Owner can
@@ -2852,8 +2992,8 @@ const ROLE_OPTIONS = [
 // convenience (hide buttons/options that would just get a 403 back) - the
 // server enforces the real rule regardless of what the UI shows.
 const ROLE_MANAGEMENT_ALLOWED = {
-  hr: ["site_supervisor","area_supervisor","ops_manager","data_team","bookings",...WORKSHOP_STAFF_ROLES],
-  ops_manager: ["site_supervisor","area_supervisor","data_team","bookings",...WORKSHOP_STAFF_ROLES],
+  hr: ["site_supervisor","area_supervisor","ops_manager","data_team","bookings","admin",...WORKSHOP_STAFF_ROLES],
+  ops_manager: ["site_supervisor","area_supervisor","data_team","bookings","admin",...WORKSHOP_STAFF_ROLES],
 };
 function canManageRole(actorRole, targetRole){
   if(actorRole==="owner") return true;
@@ -2879,7 +3019,7 @@ async function peopleScreen(){
       <td>${u.siteId? siteName(u.siteId): (u.supervises&&u.supervises.length? u.supervises.map(userName).join(", ") : "-")}</td>
       <td>${u.email || "-"}</td>
       <td>${u.phone || "-"}</td>
-      <td>${u.dateOfJoining || "-"}</td>
+      <td>${fmtDMY(u.dateOfJoining)}</td>
       <td>
         ${canEditThisOne ? `
           <button class="btn small secondary" onclick="startEditPerson('${u.id}')">Edit</button>
@@ -3029,7 +3169,7 @@ async function driversCardHtml(){
       <td><b>${d.name}</b></td>
       <td>${d.phone || "-"}</td>
       <td>${d.licenseNumber || "-"}</td>
-      <td>${d.dateOfJoining || "-"}</td>
+      <td>${fmtDMY(d.dateOfJoining)}</td>
       <td>${d.drivingLevel || "-"}</td>
       <td>${d.performanceScore!=null ? d.performanceScore : '<span class="muted">Not yet rated</span>'}</td>
       <td>${driverMileageLabel(summary)}</td>
@@ -3199,7 +3339,7 @@ function driverDocsStatusPanelHtml(d){
   const badge = driverDocsBadgeHtml(d);
   return `<div style="margin-bottom:8px;">
     ${badge}
-    <div class="muted" style="margin-top:4px;">Missing: ${missing.join(", ")}. Due ${d.docsDeadline} - if not uploaded by then, this driver will be automatically archived until the documents are provided.</div>
+    <div class="muted" style="margin-top:4px;">Missing: ${missing.join(", ")}. Due ${fmtDMY(d.docsDeadline)} - if not uploaded by then, this driver will be automatically archived until the documents are provided.</div>
   </div>`;
 }
 function driverLifecycleUniformHtml(d){
@@ -3213,15 +3353,15 @@ function driverLifecycleUniformHtml(d){
 
   const historyRows = hist.slice().reverse().map(s=>`
     <tr>
-      <td>${s.joinedDate||'-'}</td>
-      <td>${s.leftDate||'<span class="muted">Currently active</span>'}</td>
+      <td>${s.joinedDate?fmtDMY(s.joinedDate):'-'}</td>
+      <td>${s.leftDate?fmtDMY(s.leftDate):'<span class="muted">Currently active</span>'}</td>
       <td>${s.exitReason||'-'}</td>
       <td>${s.rehireEligible===null||s.rehireEligible===undefined?'-':(s.rehireEligible?'<span class="badge ok">Yes</span>':'<span class="badge fail">No</span>')}</td>
     </tr>`).join("");
 
   const uniformRows = uniforms.slice().reverse().map(u=>`
     <tr>
-      <td>${u.issuedDate}</td>
+      <td>${fmtDMY(u.issuedDate)}</td>
       <td>₹${u.cost}</td>
       <td>${u.deductionAppliedOnExit!=null ? `₹${u.deductionAppliedOnExit} deducted (left after ${u.exitMonthsElapsed} mo.)` : '<span class="muted">-</span>'}</td>
     </tr>`).join("");
@@ -3232,7 +3372,7 @@ function driverLifecycleUniformHtml(d){
     ${driverDocsStatusPanelHtml(d)}
     <h3 style="margin:16px 0 6px;">Employment status</h3>
     <div style="margin-bottom:8px;">
-      ${isActive ? `<span class="badge ok">Active</span> since ${currentStint?currentStint.joinedDate:'-'}` : `<span class="badge fail">Left</span> on ${currentStint?currentStint.leftDate:'-'}${currentStint&&currentStint.exitReason?' - '+currentStint.exitReason:''}`}
+      ${isActive ? `<span class="badge ok">Active</span> since ${currentStint?fmtDMY(currentStint.joinedDate):'-'}` : `<span class="badge fail">Left</span> on ${currentStint?fmtDMY(currentStint.leftDate):'-'}${currentStint&&currentStint.exitReason?' - '+currentStint.exitReason:''}`}
     </div>
     <table><tr><th>Joined</th><th>Left</th><th>Exit reason</th><th>Rehire eligible</th></tr>
       ${historyRows || "<tr><td colspan='4' class='empty'>No history yet.</td></tr>"}
@@ -3245,7 +3385,7 @@ function driverLifecycleUniformHtml(d){
 
     <h3 style="margin:16px 0 6px;">Uniform</h3>
     ${currentUniform
-      ? `<div style="margin-bottom:8px;">Current pair issued <b>${currentUniform.issuedDate}</b> (₹${currentUniform.cost}), ${uniformMonths} month${uniformMonths===1?'':'s'} ago.
+      ? `<div style="margin-bottom:8px;">Current pair issued <b>${fmtDMY(currentUniform.issuedDate)}</b> (₹${currentUniform.cost}), ${uniformMonths} month${uniformMonths===1?'':'s'} ago.
          ${uniformDue ? `<span class="badge fail" style="margin-left:6px;">New pair due - notify the uniform vendor</span>` : ''}</div>`
       : `<div class="muted" style="margin-bottom:8px;">No uniform recorded yet.</div>`}
     <table><tr><th>Issued</th><th>Cost</th><th>Deduction on exit</th></tr>
@@ -3421,7 +3561,7 @@ async function hrAttendanceScreen(){
   try{ entries = await api(`/attendance?from=${attFrom}&to=${attTo}`); }catch(e){}
   const supRows = entries.map(a=>`
     <tr>
-      <td>${a.date}</td>
+      <td>${fmtDMY(a.date)}</td>
       <td>${a.selfieUrl? `<img class="selfie-thumb" src="${a.selfieUrl}"/>` : "-"}</td>
       <td>${a.userName}</td><td>${roleLabel(a.role)}</td>
       <td>${a.type==='clockin'?'Clock in':'Clock out'}</td>
@@ -3433,7 +3573,7 @@ async function hrAttendanceScreen(){
 
   const driverEntries = await fetchDriverAttendanceRange(attFrom, attTo);
   const driverRows = driverEntries.map(a=>
-    `<tr><td>${a.date}</td><td>${a.driver}</td><td>${a.vehicleReg}</td><td><span class="badge ${a.status==='present'?'ok':'low'}">${a.status}</span></td><td><span class="badge ${a.uniform==='compliant'?'ok':'low'}">${a.uniform}</span></td></tr>`
+    `<tr><td>${fmtDMY(a.date)}</td><td>${a.driver}</td><td>${a.vehicleReg}</td><td><span class="badge ${a.status==='present'?'ok':'low'}">${a.status}</span></td><td><span class="badge ${a.uniform==='compliant'?'ok':'low'}">${a.uniform}</span></td></tr>`
   ).join("");
 
   return `
@@ -3546,7 +3686,7 @@ async function attendanceBackupCardHtml(){
   }
   const rows = history.map(b=>`
     <tr>
-      <td>${new Date(b.takenAt).toLocaleString()}</td>
+      <td>${new Date(b.takenAt).toLocaleString('en-GB')}</td>
       <td>${b.userName}</td>
       <td>${roleLabel(b.role)}</td>
       <td>${nextScheduledDate(b.takenAt)}</td>
@@ -3640,7 +3780,7 @@ async function auditTableHtml(opts){
   } else if(opts.date) params.set("date", opts.date);
   let rows = [];
   try{ rows = await api(`/audit?${params.toString()}`); }catch(e){ return "<div class='empty'>Audit log not available for your role.</div>"; }
-  return `<table><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr>${rows.map(a=>`<tr><td>${new Date(a.ts).toLocaleString()}</td><td>${a.userName}</td><td>${a.action}</td><td>${a.detail}</td></tr>`).join("") || "<tr><td colspan='4' class='empty'>Nothing logged in this window.</td></tr>"}</table>`;
+  return `<table><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr>${rows.map(a=>`<tr><td>${new Date(a.ts).toLocaleString('en-GB')}</td><td>${a.userName}</td><td>${a.action}</td><td>${a.detail}</td></tr>`).join("") || "<tr><td colspan='4' class='empty'>Nothing logged in this window.</td></tr>"}</table>`;
 }
 // Audit Log defaults to today only - pick a different date to look back
 // further, one day at a time.
@@ -3977,7 +4117,7 @@ function expenditureBucketDetailHtml(d){
   if(key==="fuel" || key==="mileage"){
     title = key==="fuel" ? "Fuel - Fill-up History" : "Mileage History";
     const rows = (b.fuel.items||[]).map(r=>`<tr>
-      <td>${r.date}</td><td>${r.distance||0} km</td><td>${r.mileage? r.mileage+' km/l' : '-'}</td>
+      <td>${fmtDMY(r.date)}</td><td>${r.distance||0} km</td><td>${r.mileage? r.mileage+' km/l' : '-'}</td>
       <td>${r.litres!=null? r.litres+' L' : '-'}</td><td>${r.fuelPrice!=null? money(r.fuelPrice) : '-'}</td>
       <td>${r.totalCost!=null? money(r.totalCost): '-'}</td><td>${r.station||'-'}</td><td>${r.paymentMode||'-'}</td>
       <td>${r.belowStandard? '<span class="badge low">Below Standard</span>' : '<span class="badge ok">OK</span>'}</td>
@@ -3988,11 +4128,11 @@ function expenditureBucketDetailHtml(d){
   } else if(key==="salary"){
     title = "Salary - Driver Cost History";
     const histRows = (b.salary.driverHistory||[]).map(s=>`<tr>
-      <td>${s.driverName||'-'}</td><td>${s.assignedFrom}</td><td>${s.assignedTo || '<span class="muted">Present</span>'}</td>
+      <td>${s.driverName||'-'}</td><td>${fmtDMY(s.assignedFrom)}</td><td>${s.assignedTo ? fmtDMY(s.assignedTo) : '<span class="muted">Present</span>'}</td>
       <td>${s.days}</td><td>${money(s.estimatedCost)}</td>
     </tr>`).join("");
     const tempRows = (b.salary.tempDriverItems||[]).map(e=>`<tr>
-      <td>${e.date}</td><td>${e.description||'-'}</td><td>${money(e.amount)}</td><td>${expenditureStatusBadge(e.status)}</td>
+      <td>${fmtDMY(e.date)}</td><td>${e.description||'-'}</td><td>${money(e.amount)}</td><td>${expenditureStatusBadge(e.status)}</td>
     </tr>`).join("");
     inner = `
       <p class="muted">The assigned-driver rows are estimated from each driver's recurring payroll, prorated by days on this vehicle - accurate only from whenever assignment history started being tracked, not retroactively before that. Temporary/stand-in driver costs below are real, logged expenses.</p>
@@ -4005,7 +4145,7 @@ function expenditureBucketDetailHtml(d){
     const labels = {roadTax:"Road Tax", insurance:"Insurance Amount", maintenance:"Maintenance", officeExpenses:"Office Expenses", emi:"EMI"};
     title = labels[key] + " - History";
     const rows = (b[key].items||[]).map(e=>`<tr>
-      <td>${e.date}</td><td>${e.category}</td><td>${e.description||'-'}</td><td>${money(e.amount)}</td>
+      <td>${fmtDMY(e.date)}</td><td>${e.category}</td><td>${e.description||'-'}</td><td>${money(e.amount)}</td>
       <td>${expenditureStatusBadge(e.status)}</td>
       <td>${e.billUrl? `<a href="${e.billUrl}" target="_blank">View</a>` : '-'}</td>
     </tr>`).join("");
@@ -4106,14 +4246,14 @@ function dashboardDetailScreen(metric){
 
   if(metric==="leaves_pending"){
     tableHtml = `<table><tr><th>Driver</th><th>Type</th><th>Start</th><th>End</th><th>Action</th></tr>
-      ${rows.map(l=>`<tr><td>${l.driver}</td><td>${l.type}</td><td>${l.start}</td><td>${l.end}</td>
+      ${rows.map(l=>`<tr><td>${l.driver}</td><td>${l.type}</td><td>${fmtDMY(l.start)}</td><td>${fmtDMY(l.end)}</td>
         <td><button class="btn small" onclick="setLeave('${l.id}','approved')">Approve</button>
         <button class="btn small danger" onclick="setLeave('${l.id}','rejected')">Reject</button></td></tr>`).join("")
         || `<tr><td colspan="5" class="empty">${meta_.empty}</td></tr>`}
       </table>`;
   } else if(metric==="expiring_docs"){
     tableHtml = `<table><tr><th>Vehicle</th><th>Document</th><th>Expiry</th><th>Status</th><th>Area</th><th>Client</th><th>Supervisor</th></tr>
-      ${rows.map(d=>`<tr><td><b>${d.reg}</b></td><td>${d.docType}</td><td>${d.expiry}</td><td><span class="badge low">${d.daysLeft<0?'EXPIRED':d.daysLeft+' days left'}</span></td><td>${d.site}</td><td>${d.client}</td><td>${d.supervisor}</td></tr>`).join("")
+      ${rows.map(d=>`<tr><td><b>${d.reg}</b></td><td>${d.docType}</td><td>${fmtDMY(d.expiry)}</td><td><span class="badge low">${d.daysLeft<0?'EXPIRED':d.daysLeft+' days left'}</span></td><td>${d.site}</td><td>${d.client}</td><td>${d.supervisor}</td></tr>`).join("")
         || `<tr><td colspan="7" class="empty">${meta_.empty}</td></tr>`}
       </table>`;
   } else if(metric==="not_submitted"){
@@ -4363,7 +4503,7 @@ async function priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpen
   const tempRows = tempDriverExpenses.map(e=>{
     const v = e.vehicleId ? vehicles.find(x=>x.id===e.vehicleId) : null;
     return `<tr>
-      <td>${new Date(e.submittedAt).toLocaleDateString()}</td>
+      <td>${new Date(e.submittedAt).toLocaleDateString('en-GB')}</td>
       <td>${(e.tempDriver&&e.tempDriver.name) || '-'}</td>
       <td>${(e.tempDriver&&e.tempDriver.phone) || '-'}</td>
       <td>${(e.tempDriver&&e.tempDriver.upiId) || '-'}</td>
@@ -4548,9 +4688,9 @@ async function backupsCardHtml(){
   try{ list = await api("/admin/backups"); }catch(e){ return ""; }
   const rows = list.slice(0,30).map(b=>`
     <tr>
-      <td>${new Date(b.takenAt).toLocaleString()}</td>
+      <td>${new Date(b.takenAt).toLocaleString('en-GB')}</td>
       <td>${b.reason}</td>
-      <td><button class="btn small secondary" onclick="restoreBackup('${b._id}','${new Date(b.takenAt).toLocaleString()}')">Restore this</button></td>
+      <td><button class="btn small secondary" onclick="restoreBackup('${b._id}','${new Date(b.takenAt).toLocaleString('en-GB')}')">Restore this</button></td>
     </tr>`).join("");
   return `
   <div class="card">
@@ -4596,7 +4736,7 @@ async function backupDownloadsScreen(){
   const history = await fetchBackupHistory();
   const rows = (history||[]).map(b=>`
     <tr>
-      <td>${new Date(b.takenAt).toLocaleString()}</td>
+      <td>${new Date(b.takenAt).toLocaleString('en-GB')}</td>
       <td>${b.userName}</td>
       <td>${roleLabel(b.role)}</td>
     </tr>`).join("");
@@ -4717,7 +4857,7 @@ async function tripsScreen(){
       ${sorted.map(t=>{
         const v = vehicles.find(x=>x.id===t.vehicleId);
         return `<tr>
-          <td>${t.date}${t.scheduledTime? " "+t.scheduledTime : ""}</td>
+          <td>${fmtDMY(t.date)}${t.scheduledTime? " "+t.scheduledTime : ""}</td>
           <td>${v? v.reg : t.vehicleId}</td>
           <td>${driverName(t.driverId)}</td>
           <td>${mapsLinkHtml(t.pickupPoint)}</td>
@@ -4837,12 +4977,12 @@ async function subvendorDetailHtml(id){
       </td>
     </tr>`).join("");
   const incomeRows = summary.incomeEntries.slice(0,20).map(e=>`
-    <tr><td>${e.date}</td><td>${e.source}</td><td>₹${e.amount}</td><td>${e.note||''}</td></tr>`).join("");
+    <tr><td>${fmtDMY(e.date)}</td><td>${e.source}</td><td>₹${e.amount}</td><td>${e.note||''}</td></tr>`).join("");
   const paymentRows = summary.payments.map(p=>`
-    <tr><td>${p.date}</td><td>${p.type}</td><td>₹${p.amount}</td><td>${p.note||''}</td><td>${p.createdByName||''}</td></tr>`).join("");
+    <tr><td>${fmtDMY(p.date)}</td><td>${p.type}</td><td>₹${p.amount}</td><td>${p.note||''}</td><td>${p.createdByName||''}</td></tr>`).join("");
   const advanceRows = summary.advances.map(a=>`
     <tr>
-      <td>${a.date}</td><td>₹${a.principal}</td><td>₹${a.outstandingPrincipal}</td><td>₹${a.interestAccrued} <span class="muted">(3%/mo)</span></td>
+      <td>${fmtDMY(a.date)}</td><td>₹${a.principal}</td><td>₹${a.outstandingPrincipal}</td><td>₹${a.interestAccrued} <span class="muted">(3%/mo)</span></td>
       <td><span class="badge ${a.status==='outstanding'?'pending':'approved'}">${a.status.toUpperCase()}</span></td>
       <td>${a.status==='outstanding' ? `<button class="btn small secondary" onclick="settleSubvendorAdvance('${id}','${a.id}', ${a.outstandingPrincipal})">Settle</button>` : ''}</td>
     </tr>`).join("");
@@ -4982,7 +5122,7 @@ async function subvendorExpenseCardHtml(v, sv){
   try{ payments = await api(`/subvendors/${sv.id}/payments`); }catch(e){}
   const myPayments = payments.filter(p=>p.vehicleId===v.id).slice(0,10);
   const rows = myPayments.map(p=>`
-    <tr><td>${p.date}</td><td>${p.type}</td><td>₹${p.amount}</td><td>${p.note||''}</td></tr>`).join("");
+    <tr><td>${fmtDMY(p.date)}</td><td>${p.type}</td><td>₹${p.amount}</td><td>${p.note||''}</td></tr>`).join("");
   return `
   <div class="card">
     <h2 class="section-title">${v.reg} - ${sv.name}</h2>
@@ -5067,13 +5207,13 @@ async function toggleOdometerVerifyShowCompleted(checked){
 function driverLocationLineHtml(loc){
   if(!loc) return "Location: not available yet";
   const sourceLabel = {live:"Live tracking", closing_reading:"From closing reading", opening_reading:"From opening reading", login:"From login"}[loc.source] || "Last known";
-  const when = loc.ts ? new Date(loc.ts).toLocaleString() : "";
+  const when = loc.ts ? new Date(loc.ts).toLocaleString('en-GB') : "";
   return `Location (${sourceLabel}${when? ', '+when:''}): ${mapsLocationLinkHtml(loc.lat, loc.lng, "Open in Maps")}`;
 }
 function odometerShiftCardHtml(r){
   return `
   <div class="card">
-    <h2 class="section-title">${r.driverName}${r.driverPhone? ' &middot; '+r.driverPhone:''} - ${r.vehicleReg||'No vehicle assigned'} <span class="muted" style="font-weight:400;">(${r.date||'-'})</span></h2>
+    <h2 class="section-title">${r.driverName}${r.driverPhone? ' &middot; '+r.driverPhone:''} - ${r.vehicleReg||'No vehicle assigned'} <span class="muted" style="font-weight:400;">(${r.date?fmtDMY(r.date):'-'})</span></h2>
     <div class="muted" style="margin-bottom:8px;">${r.hasSupervisor ? `Supervisor: ${r.supervisorName}` : '<span class="badge rejected">No Supervisor Assigned</span>'}</div>
     <div class="muted" style="margin-bottom:8px;">${driverLocationLineHtml(r.lastLocation)}</div>
     ${odometerPointBlockHtml(r.id,'open',r.open,r.canAct)}
@@ -5098,7 +5238,7 @@ function odometerPointBlockHtml(shiftId, point, p, canAct){
     ${p.photoUrl ? ` &middot; <a href="${p.photoUrl}" target="_blank">View photo</a>` : ''}
     <br/>
     ${p.verified
-      ? `<span class="badge approved">VERIFIED</span> <span class="muted">by ${p.verifiedByName}${p.verifiedAt? ' at '+new Date(p.verifiedAt).toLocaleString():''}</span>`
+      ? `<span class="badge approved">VERIFIED</span> <span class="muted">by ${p.verifiedByName}${p.verifiedAt? ' at '+new Date(p.verifiedAt).toLocaleString('en-GB'):''}</span>`
       : (canAct ? `<span class="badge pending">PENDING</span> <button class="btn small" onclick="verifyOdometerReading('${shiftId}','${point}')">Approve</button>` : `<span class="badge pending">PENDING</span>`)}
   </div>`;
 }
@@ -5158,7 +5298,7 @@ async function repairRequestsScreen(){
   const table = rows.length ? `
   <table><tr><th>Date</th><th>Vehicle</th><th>Issue</th><th>Urgency</th><th>Raised By</th><th>Status</th><th>Assigned To</th><th>Cost</th><th></th></tr>
   ${rows.map(r=>`<tr>
-    <td>${new Date(r.createdAt).toLocaleDateString()}</td>
+    <td>${new Date(r.createdAt).toLocaleDateString('en-GB')}</td>
     <td>${r.vehicleReg}</td>
     <td>${r.issueDescription}</td>
     <td>${r.urgency}</td>
@@ -5218,7 +5358,7 @@ async function workshopScreen(){
     ${incoming.length===0 ? `<div class="empty">Nothing waiting on assignment.</div>` : `
     <table><tr><th>Date</th><th>Vehicle</th><th>Issue</th><th>Urgency</th><th>Raised By</th><th>Assign to</th><th></th></tr>
     ${incoming.map(r=>`<tr>
-      <td>${new Date(r.createdAt).toLocaleDateString()}</td>
+      <td>${new Date(r.createdAt).toLocaleDateString('en-GB')}</td>
       <td>${r.vehicleReg}</td>
       <td>${r.issueDescription}</td>
       <td>${r.urgency}</td>
@@ -5240,7 +5380,7 @@ async function workshopScreen(){
     <h2 class="section-title">All Requests</h2>
     <table><tr><th>Date</th><th>Vehicle</th><th>Issue</th><th>Status</th><th>Assigned To</th><th>Cost</th></tr>
     ${requests.map(r=>`<tr>
-      <td>${new Date(r.createdAt).toLocaleDateString()}</td>
+      <td>${new Date(r.createdAt).toLocaleDateString('en-GB')}</td>
       <td>${r.vehicleReg}</td>
       <td>${r.issueDescription}</td>
       <td>${repairStatusBadge(r.status)}</td>
@@ -5269,7 +5409,7 @@ async function workshopScreen(){
     <div class="check-row" style="margin-top:8px;">
       <div class="label">Invoice photo/scan</div>
       <div class="controls">
-        <input type="file" id="wpInvoiceFile" accept="image/*" style="display:none;" onchange="handleWorkshopInvoiceFile(event)" />
+        <input type="file" id="wpInvoiceFile" accept="image/*,application/pdf" style="display:none;" onchange="handleWorkshopInvoiceFile(event)" />
         <button class="btn small" type="button" onclick="openDocumentScanner(onWorkshopInvoiceScanned)">📷 Scan Document</button>
         <button class="btn small secondary" type="button" onclick="document.getElementById('wpInvoiceFile').click()">Attach Photo (no scan)</button>
         <span id="wpInvoicePreview" class="muted">No invoice attached yet</span>
@@ -5282,7 +5422,7 @@ async function workshopScreen(){
     ${purchases.length===0 ? `<div class="empty">No purchases logged yet.</div>` : `
     <table><tr><th>Date</th><th>By</th><th>Items</th><th>Total</th><th>Invoice</th></tr>
     ${purchases.slice(0,30).map(p=>`<tr>
-      <td>${new Date(p.createdAt).toLocaleDateString()}</td>
+      <td>${new Date(p.createdAt).toLocaleDateString('en-GB')}</td>
       <td>${p.purchasedByName}</td>
       <td>${p.items.map(i=>`${i.qty}${i.unit?' '+i.unit:''} ${i.name}`).join(", ")}</td>
       <td>Rs ${p.totalAmount.toLocaleString('en-IN')}</td>

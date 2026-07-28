@@ -417,6 +417,14 @@ function nowIso() {
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
+// Every date is STORED as ISO (YYYY-MM-DD) - only used for human-readable
+// text the server generates itself (e.g. an audit-trail sentence). Never use
+// this on a value that gets stored back into the data model.
+function fmtDMY(dateStr) {
+  if (!dateStr) return "-";
+  const m = String(dateStr).slice(0, 10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(dateStr);
+}
 // RC Date is the registration date, not an expiry - RC expiry is always 15
 // years from registration, computed here rather than entered by hand.
 function computeRcExpiry(rcDate) {
@@ -529,6 +537,7 @@ function roleLabelServer(role) {
       owner: "Owner",
       hr: "HR",
       bookings: "Bookings Department",
+      admin: "Admin",
       workshop_manager: "Workshop Manager",
       workshop_supervisor: "Workshop Supervisor",
       mechanic: "Mechanic",
@@ -764,6 +773,12 @@ app.get("/api/meta", requireAuth, (req, res) => {
 });
 
 // ---------- USERS (People admin) ----------
+// NOTE: ADMIN_ROLES below is a pre-existing PERMISSION-TIER grouping
+// (ops_manager/owner/data_team share a set of elevated permissions) - it is
+// NOT the same thing as the "admin" role in VALID_ROLES a few lines down,
+// which is a distinct, narrowly-scoped staff role (Dashboard + vehicle
+// documents + vehicle onboarding only). The similar names are coincidental;
+// don't assume one implies the other.
 const ADMIN_ROLES = ["ops_manager", "owner", "data_team"];
 const VALID_ROLES = [
   "site_supervisor",
@@ -773,6 +788,7 @@ const VALID_ROLES = [
   "owner",
   "hr",
   "bookings",
+  "admin",
   ...WORKSHOP_STAFF_ROLES,
 ];
 
@@ -791,8 +807,8 @@ const VALID_ROLES = [
 const PEOPLE_EDITOR_ROLES = ["ops_manager", "owner", "hr"];
 const PEOPLE_VIEWER_ROLES = ["ops_manager", "owner", "hr", "data_team"];
 const ROLE_MANAGEMENT_ALLOWED = {
-  hr: ["site_supervisor", "area_supervisor", "ops_manager", "data_team", "bookings", ...WORKSHOP_STAFF_ROLES],
-  ops_manager: ["site_supervisor", "area_supervisor", "data_team", "bookings", ...WORKSHOP_STAFF_ROLES],
+  hr: ["site_supervisor", "area_supervisor", "ops_manager", "data_team", "bookings", "admin", ...WORKSHOP_STAFF_ROLES],
+  ops_manager: ["site_supervisor", "area_supervisor", "data_team", "bookings", "admin", ...WORKSHOP_STAFF_ROLES],
 };
 function canManageUserRole(actorRole, targetRole) {
   if (actorRole === "owner") return true;
@@ -1240,7 +1256,7 @@ async function archiveOverdueDriverDocs() {
     if (driverDocsComplete(driver)) continue;
     const stint = currentEmploymentStint(driver);
     const missing = MANDATORY_DRIVER_DOC_FIELDS.filter((f) => !driver[f]).map((f) => f.replace(/CopyUrl$|Url$/, ""));
-    const reason = `Mandatory documents (${missing.join(", ")}) were not uploaded within the ${DRIVER_DOC_DEADLINE_DAYS}-day deadline (due ${driver.docsDeadline}).`;
+    const reason = `Mandatory documents (${missing.join(", ")}) were not uploaded within the ${DRIVER_DOC_DEADLINE_DAYS}-day deadline (due ${fmtDMY(driver.docsDeadline)}).`;
     if (stint) {
       stint.leftDate = today;
       stint.exitReason = reason;
@@ -1773,7 +1789,7 @@ app.get("/api/vehicles", requireAuth, (req, res) => {
 app.post(
   "/api/vehicles",
   requireAuth,
-  requireRole(...ADMIN_ROLES, "site_supervisor", "area_supervisor"),
+  requireRole(...ADMIN_ROLES, "site_supervisor", "area_supervisor", "admin"),
   h(async (req, res) => {
     const { reg, route, usage, standardMileage, make, model, engineNo, chassisNo, rcDate, seatingCapacity, vehicleType, fuelType } = req.body || {};
     // A vehicle record without its full onboarding data is not usable for
@@ -1915,7 +1931,10 @@ app.patch(
 app.patch(
   "/api/vehicles/:id/details",
   requireAuth,
-  requireRole(...ADMIN_ROLES),
+  // Admin needs this too (not just ADMIN_ROLES) - RC Date lives here, and RC
+  // expiry (one of the document types Admin manages) is always computed FROM
+  // RC Date, so Admin can't fully manage the RC document without it.
+  requireRole(...ADMIN_ROLES, "admin"),
   h(async (req, res) => {
     const vehicle = db.vehicles.find((v) => v.id === req.params.id);
     if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
@@ -2223,7 +2242,7 @@ app.patch(
     const vehicle = db.vehicles.find((v) => v.id === req.params.id);
     if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
     const isOwnerSupervisor = ["site_supervisor", "area_supervisor"].includes(req.user.role) && vehicle.supervisorId === req.user.id;
-    if (!isOwnerSupervisor && !ADMIN_ROLES.includes(req.user.role)) {
+    if (!isOwnerSupervisor && !ADMIN_ROLES.includes(req.user.role) && req.user.role !== "admin") {
       return res.status(403).json({ error: "Not allowed to edit this vehicle's documents." });
     }
     const { docType, number, expiry, isStatePermit, districtCount, districtNames, copy } = req.body || {};
