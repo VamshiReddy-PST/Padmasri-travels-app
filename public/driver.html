@@ -25,6 +25,25 @@
   h1.page-title{font-size:19px;margin:2px 0 16px;color:var(--ink);text-align:center;}
   h2.section-title{font-size:15px;margin:0 0 12px;color:var(--ink);}
   .muted{color:var(--grey);font-size:12.5px;}
+  /* Company Hierarchy tree (see Profile tab) - same pure-CSS nested-list
+     technique as the staff app, sized down for a narrow phone screen. */
+  .org-tree-wrap{overflow-x:auto;padding:10px 0;}
+  .org-tree, .org-tree ul{display:flex;justify-content:center;list-style:none;margin:0;padding:0;}
+  .org-tree li{display:flex;flex-direction:column;align-items:center;padding:18px 6px 0 6px;position:relative;}
+  .org-tree li::before, .org-tree li::after{content:'';position:absolute;top:0;right:50%;border-top:2px solid var(--border);width:50%;height:18px;}
+  .org-tree li::after{right:auto;left:50%;border-left:2px solid var(--border);}
+  .org-tree li:only-child{padding-top:0;}
+  .org-tree li:only-child::before, .org-tree li:only-child::after{display:none;}
+  .org-tree > li:first-child::before, .org-tree > li:last-child::after{border:0 none;}
+  .org-tree li:first-child::after{border-radius:5px 0 0 0;}
+  .org-tree li:last-child::before{border-right:2px solid var(--border);border-radius:0 5px 0 0;}
+  .org-tree ul ul::before{content:'';position:absolute;top:0;left:50%;border-left:2px solid var(--border);width:0;height:18px;}
+  .org-box{border:1px solid var(--border);border-radius:8px;background:#fff;padding:6px 9px;min-width:88px;font-size:11px;}
+  .org-box .org-role{font-size:9.5px;color:var(--grey);text-transform:uppercase;letter-spacing:.03em;margin-bottom:2px;}
+  .org-box .org-name{font-weight:700;font-size:11.5px;}
+  .org-box .org-phone{font-size:9.5px;color:var(--grey);}
+  .org-box.org-vacant{border-style:dashed;color:var(--grey);font-style:italic;}
+  .org-box.org-summary{background:var(--accent-light);}
   .banner{background:#FBF3D6;border:1px solid #EBDA9B;color:#7a5a00;padding:12px 14px;border-radius:14px;font-size:13.5px;margin-bottom:16px;}
   .banner.error{background:#fbe4e1;border-color:#eab3ab;color:#7a2115;}
   .banner.ok{background:#E9F3DC;border-color:#C4DBA0;color:#3A5220;}
@@ -235,6 +254,8 @@ async function loadWorkshopTabData(){
     try{ workshopRequests = await workshopApi("/workshop-auth/repair-requests"); }catch(e){}
   } else if(workshopTab==="purchases"){
     try{ workshopPurchases = await workshopApi("/workshop-auth/workshop-purchases"); }catch(e){}
+  } else if(workshopTab==="account"){
+    await fetchHierarchy();
   }
 }
 async function setWorkshopTab(tab){
@@ -300,7 +321,7 @@ async function refreshMe(){
 // always has fresh data without re-fetching every tab on every poll.
 async function loadActiveTabData(){
   if(driverTab==="upcoming") await Promise.all([fetchMonthTrips(), fetchMyLeaveRequests()]);
-  else if(driverTab==="profile") await Promise.all([fetchPayslip(), fetchAttendance()]);
+  else if(driverTab==="profile") await Promise.all([fetchPayslip(), fetchAttendance(), fetchHierarchy()]);
   else if(driverTab==="documents") await fetchDocuments();
   else await Promise.all([fetchCurrentTrip(), fetchMyRepairRequests()]); // "current" tab, and the default
 }
@@ -345,6 +366,84 @@ async function setAttendanceMonth(v){
 }
 async function fetchDocuments(){
   try{ documentsData = await api("/driver-auth/documents"); }catch(e){ documentsData = null; }
+}
+
+// ---------- COMPANY HIERARCHY (Profile/Account tab - who to contact) ----------
+// Same shared server endpoint family as the staff app (public/index.html),
+// just reached through whichever token this device is logged in with -
+// drivers hit /driver-auth/hierarchy, workshop staff hit
+// /workshop-auth/hierarchy. Both return the identical buildHierarchyData()
+// shape from server.js, so orgBox/orgSummaryBox/hierarchyTreeHtml below are
+// copied verbatim from index.html's versions.
+let hierarchyData = null;
+async function fetchHierarchy(){
+  try{
+    hierarchyData = portalType === "workshop"
+      ? await workshopApi("/workshop-auth/hierarchy")
+      : await api("/driver-auth/hierarchy");
+  }catch(e){ hierarchyData = null; }
+}
+function orgBox(label, people, note){
+  if(!people || !people.length){
+    return `<div class="org-box org-vacant"><div class="org-role">${label}</div><div class="org-name">Vacant</div></div>`;
+  }
+  return `<div class="org-box">
+    <div class="org-role">${label}</div>
+    ${people.map(p=>`<div class="org-name">${p.name}</div>${p.phone?`<div class="org-phone">${p.phone}</div>`:''}`).join("")}
+    ${note?`<div class="org-phone">${note}</div>`:''}
+  </div>`;
+}
+function orgSummaryBox(label, text){
+  return `<div class="org-box org-summary"><div class="org-role">${label}</div><div class="org-name">${text}</div></div>`;
+}
+function orgWorkshopStaffLis(staffGroups){
+  return staffGroups.map(g=>`<li>${orgBox(g.label, g.people)}</li>`).join("");
+}
+function hierarchyTreeHtml(data){
+  const opsExec = data.executives.find(e=>e.role==="ops_manager");
+  const otherExecs = data.executives.filter(e=>e.role!=="ops_manager");
+
+  const areaLi = (a) => `<li>${orgBox("Area Supervisor",[a], `${a.vehicleCount} vehicle${a.vehicleCount===1?'':'s'}`)}</li>`;
+  const regionalLi = (rs) => {
+    const children = rs.areas.map(areaLi).join("");
+    return `<li>
+      ${orgBox("Regional Supervisor",[rs], rs.ownVehicleCount ? `+ ${rs.ownVehicleCount} own vehicle${rs.ownVehicleCount===1?'':'s'}` : '')}
+      ${children ? `<ul>${children}</ul>` : ""}
+    </li>`;
+  };
+  const driversLi = `<li>${orgSummaryBox("Drivers", `${data.totalDrivers} active driver${data.totalDrivers===1?'':'s'} - report to their Area Supervisor`)}</li>`;
+  const opsChildren = data.regionalSupervisors.map(regionalLi).join("") + data.unassignedAreas.map(areaLi).join("") + driversLi;
+  const opsLi = `<li>
+    ${orgBox("Operations Manager", opsExec ? opsExec.people : [])}
+    <ul>${opsChildren}</ul>
+  </li>`;
+
+  const execLis = otherExecs.map(e=>`<li>${orgBox(e.label, e.people)}</li>`).join("");
+
+  const wsStaffLis = orgWorkshopStaffLis(data.workshop.staff);
+  const wsSupLis = data.workshop.supervisors.length
+    ? data.workshop.supervisors.map(s=>`<li>${orgBox("Workshop Supervisor",[s])}<ul>${wsStaffLis}</ul></li>`).join("")
+    : `<li>${orgBox("Workshop Supervisor",[])}<ul>${wsStaffLis}</ul></li>`;
+  const workshopLi = `<li>
+    ${orgBox("Workshop Manager", data.workshop.managers)}
+    <ul>${wsSupLis}</ul>
+  </li>`;
+
+  return `<ul class="org-tree"><li>
+    ${orgBox("Owner", data.owner)}
+    <ul>${opsLi}${execLis}${workshopLi}</ul>
+  </li></ul>`;
+}
+function hierarchyCardHtml(){
+  if(!hierarchyData){
+    return `<div class="card"><h2 class="section-title">Company Hierarchy</h2><div class="muted">Could not load the hierarchy right now - try again in a moment.</div></div>`;
+  }
+  return `
+  <div class="card">
+    <h2 class="section-title">Company Hierarchy</h2>
+    <div class="muted" style="margin-bottom:10px;">Who reports to whom - find the right person to contact for a problem. A dashed "Vacant" box means nobody currently holds that role.</div>
+    <div class="org-tree-wrap">${hierarchyTreeHtml(hierarchyData)}</div>
+  </div>`;
 }
 
 // ---------- boot ----------
@@ -963,7 +1062,7 @@ async function handleAccountLogout(){
   render();
 }
 function profileTabHtml(){
-  return payslipCardHtml() + attendanceCardHtml() + accountInfoCardHtml();
+  return payslipCardHtml() + attendanceCardHtml() + accountInfoCardHtml() + hierarchyCardHtml();
 }
 
 // ---------- Documents tab ----------
@@ -1382,7 +1481,7 @@ function workshopAccountTabHtml(){
     <div class="doc-row"><div>Role</div><div>${roleLabelClient(workshopUser.role)}</div></div>
     <div class="doc-row"><div>Mobile Number</div><div>${workshopUser.phone || "-"}</div></div>
     <button class="big-btn danger" style="margin-top:14px;" ${workshopBusy?"disabled":""} onclick="doWorkshopLogout()">${workshopBusy?'<span class="spinner"></span>Logging out...':"Log Out"}</button>
-  </div>`;
+  </div>` + hierarchyCardHtml();
 }
 async function doWorkshopLogout(){
   if(workshopBusy) return;

@@ -66,6 +66,27 @@
   .badge.low{background:#fbe4e1;color:var(--red);}
   .badge.in_process{background:var(--purple-light);color:var(--purple-dark);}
   .badge.completed{background:#E9F3DC;color:var(--green);}
+  /* Company Hierarchy - pure-CSS org chart tree (nested lists with
+     pseudo-element connector lines), classic technique, no JS layout/SVG
+     library needed. Scrolls horizontally on narrow screens since a full
+     fleet org chart can get wide. */
+  .org-tree-wrap{overflow-x:auto;padding:10px 0;}
+  .org-tree, .org-tree ul{display:flex;justify-content:center;list-style:none;margin:0;padding:0;}
+  .org-tree li{display:flex;flex-direction:column;align-items:center;padding:24px 8px 0 8px;position:relative;}
+  .org-tree li::before, .org-tree li::after{content:'';position:absolute;top:0;right:50%;border-top:2px solid var(--border);width:50%;height:24px;}
+  .org-tree li::after{right:auto;left:50%;border-left:2px solid var(--border);}
+  .org-tree li:only-child{padding-top:0;}
+  .org-tree li:only-child::before, .org-tree li:only-child::after{display:none;}
+  .org-tree > li:first-child::before, .org-tree > li:last-child::after{border:0 none;}
+  .org-tree li:first-child::after{border-radius:5px 0 0 0;}
+  .org-tree li:last-child::before{border-right:2px solid var(--border);border-radius:0 5px 0 0;}
+  .org-tree ul ul::before{content:'';position:absolute;top:0;left:50%;border-left:2px solid var(--border);width:0;height:24px;}
+  .org-box{border:1px solid var(--border);border-radius:8px;background:#fff;padding:8px 12px;min-width:120px;box-shadow:0 1px 2px rgba(0,0,0,.05);}
+  .org-box .org-role{font-size:11px;color:var(--muted,#888);text-transform:uppercase;letter-spacing:.03em;margin-bottom:2px;}
+  .org-box .org-name{font-weight:700;font-size:13px;}
+  .org-box .org-phone{font-size:11px;color:var(--muted,#888);}
+  .org-box.org-vacant{border-style:dashed;color:var(--muted,#888);font-style:italic;}
+  .org-box.org-summary{background:var(--accent-light,#f7f7f9);}
   table{width:100%;border-collapse:collapse;font-size:13px;}
   table th{text-align:left;background:var(--accent-light);color:var(--ink);padding:8px 10px;font-size:12px;}
   table td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
@@ -805,6 +826,77 @@ async function submitVoluntaryPasswordChange(){
   }catch(e){ alert(e.message); }
 }
 
+// ---------- COMPANY HIERARCHY (every role gets this - who to contact) ----------
+let hierarchyData = null;
+async function loadHierarchy(){
+  try{ hierarchyData = await api("/hierarchy"); }catch(e){ hierarchyData = null; }
+}
+function orgBox(label, people, note){
+  if(!people || !people.length){
+    return `<div class="org-box org-vacant"><div class="org-role">${label}</div><div class="org-name">Vacant</div></div>`;
+  }
+  return `<div class="org-box">
+    <div class="org-role">${label}</div>
+    ${people.map(p=>`<div class="org-name">${p.name}</div>${p.phone?`<div class="org-phone">${p.phone}</div>`:''}`).join("")}
+    ${note?`<div class="org-phone">${note}</div>`:''}
+  </div>`;
+}
+function orgSummaryBox(label, text){
+  return `<div class="org-box org-summary"><div class="org-role">${label}</div><div class="org-name">${text}</div></div>`;
+}
+function orgWorkshopStaffLis(staffGroups){
+  return staffGroups.map(g=>`<li>${orgBox(g.label, g.people)}</li>`).join("");
+}
+// Field hierarchy (Regional/Area Supervisors + drivers) nests under
+// Operations; HR/Data Team/Admin/Bookings are separate functional branches
+// reporting to the Owner; Workshop is its own branch. See buildHierarchyData
+// in server.js for how this is derived from the actual people in each role.
+function hierarchyTreeHtml(data){
+  const opsExec = data.executives.find(e=>e.role==="ops_manager");
+  const otherExecs = data.executives.filter(e=>e.role!=="ops_manager");
+
+  const areaLi = (a) => `<li>${orgBox("Area Supervisor",[a], `${a.vehicleCount} vehicle${a.vehicleCount===1?'':'s'}`)}</li>`;
+  const regionalLi = (rs) => {
+    const children = rs.areas.map(areaLi).join("");
+    return `<li>
+      ${orgBox("Regional Supervisor",[rs], rs.ownVehicleCount ? `+ ${rs.ownVehicleCount} own vehicle${rs.ownVehicleCount===1?'':'s'}` : '')}
+      ${children ? `<ul>${children}</ul>` : ""}
+    </li>`;
+  };
+  const driversLi = `<li>${orgSummaryBox("Drivers", `${data.totalDrivers} active driver${data.totalDrivers===1?'':'s'} - report to their Area Supervisor`)}</li>`;
+  const opsChildren = data.regionalSupervisors.map(regionalLi).join("") + data.unassignedAreas.map(areaLi).join("") + driversLi;
+  const opsLi = `<li>
+    ${orgBox("Operations Manager", opsExec ? opsExec.people : [])}
+    <ul>${opsChildren}</ul>
+  </li>`;
+
+  const execLis = otherExecs.map(e=>`<li>${orgBox(e.label, e.people)}</li>`).join("");
+
+  const wsStaffLis = orgWorkshopStaffLis(data.workshop.staff);
+  const wsSupLis = data.workshop.supervisors.length
+    ? data.workshop.supervisors.map(s=>`<li>${orgBox("Workshop Supervisor",[s])}<ul>${wsStaffLis}</ul></li>`).join("")
+    : `<li>${orgBox("Workshop Supervisor",[])}<ul>${wsStaffLis}</ul></li>`;
+  const workshopLi = `<li>
+    ${orgBox("Workshop Manager", data.workshop.managers)}
+    <ul>${wsSupLis}</ul>
+  </li>`;
+
+  return `<ul class="org-tree"><li>
+    ${orgBox("Owner", data.owner)}
+    <ul>${opsLi}${execLis}${workshopLi}</ul>
+  </li></ul>`;
+}
+async function hierarchyScreen(){
+  if(!hierarchyData) await loadHierarchy();
+  if(!hierarchyData) return `<h1 class="page-title">Company Hierarchy</h1><div class="empty">Could not load the hierarchy right now - try again in a moment.</div>`;
+  return `
+  <h1 class="page-title">Company Hierarchy</h1>
+  <div class="card">
+    <div class="muted" style="margin-bottom:10px;">Who reports to whom - find the right person to contact for a problem. Boxes with a dashed border and "Vacant" mean nobody currently holds that role.</div>
+    <div class="org-tree-wrap">${hierarchyTreeHtml(hierarchyData)}</div>
+  </div>`;
+}
+
 // ---------- shell ----------
 // Every role gets the free Fleet Assistant tab (["smart_assistant", ...]) -
 // it's a zero-cost, built-in tool, not a paid subscription seat, so there's
@@ -813,6 +905,13 @@ async function submitVoluntaryPasswordChange(){
 // the assistant sits right next to it) so each role's actual primary
 // screen stays first/most prominent.
 function tabsFor(role){
+  return tabsForInner(role).concat([["hierarchy","Company Hierarchy"]]);
+}
+// Every role, including the new Admin role, gets the Company Hierarchy tab
+// appended last (see tabsFor() above) - it's a zero-permission, read-only
+// screen everyone should be able to reach, same reasoning as the free Fleet
+// Assistant tab.
+function tabsForInner(role){
   if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
@@ -900,6 +999,7 @@ async function routeView(){
   if(tab==="repairs") return repairRequestsScreen();
   if(tab==="workshop") return workshopScreen();
   if(tab==="smart_assistant") return smartAssistantScreen();
+  if(tab==="hierarchy") return hierarchyScreen();
   if(tab==="onboarding") return supervisorOnboardingScreen();
   if(tab==="approvals") return fleetApprovalsScreen();
   // "My Vehicles" is shared by Area Supervisor and Regional Supervisor - an Area

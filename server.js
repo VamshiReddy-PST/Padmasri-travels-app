@@ -772,6 +772,67 @@ app.get("/api/meta", requireAuth, (req, res) => {
   });
 });
 
+// ---------- COMPANY HIERARCHY (who reports to whom - visible to everyone,
+// staff and drivers alike, so anyone can see who to contact for a problem) ----------
+function personBrief(u) {
+  return { id: u.id, name: u.name, phone: u.phone || "" };
+}
+// Field hierarchy (vehicles/drivers) sits under Operations; HR, Data Team,
+// Admin and Bookings Department are separate functional branches reporting
+// directly to the Owner; Workshop is its own branch, parallel to Operations.
+// This mirrors how the app's own screens are organised (Operations tab vs
+// Workshop tab vs People/HR), not a formally declared org chart - if the
+// real reporting lines differ, this is an easy function to adjust.
+function buildHierarchyData() {
+  const active = (u) => u.active !== false;
+  const owner = db.users.filter((u) => u.role === "owner" && active(u)).map(personBrief);
+  const EXEC_ROLES = ["ops_manager", "hr", "data_team", "admin", "bookings"];
+  const executives = EXEC_ROLES.map((role) => ({
+    role,
+    label: roleLabelServer(role),
+    people: db.users.filter((u) => u.role === role && active(u)).map(personBrief),
+  }));
+
+  const regionalSupervisors = db.users
+    .filter((u) => u.role === "area_supervisor" && active(u))
+    .map((rs) => {
+      const areaIds = new Set(rs.supervises || []);
+      const areas = db.users
+        .filter((u) => u.role === "site_supervisor" && active(u) && areaIds.has(u.id))
+        .map((as) => ({
+          ...personBrief(as),
+          vehicleCount: db.vehicles.filter((v) => v.supervisorId === as.id && vehicleIsApproved(v)).length,
+        }));
+      return {
+        ...personBrief(rs),
+        areas,
+        ownVehicleCount: db.vehicles.filter((v) => v.supervisorId === rs.id && vehicleIsApproved(v)).length,
+      };
+    });
+  const assignedAreaIds = new Set(regionalSupervisors.flatMap((rs) => rs.areas.map((a) => a.id)));
+  const unassignedAreas = db.users
+    .filter((u) => u.role === "site_supervisor" && active(u) && !assignedAreaIds.has(u.id))
+    .map((as) => ({
+      ...personBrief(as),
+      vehicleCount: db.vehicles.filter((v) => v.supervisorId === as.id && vehicleIsApproved(v)).length,
+    }));
+
+  const totalDrivers = db.drivers.filter((d) => d.active !== false).length;
+
+  const workshop = {
+    managers: db.users.filter((u) => u.role === "workshop_manager" && active(u)).map(personBrief),
+    supervisors: db.users.filter((u) => u.role === "workshop_supervisor" && active(u)).map(personBrief),
+    staff: ["mechanic", "helper", "electrician"].map((role) => ({
+      role,
+      label: roleLabelServer(role),
+      people: db.users.filter((u) => u.role === role && active(u)).map(personBrief),
+    })),
+  };
+
+  return { owner, executives, regionalSupervisors, unassignedAreas, totalDrivers, workshop };
+}
+app.get("/api/hierarchy", requireAuth, (req, res) => res.json(buildHierarchyData()));
+
 // ---------- USERS (People admin) ----------
 // NOTE: ADMIN_ROLES below is a pre-existing PERMISSION-TIER grouping
 // (ops_manager/owner/data_team share a set of elevated permissions) - it is
@@ -4083,6 +4144,10 @@ function driverAuth(req, res, next) {
   next();
 }
 
+// Same company hierarchy every staff member sees (see buildHierarchyData()
+// near /api/meta) - drivers get it too, so they can see who to contact.
+app.get("/api/driver-auth/hierarchy", driverAuth, (req, res) => res.json(buildHierarchyData()));
+
 app.post(
   "/api/driver-auth/login",
   h(async (req, res) => {
@@ -5101,6 +5166,9 @@ function workshopAuth(req, res, next) {
   req.workshopToken = token;
   next();
 }
+
+// Same company hierarchy everyone else sees (see buildHierarchyData()).
+app.get("/api/workshop-auth/hierarchy", workshopAuth, (req, res) => res.json(buildHierarchyData()));
 
 app.post(
   "/api/workshop-auth/login",
