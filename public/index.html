@@ -56,6 +56,28 @@
   .kpi.warn .num{color:var(--amber);}
   .kpi.bad .num{color:var(--red);}
   .kpi.good .num{color:var(--green);}
+  /* Live Tracking card - a compact, Fleetx-style status strip: colored dot +
+     status up top, a few small stat tiles, a simple fuel bar, and a location
+     line. Deliberately plain (no table, no borders-within-borders) so it
+     reads at a glance the way Fleetx's own dashboard does. */
+  .live-track{border:1px solid var(--border);border-radius:16px;background:var(--card);padding:16px;margin-bottom:14px;}
+  .live-track-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px;}
+  .live-track-status{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14.5px;color:var(--ink);}
+  .live-track-status .dot{width:10px;height:10px;border-radius:50%;background:var(--grey);flex:none;}
+  .live-track-status .dot.ok{background:var(--green);box-shadow:0 0 0 4px rgba(46,125,50,.14);}
+  .live-track-status .dot.pending{background:var(--amber);box-shadow:0 0 0 4px rgba(184,134,11,.14);}
+  .live-track-status .dot.low{background:var(--red);box-shadow:0 0 0 4px rgba(192,57,43,.14);}
+  .live-track-updated{font-size:11.5px;color:var(--grey);}
+  .live-track-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:10px;margin-bottom:12px;}
+  .live-track-stat{background:var(--bg);border-radius:12px;padding:9px 12px;}
+  .live-track-stat .v{font-size:17px;font-weight:700;color:var(--ink);}
+  .live-track-stat .l{font-size:11px;color:var(--grey);margin-top:1px;}
+  .live-track-fuel{margin-bottom:10px;}
+  .live-track-fuel-track{height:7px;border-radius:5px;background:var(--border);overflow:hidden;margin-top:5px;}
+  .live-track-fuel-track > div{height:100%;border-radius:5px;}
+  .live-track-row{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--ink);}
+  .live-track-row a{white-space:nowrap;font-size:12.5px;}
+  .live-track-empty{font-size:13px;color:var(--grey);}
   .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;}
   .badge.pending{background:#FBF3D6;color:var(--amber);}
   .badge.approved{background:#E9F3DC;color:var(--green);}
@@ -1672,7 +1694,7 @@ async function saveOdometer(vehicleId, type){
   }catch(e){ alert(e.message); }
 }
 
-function vehicleChecklistScreen(vehicleId){
+async function vehicleChecklistScreen(vehicleId){
   const v = vehicles.find(x=>x.id===vehicleId);
   if(!v) return "<div class='empty'>Vehicle not found.</div>";
   const d = ensureDraft(vehicleId);
@@ -1740,6 +1762,7 @@ function vehicleChecklistScreen(vehicleId){
   }).join("");
 
   const statusBadge = existingRec ? `<span class="badge ${existingRec.verification.status}">${existingRec.verification.status.toUpperCase()} (today, already submitted - resubmitting will update it)</span>` : `<span class="badge pending">NOT SUBMITTED YET TODAY</span>`;
+  const liveCard = await liveTrackingCardHtml(vehicleId);
 
   return `
   <button class="btn secondary small" onclick="goto('list')">&larr; Back to vehicles</button>
@@ -1747,6 +1770,7 @@ function vehicleChecklistScreen(vehicleId){
   ${statusBadge}
   ${existingRec && existingRec.verification.comment ? `<div class="banner" style="margin-top:10px;">Regional Supervisor note: "${existingRec.verification.comment}"</div>` : ""}
 
+  ${liveCard}
   ${dayOdometerCard(vehicleId)}
 
   <div class="card checklist-group"><h2 class="section-title">1. Vehicle Documents</h2>${docsRows}</div>
@@ -4229,9 +4253,11 @@ async function vehicleExpenditureScreen(vehicleId){
       <div style="font-size:11.5px;opacity:.85;">${label}</div>
       <div style="font-size:17px;font-weight:700;margin-top:2px;">${bucketValueHtml(key)}</div>
     </button>`).join("");
+  const liveCard = await liveTrackingCardHtml(vehicleId);
   return `
   <h1 class="page-title">${d.reg} - Expenditure History</h1>
   <button class="btn small secondary" onclick="goto('cost_analysis')">&larr; Back to Cost Analysis</button>
+  ${liveCard}
   <div class="banner" style="margin-top:12px;">Click any category below to see the itemized history behind that number - use this to spot which vehicles are cheap vs. expensive to run.</div>
   <div class="card"><div class="grid cols-4" style="gap:10px;">${buttons}</div></div>
   ${expenditureBucketDetailHtml(d)}
@@ -4437,13 +4463,92 @@ function dashboardDetailScreen(metric){
   <div class="card">${tableHtml}</div>`;
 }
 
+// ---- Live Tracking (Fleetx GPS/fuel-sensor) - a small card shared by every
+// vehicle detail screen (My Vehicles checklist, Reports expenditure history,
+// Owner's Today's Status). Matched to our fleet by registration number on
+// the backend; this just renders whatever /live-tracking hands back. Camera
+// feeds aren't wired up yet (Fleetx only gives us a device id, not a stream
+// URL) - shown as a one-line note when a vehicle has one, nothing clickable.
+const LIVE_STATUS_BADGE_CLASS = {
+  RUNNING:"ok", IDLE:"pending", PARKED:"", INSHOP:"pending", STANDBY:"pending",
+  REMOVED:"low", DISCONNECTED:"low", UNREACHABLE:"low", NO_POWER:"low",
+  BATTERY_DISCHARGED:"low", IMMOBILISED:"low",
+};
+function timeAgoLabel(epochMs){
+  if(!epochMs) return "unknown";
+  const mins = Math.floor((Date.now()-epochMs)/60000);
+  if(mins < 1) return "just now";
+  if(mins < 60) return `${mins} min${mins===1?'':'s'} ago`;
+  const hrs = Math.floor(mins/60);
+  if(hrs < 24) return `${hrs} hr${hrs===1?'':'s'} ago`;
+  const days = Math.floor(hrs/24);
+  return `${days} day${days===1?'':'s'} ago`;
+}
+// "RUNNING" -> "Running", "NO_POWER" -> "No power" - Fleetx's own dashboard
+// uses plain sentence-case status words, not shouty all-caps badges.
+function formatLiveStatusLabel(status){
+  if(!status) return "Unknown";
+  return String(status).toLowerCase().replace(/_/g,' ').replace(/^./, c=>c.toUpperCase());
+}
+function fuelBarColor(pct){
+  if(pct < 15) return "var(--red)";
+  if(pct < 40) return "var(--amber)";
+  return "var(--green)";
+}
+async function liveTrackingCardHtml(vehicleId){
+  let d;
+  try{
+    d = await api(`/vehicles/${vehicleId}/live-tracking`);
+  }catch(e){
+    return `<div class="live-track"><div class="live-track-empty">📍 ${e.message||'Live tracking is temporarily unavailable.'}</div></div>`;
+  }
+  if(!d.matched){
+    return `<div class="live-track"><div class="live-track-empty">📍 This vehicle isn't linked to a GPS device yet.</div></div>`;
+  }
+  const dotCls = LIVE_STATUS_BADGE_CLASS[d.status] || "";
+  const mapLink = (d.latitude!=null && d.longitude!=null) ? `https://www.google.com/maps?q=${d.latitude},${d.longitude}` : null;
+
+  const stats = [];
+  if(d.speedKmh!=null) stats.push(`<div class="live-track-stat"><div class="v">${d.speedKmh}</div><div class="l">km/h</div></div>`);
+  if(d.fuelPercent!=null) stats.push(`<div class="live-track-stat"><div class="v">${d.fuelPercent}%</div><div class="l">Fuel</div></div>`);
+  else if(d.fuelLitres!=null) stats.push(`<div class="live-track-stat"><div class="v">${d.fuelLitres} L</div><div class="l">Fuel</div></div>`);
+  if(d.odometerKm!=null) stats.push(`<div class="live-track-stat"><div class="v">${d.odometerKm.toLocaleString('en-IN')}</div><div class="l">Odometer km</div></div>`);
+
+  const fuelBarHtml = d.fuelPercent!=null ? `
+    <div class="live-track-fuel">
+      <div class="live-track-row"><span class="muted">Fuel</span><span>${d.fuelLitres!=null? d.fuelLitres+' L' : ''}${d.fuelTankCapacity? ' of '+d.fuelTankCapacity+' L' : ''}</span></div>
+      <div class="live-track-fuel-track"><div style="width:${d.fuelPercent}%;background:${fuelBarColor(d.fuelPercent)};"></div></div>
+    </div>` : "";
+
+  const locationHtml = (d.address || mapLink) ? `
+    <div class="live-track-row">
+      <span>${d.address || "Location available"}</span>
+      ${mapLink? `<a href="${mapLink}" target="_blank" rel="noopener">View on map &rsaquo;</a>` : ''}
+    </div>` : "";
+
+  const driverHtml = d.liveDriverName ? `<div class="live-track-row" style="margin-top:6px;"><span class="muted">Driver (per GPS)</span><span>${d.liveDriverName}</span></div>` : "";
+
+  return `
+  <div class="live-track">
+    <div class="live-track-head">
+      <div class="live-track-status"><span class="dot ${dotCls}"></span> ${formatLiveStatusLabel(d.status)}</div>
+      <div class="live-track-updated">Updated ${timeAgoLabel(d.lastUpdatedAt)}</div>
+    </div>
+    ${stats.length ? `<div class="live-track-stats">${stats.join("")}</div>` : ''}
+    ${fuelBarHtml}
+    ${locationHtml}
+    ${driverHtml}
+    ${d.hasCameraFeed ? `<div class="live-track-empty" style="margin-top:8px;">📷 Onboard camera - live feed viewing isn't set up yet.</div>` : ''}
+  </div>`;
+}
+
 // The one page every clickable dashboard row/card for a specific vehicle
 // lands on: today's verification/fuel/attendance status, with the same
 // Approve/Reject actions available elsewhere, upcoming document expiries,
 // and a link into the full cost history. If nothing is actionable right now
 // (e.g. the driver simply hasn't submitted yet), the page says so plainly -
 // that's the "left unattempted, still pending" state rather than an error.
-function vehicleTodayStatusScreen(vehicleId){
+async function vehicleTodayStatusScreen(vehicleId){
   const v = vehicles.find(x=>x.id===vehicleId);
   if(!v){
     return `<button class="btn secondary small" onclick="goto('home')">&larr; Back to Dashboard</button>
@@ -4470,9 +4575,11 @@ function vehicleTodayStatusScreen(vehicleId){
     }
   }
 
+  const liveCard = await liveTrackingCardHtml(v.id);
   return `
   <button class="btn secondary small" onclick="goto('home')">&larr; Back to Dashboard</button>
   <h1 class="page-title">${v.reg} - Today's Status</h1>
+  ${liveCard}
   <div class="card">
     <table>
       <tr><td class="muted">Area</td><td>${siteName(v.siteId)}</td></tr>

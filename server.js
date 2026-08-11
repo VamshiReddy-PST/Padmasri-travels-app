@@ -45,6 +45,45 @@ const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514
 // without a real API key or an outbound network call - see aiTestStubReply().
 const AI_TEST_STUB = process.env.AI_TEST_STUB === "1";
 
+// Live vehicle tracking (GPS + fuel-sensor) via the Fleetx telematics API -
+// shown inline on each vehicle's own detail screen so Area Supervisors and
+// Operations Managers can see exactly where a vehicle is / how much fuel it
+// has without leaving the app. Read-only; matched to our fleet purely by
+// registration number (Fleetx's vehicleNumber vs. our reg, both normalized -
+// see normalizePlate()). Camera feeds are intentionally NOT wired up yet -
+// Fleetx only gives us a camera device id here, not an actual stream URL/API;
+// that's a separate follow-up once those details are available. See
+// FLEETX_SETUP.md for how to get and set FLEETX_API_TOKEN on Render.
+const FLEETX_API_TOKEN = process.env.FLEETX_API_TOKEN || "";
+const FLEETX_TAG = process.env.FLEETX_TAG || "Enmovil";
+// One shared fetch reused across every viewer/vehicle for a minute at a time -
+// Fleetx returns the whole fleet in one call, so there's no reason to hit it
+// again just because a different vehicle's detail screen was opened.
+const FLEETX_CACHE_MS = 60 * 1000;
+let fleetxCache = { data: null, fetchedAt: 0 };
+function normalizePlate(s) {
+  return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+async function fetchFleetxLive() {
+  const now = Date.now();
+  if (fleetxCache.data && now - fleetxCache.fetchedAt < FLEETX_CACHE_MS) return fleetxCache.data;
+  if (!FLEETX_API_TOKEN) {
+    const err = new Error("Live tracking isn't set up yet - a FLEETX_API_TOKEN needs to be added to the server's environment. See FLEETX_SETUP.md for how.");
+    err.status = 503;
+    throw err;
+  }
+  const url = `https://api.fleetx.io/api/v1/analytics/live?tagNames=${encodeURIComponent(FLEETX_TAG)}`;
+  const res = await fetch(url, { headers: { Authorization: `bearer ${FLEETX_API_TOKEN}` } });
+  if (!res.ok) {
+    const err = new Error(`Live tracking is temporarily unavailable (Fleetx returned ${res.status}). Try again shortly.`);
+    err.status = 502;
+    throw err;
+  }
+  const json = await res.json();
+  fleetxCache = { data: json, fetchedAt: now };
+  return json;
+}
+
 let db; // the whole app dataset, loaded into memory - all route handlers read/write this exactly as before
 let mongoClient = null;
 let appDataCol = null;
@@ -5974,6 +6013,60 @@ app.get(
     if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
     res.json(computeVehicleExpenditure(vehicle));
   }
+);
+
+// Any signed-in staff role can see live tracking for a vehicle they can
+// otherwise already open the detail screen for - this is just location/fuel
+// telemetry, not sensitive HR or financial data, so it isn't further
+// role-gated beyond requireAuth. Returns {matched:false} (not an error) when
+// this vehicle simply isn't one Fleetx has a device on yet.
+app.get(
+  "/api/vehicles/:id/live-tracking",
+  requireAuth,
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+    let live;
+    try {
+      live = await fetchFleetxLive();
+    } catch (err) {
+      return res.status(err.status || 502).json({ error: err.message });
+    }
+    const wantPlate = normalizePlate(vehicle.reg);
+    const match = (live.vehicles || []).find((fv) => normalizePlate(fv.vehicleNumber) === wantPlate);
+    if (!match) return res.json({ matched: false });
+
+    const attrs = match.otherAttributes || {};
+    const fuelStr = attrs.FUEL_NORMALISED || attrs.fuel || attrs.FUEL_INSTANT || null;
+    const fuelLitres = fuelStr ? parseFloat(fuelStr) : null;
+    const tankCapacity = attrs.fuelTankCapacity ? parseFloat(attrs.fuelTankCapacity) : null;
+    let hasCameraFeed = false;
+    if (attrs.assets) {
+      try {
+        const assets = JSON.parse(attrs.assets);
+        hasCameraFeed = Array.isArray(assets) && assets.some((a) => a && a.type === "CAMERA");
+      } catch (e) {
+        // malformed/unexpected assets field - just treat as no camera
+      }
+    }
+
+    res.json({
+      matched: true,
+      status: match.currentStatus || null,
+      speedKmh: typeof match.speed === "number" ? Math.round(match.speed) : null,
+      address: match.address || null,
+      latitude: match.latitude != null ? match.latitude : null,
+      longitude: match.longitude != null ? match.longitude : null,
+      liveDriverName: match.driverName || null,
+      fuelLitres: fuelLitres != null && !isNaN(fuelLitres) ? Math.round(fuelLitres * 10) / 10 : null,
+      fuelTankCapacity: tankCapacity != null && !isNaN(tankCapacity) ? tankCapacity : null,
+      fuelPercent:
+        fuelLitres != null && !isNaN(fuelLitres) && tankCapacity ? Math.round((fuelLitres / tankCapacity) * 100) : null,
+      odometerKm: typeof match.totalOdometer === "number" ? Math.round(match.totalOdometer) : null,
+      lastUpdatedAt: match.lastUpdatedAt || null,
+      hasCameraFeed,
+    });
+  })
 );
 
 app.get(
