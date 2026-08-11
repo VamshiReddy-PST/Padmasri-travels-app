@@ -64,9 +64,13 @@ let fleetxCache = { data: null, fetchedAt: 0 };
 function normalizePlate(s) {
   return String(s || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
-async function fetchFleetxLive() {
-  const now = Date.now();
-  if (fleetxCache.data && now - fleetxCache.fetchedAt < FLEETX_CACHE_MS) return fleetxCache.data;
+// Always hits Fleetx directly (no cache check) and refreshes the shared
+// cache as a side effect. Used by the location-history poller below, which
+// deliberately checks in with Fleetx every LOCATION_POLL_MS (10s) instead of
+// only once a minute - both so trip-replay breadcrumbs can be as fresh as
+// the Owner asked for, and so every other on-demand call to
+// fetchFleetxLive() below gets to piggyback on that freshness for free.
+async function fetchFleetxLiveRaw() {
   if (!FLEETX_API_TOKEN) {
     const err = new Error("Live tracking isn't set up yet - a FLEETX_API_TOKEN needs to be added to the server's environment. See FLEETX_SETUP.md for how.");
     err.status = 503;
@@ -80,8 +84,16 @@ async function fetchFleetxLive() {
     throw err;
   }
   const json = await res.json();
-  fleetxCache = { data: json, fetchedAt: now };
+  fleetxCache = { data: json, fetchedAt: Date.now() };
   return json;
+}
+// The on-demand version every route handler uses - serves the shared cache
+// when it's fresh enough (avoids hammering Fleetx just because two people
+// opened the dashboard seconds apart), otherwise falls through to a real fetch.
+async function fetchFleetxLive() {
+  const now = Date.now();
+  if (fleetxCache.data && now - fleetxCache.fetchedAt < FLEETX_CACHE_MS) return fleetxCache.data;
+  return fetchFleetxLiveRaw();
 }
 
 let db; // the whole app dataset, loaded into memory - all route handlers read/write this exactly as before
@@ -89,6 +101,7 @@ let mongoClient = null;
 let appDataCol = null;
 let photosCol = null;
 let backupsCol = null;
+let locationHistoryCol = null;
 const BACKUP_RETENTION_DAYS = 30;
 const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // once a day
 
@@ -100,6 +113,10 @@ async function initStorage() {
     appDataCol = mdb.collection("appdata");
     photosCol = mdb.collection("photos");
     backupsCol = mdb.collection("backups");
+    locationHistoryCol = mdb.collection("locationHistory");
+    // Trip Replay reads by vehicle+time-range constantly, and pruning
+    // deletes by time - this index makes both fast even at millions of rows.
+    await locationHistoryCol.createIndex({ vehicleId: 1, ts: 1 }).catch((err) => console.error("Location history index setup failed (non-fatal):", err.message));
     const existing = await appDataCol.findOne({ _id: "main" });
     if (existing) {
       delete existing._id;
@@ -115,6 +132,9 @@ async function initStorage() {
     setInterval(() => runBackup("daily"), BACKUP_INTERVAL_MS);
     await archiveOverdueDriverDocs();
     setInterval(() => archiveOverdueDriverDocs(), BACKUP_INTERVAL_MS);
+    await pruneLocationHistory();
+    setInterval(() => pruneLocationHistory(), BACKUP_INTERVAL_MS);
+    setInterval(() => pollLocationHistory(), LOCATION_POLL_MS);
   } else {
     if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
     if (!fs.existsSync(DATA_FILE)) fs.copyFileSync(SEED_FILE, DATA_FILE);
@@ -127,6 +147,9 @@ async function initStorage() {
     );
     await archiveOverdueDriverDocs();
     setInterval(() => archiveOverdueDriverDocs(), BACKUP_INTERVAL_MS);
+    await pruneLocationHistory();
+    setInterval(() => pruneLocationHistory(), BACKUP_INTERVAL_MS);
+    setInterval(() => pollLocationHistory(), LOCATION_POLL_MS);
   }
 }
 
@@ -642,6 +665,148 @@ function distanceMeters(lat1, lng1, lat2, lng2) {
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
   return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 }
+// ---- Location history (Trip Replay) --------------------------------------
+// Fleetx's /analytics/live endpoint is a current-position snapshot only, not
+// a history feed - so Trip Replay can't wait on Fleetx to add one. Instead
+// the server builds its own breadcrumb trail: every LOCATION_POLL_MS it reads
+// the (cached, at most ~1 min stale) Fleetx snapshot and logs one point per
+// vehicle - but ONLY when something actually changed (moved further than GPS
+// jitter, status changed, or too long since the last point), so a parked
+// vehicle doesn't generate one near-identical row every poll tick.
+//
+// Deliberately kept OUT of `db`/save()/persistNow(): that path rewrites the
+// ENTIRE app dataset on every single write (see persistNow() above) - millions
+// of small breadcrumb rows in there would make every unrelated save in the
+// app (a login, an expense entry, anything) serialize and write out the whole
+// thing. This follows the same "large data lives outside the main blob"
+// pattern already used for photos/backups above: its own MongoDB collection
+// in Mongo mode, or its own per-vehicle-per-day files under
+// ./data/locationHistory in local-file mode.
+const LOCATION_POLL_MS = 10 * 1000;
+const LOCATION_MIN_GAP_METERS = 25; // ignore movement smaller than typical GPS jitter
+const LOCATION_MAX_GAP_MS = 5 * 60 * 1000; // still log a "still here" point at least this often even if stationary
+const LOCATION_RETENTION_DAYS = 30;
+const LOCATION_DIR = path.join(DATA_DIR, "locationHistory");
+const _lastLoggedPoint = {}; // vehicleId -> {lat,lng,status,ts} - in-memory, avoids re-reading storage just to dedupe each tick
+
+function locationDayFile(vehicleId, dateStr) {
+  return path.join(LOCATION_DIR, `${vehicleId}_${dateStr}.json`);
+}
+function appendLocalLocationPoint(vehicleId, point) {
+  if (!fs.existsSync(LOCATION_DIR)) fs.mkdirSync(LOCATION_DIR, { recursive: true });
+  const file = locationDayFile(vehicleId, point.ts.slice(0, 10));
+  let list = [];
+  if (fs.existsSync(file)) {
+    try {
+      list = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch (e) {
+      list = [];
+    }
+  }
+  list.push(point);
+  fs.writeFileSync(file, JSON.stringify(list));
+}
+async function appendLocationPoint(vehicleId, point) {
+  if (USE_MONGO) {
+    if (!locationHistoryCol) return;
+    await locationHistoryCol.insertOne(Object.assign({ vehicleId }, point));
+  } else {
+    appendLocalLocationPoint(vehicleId, point);
+  }
+}
+async function pruneLocationHistory() {
+  const cutoffIso = new Date(Date.now() - LOCATION_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  if (USE_MONGO) {
+    if (!locationHistoryCol) return;
+    try {
+      const pruned = await locationHistoryCol.deleteMany({ ts: { $lt: cutoffIso } });
+      if (pruned.deletedCount) console.log(`Location history: pruned ${pruned.deletedCount} point(s) older than ${LOCATION_RETENTION_DAYS} days.`);
+    } catch (err) {
+      console.error("Location history prune failed (app keeps running normally):", err.message);
+    }
+  } else {
+    if (!fs.existsSync(LOCATION_DIR)) return;
+    const cutoffDate = cutoffIso.slice(0, 10);
+    fs.readdirSync(LOCATION_DIR).forEach((f) => {
+      const m = f.match(/_(\d{4}-\d{2}-\d{2})\.json$/);
+      if (m && m[1] < cutoffDate) {
+        try {
+          fs.unlinkSync(path.join(LOCATION_DIR, f));
+        } catch (e) {
+          // ignore - it'll get picked up on a later prune pass
+        }
+      }
+    });
+  }
+}
+// One poll tick: for every vehicle, resolve its Fleetx device the same way
+// the live-tracking endpoints do (manual link first, then reg-number match),
+// and log a point only if it's genuinely new information.
+async function pollLocationHistory() {
+  if (!FLEETX_API_TOKEN || !db) return; // not set up yet, or storage not ready yet - nothing to poll
+  let live;
+  try {
+    live = await fetchFleetxLiveRaw(); // always fresh - see the comment on fetchFleetxLiveRaw() above
+  } catch (err) {
+    return; // Fleetx unavailable this tick - just skip, try again next tick
+  }
+  const liveVehicles = live.vehicles || [];
+  for (const vehicle of db.vehicles || []) {
+    const match = resolveFleetxMatch(vehicle, liveVehicles);
+    if (!match || match.latitude == null || match.longitude == null) continue;
+    const last = _lastLoggedPoint[vehicle.id];
+    const movedMeters = last ? distanceMeters(last.lat, last.lng, match.latitude, match.longitude) : null;
+    const statusChanged = last && last.status !== (match.currentStatus || null);
+    const tooLongSinceLast = last && Date.now() - new Date(last.ts).getTime() > LOCATION_MAX_GAP_MS;
+    const isNew = !last || statusChanged || tooLongSinceLast || (movedMeters != null && movedMeters >= LOCATION_MIN_GAP_METERS);
+    if (!isNew) continue;
+    const point = {
+      ts: nowIso(),
+      lat: match.latitude,
+      lng: match.longitude,
+      speed: typeof match.speed === "number" ? Math.round(match.speed) : null,
+      status: match.currentStatus || null,
+    };
+    _lastLoggedPoint[vehicle.id] = { lat: point.lat, lng: point.lng, status: point.status, ts: point.ts };
+    try {
+      await appendLocationPoint(vehicle.id, point);
+    } catch (err) {
+      console.error(`Location history: failed to log a point for vehicle ${vehicle.id}:`, err.message);
+    }
+  }
+}
+// Every logged point for one vehicle between two ISO timestamps, oldest to
+// newest - this is what Trip Replay draws/animates.
+async function getLocationHistory(vehicleId, fromIso, toIso) {
+  if (USE_MONGO) {
+    if (!locationHistoryCol) return [];
+    return locationHistoryCol
+      .find({ vehicleId, ts: { $gte: fromIso, $lte: toIso } })
+      .sort({ ts: 1 })
+      .toArray();
+  }
+  if (!fs.existsSync(LOCATION_DIR)) return [];
+  const fromDate = fromIso.slice(0, 10);
+  const toDate = toIso.slice(0, 10);
+  const points = [];
+  const prefix = `${vehicleId}_`;
+  fs.readdirSync(LOCATION_DIR).forEach((f) => {
+    if (!f.startsWith(prefix) || !f.endsWith(".json")) return;
+    const fileDate = f.slice(prefix.length, prefix.length + 10);
+    if (fileDate < fromDate || fileDate > toDate) return;
+    try {
+      const list = JSON.parse(fs.readFileSync(path.join(LOCATION_DIR, f), "utf8"));
+      list.forEach((p) => {
+        if (p.ts >= fromIso && p.ts <= toIso) points.push(p);
+      });
+    } catch (e) {
+      // a corrupted day-file shouldn't break replay for the rest of the range
+    }
+  });
+  points.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+  return points;
+}
+
 const GEOFENCE_METERS = 400; // configurable "close enough to site" radius
 
 // ---------- app ----------
@@ -6185,6 +6350,29 @@ app.patch(
         : `${req.user.name} cleared the manual Fleetx link on vehicle ${vehicle.reg}${before ? ` (was "${before}")` : ""}`
     );
     res.json(vehicle);
+  })
+);
+
+// Trip Replay data - our own server-recorded breadcrumb trail (see the
+// Location history section above), NOT a Fleetx history feed. Same
+// requireAuth-only gate as the live-tracking endpoints, since this is the
+// same kind of data (just past instead of present).
+app.get(
+  "/api/vehicles/:id/trip-history",
+  requireAuth,
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+    const { from, to } = req.query || {};
+    if (!from || !to) return res.status(400).json({ error: "A from and to date/time are both required." });
+    const fromDate = new Date(from);
+    const toDate = new Date(to);
+    if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+      return res.status(400).json({ error: "from/to must be valid dates." });
+    }
+    if (fromDate >= toDate) return res.status(400).json({ error: "The from time must be before the to time." });
+    const points = await getLocationHistory(vehicle.id, fromDate.toISOString(), toDate.toISOString());
+    res.json({ points });
   })
 );
 

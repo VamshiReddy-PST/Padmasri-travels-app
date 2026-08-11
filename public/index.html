@@ -30,7 +30,7 @@
      Mobile (<960px): becomes an off-canvas drawer (see .sidebar.open and
      .app-topbar below), toggled by the hamburger button that only shows
      on narrow screens. */
-  .sidebar{width:228px;flex:none;background:linear-gradient(165deg,#33372420,var(--ink) 55%,#20241A);color:#fff;display:flex;flex-direction:column;position:sticky;top:14px;height:calc(100vh - 28px);margin:14px 0 14px 14px;border-radius:22px;overflow:hidden;z-index:30;box-shadow:0 14px 34px rgba(20,22,12,.28);}
+  .sidebar{width:228px;flex:none;background:var(--accent);color:#fff;display:flex;flex-direction:column;position:sticky;top:14px;height:calc(100vh - 28px);margin:14px 0 14px 14px;border-radius:22px;overflow:hidden;z-index:30;box-shadow:0 14px 34px rgba(20,22,12,.28);}
   .sidebar-brand{padding:20px 18px 14px;font-weight:700;font-size:16px;display:flex;align-items:center;gap:8px;flex:none;}
   .sidebar-brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent-light);display:inline-block;}
   .sidebar-nav{flex:1;overflow-y:auto;padding:4px 0 14px;}
@@ -4653,14 +4653,15 @@ async function liveTrackingCardHtml(vehicleId){
   ${tripReplayCardHtml(vehicleId)}`;
 }
 
-// ---- Trip Replay (UI shell) -------------------------------------------
-// Lets someone pick a date/time range and "play" where a vehicle went - but
-// this needs historical GPS breadcrumbs, which Fleetx's /analytics/live
-// endpoint doesn't provide (it's a current-position snapshot only). The
-// Owner is getting a trip-history endpoint from Fleetx separately; once
-// that's wired up server-side, playTripReplay() below is where the real
-// animated-route logic will go. Until then this stays a clearly-labeled
-// "not connected yet" state rather than a broken/fake feature.
+// ---- Trip Replay ---------------------------------------------------------
+// Lets someone pick a date/time range and "play" where a vehicle went.
+// Fleetx's /analytics/live endpoint is a current-position snapshot only, no
+// history - so instead of waiting on Fleetx, the server records its own
+// breadcrumb trail in the background (see the Location history section in
+// server.js) and this just plays back whatever's been recorded since that
+// went live. Ranges from before that point (or quiet stretches with no
+// recorded movement) will come back with too few points to draw a route -
+// handled below as a plain-language message, not an error.
 function tripReplayCardHtml(vehicleId){
   return `
   <div class="live-track">
@@ -4680,16 +4681,73 @@ async function playTripReplay(vehicleId){
   const fromEl = document.getElementById(`replayFrom_${vehicleId}`);
   const toEl = document.getElementById(`replayTo_${vehicleId}`);
   const statusEl = document.getElementById(`replayStatus_${vehicleId}`);
+  const mapEl = document.getElementById(`replayMap_${vehicleId}`);
   if(!fromEl || !toEl || !statusEl) return;
   if(!fromEl.value || !toEl.value){
     statusEl.textContent = "Pick both a from and to date/time first.";
     return;
   }
-  if(new Date(fromEl.value) >= new Date(toEl.value)){
+  const fromDate = new Date(fromEl.value);
+  const toDate = new Date(toEl.value);
+  if(fromDate >= toDate){
     statusEl.textContent = "The \"From\" time needs to be before the \"To\" time.";
     return;
   }
-  statusEl.textContent = "Trip replay isn't connected yet - it needs a trip-history feed from Fleetx that hasn't been set up on the server. Once that's ready, this will animate the exact route the vehicle took between the times you picked.";
+  statusEl.textContent = "Loading recorded route...";
+  let data;
+  try{
+    data = await api(`/vehicles/${vehicleId}/trip-history?from=${encodeURIComponent(fromDate.toISOString())}&to=${encodeURIComponent(toDate.toISOString())}`);
+  }catch(e){
+    statusEl.textContent = e.message || "Couldn't load the recorded route.";
+    return;
+  }
+  const points = data.points || [];
+  if(points.length < 2){
+    statusEl.textContent = points.length===0
+      ? "Nothing was recorded for this vehicle in that time range - this app started building its own location history recently, so ranges from before that (or quiet stretches with no movement) may come back empty."
+      : "Only one point was recorded in that range - not enough to draw a route yet.";
+    if(mapEl) mapEl.style.display = "none";
+    return;
+  }
+  if(mapEl) mapEl.style.display = "block";
+  const vMeta = vehicles.find(v=>v.id===vehicleId);
+  renderTripReplayMap(`replayMap_${vehicleId}`, points, statusEl, vMeta ? vMeta.seatingCapacity : null);
+}
+const _replayMapInstances = {};
+const _replayAnimTimers = {};
+// Draws the full recorded route as a line, then animates a bus icon moving
+// along it point by point - total playback time is compressed to a few
+// seconds regardless of how many points were recorded, so reviewing a whole
+// day's route doesn't mean sitting through a whole day of animation.
+function renderTripReplayMap(containerId, points, statusEl, seatingCapacity){
+  const el = document.getElementById(containerId);
+  if(!el || typeof L==="undefined") return;
+  if(_replayMapInstances[containerId]){ _replayMapInstances[containerId].remove(); delete _replayMapInstances[containerId]; }
+  if(_replayAnimTimers[containerId]){ clearInterval(_replayAnimTimers[containerId]); delete _replayAnimTimers[containerId]; }
+  const latlngs = points.map(p=>[p.lat, p.lng]);
+  const map = L.map(el, {scrollWheelZoom:false, touchZoom:true, tap:true, bounceAtZoomLimits:false}).setView(latlngs[0], 14);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
+  L.polyline(latlngs, {color:'#4C6A2B', weight:4, opacity:.85}).addTo(map);
+  L.circleMarker(latlngs[0], {radius:6, color:'#2E7D32', weight:2, fillColor:'#2E7D32', fillOpacity:1}).addTo(map).bindTooltip("Start");
+  L.circleMarker(latlngs[latlngs.length-1], {radius:6, color:'#c0392b', weight:2, fillColor:'#c0392b', fillOpacity:1}).addTo(map).bindTooltip("End");
+  map.fitBounds(latlngs, {padding:[24,24], maxZoom:16});
+  const movingMarker = L.marker(latlngs[0], {icon: busDivIcon(points[0].status, seatingCapacity)}).addTo(map);
+  _replayMapInstances[containerId] = map;
+  setTimeout(()=>{ if(_replayMapInstances[containerId]===map) map.invalidateSize(); }, 150);
+
+  let i = 0;
+  const stepMs = Math.max(120, Math.min(900, Math.round(4000/points.length)));
+  _replayAnimTimers[containerId] = setInterval(()=>{
+    i++;
+    if(i>=points.length){
+      clearInterval(_replayAnimTimers[containerId]);
+      delete _replayAnimTimers[containerId];
+      if(statusEl) statusEl.textContent = `Finished playing ${points.length} recorded point${points.length===1?'':'s'} (${new Date(points[0].ts).toLocaleString()} to ${new Date(points[points.length-1].ts).toLocaleString()}).`;
+      return;
+    }
+    movingMarker.setLatLng(latlngs[i]);
+    if(statusEl) statusEl.textContent = `Playing... ${new Date(points[i].ts).toLocaleString()} (point ${i+1} of ${points.length})`;
+  }, stepMs);
 }
 // ---- Live map rendering (Leaflet + OpenStreetMap, no API key needed) --
 // Every marker is drawn as a simple bus-shaped icon whose size scales with
