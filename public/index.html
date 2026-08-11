@@ -59,7 +59,14 @@
   .app-topbar .brand .dot{width:8px;height:8px;border-radius:50%;background:var(--accent-light);display:inline-block;}
   button.sidebar-toggle{background:rgba(255,255,255,.12);border:none;color:#fff;width:34px;height:34px;border-radius:12px;font-size:16px;cursor:pointer;flex:none;transition:transform .2s cubic-bezier(.34,1.56,.64,1);}
   button.sidebar-toggle:hover{transform:scale(1.06);}
-  main{padding:22px 28px 60px;max-width:1180px;}
+  /* Fluid by default: main fills whatever width .app-col actually has (a
+     16" MacBook and a 13" laptop both just get more/less breathing room),
+     with a generous cap + auto-centering only so lines of text don't stretch
+     unreadably wide on a large external monitor - not a fixed layout. */
+  main{padding:22px 28px 60px;width:100%;max-width:1440px;margin:0 auto;box-sizing:border-box;}
+  @media(max-width:1180px){
+    main{max-width:100%;padding:20px 22px 50px;}
+  }
   @media(max-width:960px){
     #app{background:#fff;}
     .sidebar{position:fixed;left:0;top:0;height:calc(100vh - 20px);margin:10px;transform:translateX(calc(-100% - 10px));transition:transform .25s cubic-bezier(.34,1.56,.64,1);box-shadow:0 20px 40px rgba(0,0,0,.35);}
