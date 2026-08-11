@@ -227,6 +227,7 @@ function backfillDefaults() {
     if (u.phone === undefined) u.phone = "";
     if (u.dateOfJoining === undefined) u.dateOfJoining = "";
     if (u.email === undefined) u.email = "";
+    if (u.theme === undefined) u.theme = null;
     if (!Array.isArray(u.passwordHistory)) u.passwordHistory = [];
     // Migrating off the old 4-digit PIN login: anyone who doesn't already
     // have a real password hash gets a one-time temporary password derived
@@ -259,6 +260,7 @@ function backfillDefaults() {
   if (ownerAccount) ownerAccount.email = "vamshi.reddy@padmasritravels.in";
   (db.drivers || []).forEach((d) => {
     if (d.phone === undefined) d.phone = "";
+    if (d.theme === undefined) d.theme = null;
     if (d.licenseNumber === undefined) d.licenseNumber = "";
     if (d.aadharNumber === undefined) d.aadharNumber = "";
     if (d.esiNumber === undefined) d.esiNumber = "";
@@ -368,6 +370,7 @@ function backfillDefaults() {
   if (!Array.isArray(db.subvendorIncomeEntries)) db.subvendorIncomeEntries = [];
   (db.subvendors || []).forEach((sv) => {
     if (sv.contactPerson === undefined) sv.contactPerson = "";
+    if (sv.theme === undefined) sv.theme = null;
     if (sv.email === undefined) sv.email = "";
     if (sv.phone === undefined) sv.phone = "";
     if (sv.gstNumber === undefined) sv.gstNumber = "";
@@ -829,6 +832,38 @@ app.get("/api/photo/:id", async (req, res) => {
   }
 });
 
+// ---------- theme (fixed brand-color picker) ----------
+// Shared by all four "save my own theme" endpoints below (staff, driver,
+// workshop staff, subvendor) - each app is a separate login system but the
+// theme shape and validation are identical everywhere. Deliberately a fixed
+// palette (not a free color picker) - these are the company's actual brand
+// colors, and each entry's text color is chosen for contrast so nothing
+// ever renders unreadable. `null`/unset means "use the app's normal default
+// look" (Owner/Admin roles default to lime at display time - see
+// applyTheme() in each frontend - everyone else keeps today's look until
+// they pick one of these).
+const THEME_PRESETS = {
+  teal: { key: "teal", label: "Teal", accent: "#00A3A6", text: "#FFFFFF" },
+  lime: { key: "lime", label: "Lime", accent: "#D7E600", text: "#1A1A1A" },
+  maroon: { key: "maroon", label: "Maroon", accent: "#722F37", text: "#FFFFFF" },
+  gold: { key: "gold", label: "Golden Yellow", accent: "#FFC107", text: "#1A1A1A" },
+  black: { key: "black", label: "Black", accent: "#000000", text: "#FFFFFF" },
+  white: { key: "white", label: "White", accent: "#FFFFFF", text: "#1A1A1A" },
+};
+// Roles that get a specific brand color by default until they personally
+// pick a different one from the picker (everyone else just keeps the app's
+// normal default look until they choose something).
+const THEME_ROLE_DEFAULTS = { owner: "teal", admin: "lime" };
+function themeFromBody(body) {
+  const raw = (body || {}).theme;
+  if (raw === null || raw === undefined) return { value: null, error: null };
+  const key = typeof raw === "string" ? raw : raw.key;
+  if (!key || !THEME_PRESETS[key]) {
+    return { value: null, error: `Theme must be one of: ${Object.keys(THEME_PRESETS).join(", ")}.` };
+  }
+  return { value: { key }, error: null };
+}
+
 // ---------- auth ----------
 const sessions = new Map(); // token -> userId
 
@@ -960,6 +995,26 @@ app.post(
   })
 );
 
+// Lets anyone signed in set (or clear, by omitting theme) their own accent
+// color - purely a personal display preference. Admin is the one exception:
+// that role always shows the fixed default (lime) and can't change it, so
+// the picker isn't offered in the UI and this rejects it server-side too in
+// case someone calls the API directly.
+app.post(
+  "/api/theme",
+  requireAuth,
+  h(async (req, res) => {
+    if (req.user.role === "admin") {
+      return res.status(403).json({ error: "The Admin theme is fixed and can't be changed." });
+    }
+    const { value, error } = themeFromBody(req.body);
+    if (error) return res.status(400).json({ error });
+    req.user.theme = value;
+    await save();
+    res.json(publicUser(req.user));
+  })
+);
+
 // ---------- META (clients, sites, drivers, users) ----------
 app.get("/api/meta", requireAuth, (req, res) => {
   res.json({
@@ -973,6 +1028,7 @@ app.get("/api/meta", requireAuth, (req, res) => {
     drivers: db.drivers.filter(driverIsApproved).map(publicDriverForStaff),
     users: db.users.map(publicUser),
     me: publicUser(req.user),
+    themePresets: THEME_PRESETS,
   });
 });
 
@@ -1132,6 +1188,7 @@ app.post(
       siteId: siteId || null,
       supervises: Array.isArray(supervises) ? supervises : [],
       dateOfJoining: dateOfJoining || "",
+      theme: null,
     };
     // Workshop staff log in to their own mobile portal via phone + PIN
     // (see /api/workshop-auth/login) rather than email/password - they get
@@ -1616,6 +1673,7 @@ app.post(
       // still-pending self-onboarded driver isn't usable yet regardless).
       docsDeadline: null,
       docsArchived: false,
+      theme: null,
     };
     if (!selfOnboarded) evaluateDriverDocsDeadline(driver);
     db.drivers.push(driver);
@@ -3994,6 +4052,7 @@ app.post(
       mustChangePassword: true,
       active: true,
       createdAt: nowIso(),
+      theme: null,
     };
     db.subvendors.push(sv);
     await audit(req.user, "create_subvendor", `${req.user.name} added subvendor ${name}`);
@@ -4283,6 +4342,18 @@ app.post(
 );
 
 app.post(
+  "/api/subvendor-auth/theme",
+  subvendorAuth,
+  h(async (req, res) => {
+    const { value, error } = themeFromBody(req.body);
+    if (error) return res.status(400).json({ error });
+    req.subvendor.theme = value;
+    await save();
+    res.json(publicSubvendor(req.subvendor));
+  })
+);
+
+app.post(
   "/api/subvendor-auth/logout",
   subvendorAuth,
   h(async (req, res) => {
@@ -4416,7 +4487,19 @@ app.get(
     let shift = currentDriverShift(req.driver.id);
     const expired = expireStaleShift(shift);
     if (expired) await save();
-    res.json({ driver: publicDriverAuth(req.driver), shift: shift && shift.status !== "closed" ? shift : null });
+    res.json({ driver: publicDriverAuth(req.driver), shift: shift && shift.status !== "closed" ? shift : null, themePresets: THEME_PRESETS });
+  })
+);
+
+app.post(
+  "/api/driver-auth/theme",
+  driverAuth,
+  h(async (req, res) => {
+    const { value, error } = themeFromBody(req.body);
+    if (error) return res.status(400).json({ error });
+    req.driver.theme = value;
+    await save();
+    res.json(publicDriverAuth(req.driver));
   })
 );
 
@@ -5404,7 +5487,19 @@ app.get(
   "/api/workshop-auth/me",
   workshopAuth,
   h(async (req, res) => {
-    res.json({ user: publicWorkshopUser(req.workshopUser) });
+    res.json({ user: publicWorkshopUser(req.workshopUser), themePresets: THEME_PRESETS });
+  })
+);
+
+app.post(
+  "/api/workshop-auth/theme",
+  workshopAuth,
+  h(async (req, res) => {
+    const { value, error } = themeFromBody(req.body);
+    if (error) return res.status(400).json({ error });
+    req.workshopUser.theme = value;
+    await save();
+    res.json(publicWorkshopUser(req.workshopUser));
   })
 );
 

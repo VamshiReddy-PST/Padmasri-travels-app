@@ -16,6 +16,15 @@
     --ink:#2B2E1F; --accent:#4C6A2B; --accent-dark:#3A5220; --accent-light:#E9EDA8; --green:#2E7D32;
     --amber:#b8860b; --red:#c0392b; --grey:#6b6b5e; --bg:#FBF8E3; --card:#ffffff;
     --border:#ECE6C8; --purple:#6C63FF; --purple-dark:#4A43C7; --purple-light:#E7E5FF;
+    /* Custom theme support (see applyTheme() in the script below) - default
+       values here match the app's original look exactly, so nothing changes
+       until someone actually picks a theme. --on-accent(-rgb) is the text
+       color to use ON TOP of an --accent-colored background (sidebar,
+       buttons); --accent-text is for when --accent is used as foreground
+       text/borders on the normal cream/white page instead - kept as a
+       separate variable because a light accent (e.g. white or lime) needs
+       different fallback logic for each of those two uses. */
+    --on-accent:#ffffff; --on-accent-rgb:255,255,255; --accent-text:var(--accent);
   }
   *{box-sizing:border-box;}
   body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;}
@@ -30,26 +39,26 @@
      Mobile (<960px): becomes an off-canvas drawer (see .sidebar.open and
      .app-topbar below), toggled by the hamburger button that only shows
      on narrow screens. */
-  .sidebar{width:228px;flex:none;background:var(--accent);color:#fff;display:flex;flex-direction:column;position:sticky;top:14px;height:calc(100vh - 28px);margin:14px 0 14px 14px;border-radius:22px;overflow:hidden;z-index:30;box-shadow:0 14px 34px rgba(20,22,12,.28);}
+  .sidebar{width:228px;flex:none;background:var(--accent);color:var(--on-accent);display:flex;flex-direction:column;position:sticky;top:14px;height:calc(100vh - 28px);margin:14px 0 14px 14px;border-radius:22px;overflow:hidden;z-index:30;box-shadow:0 14px 34px rgba(20,22,12,.28);}
   .sidebar-brand{padding:20px 18px 14px;font-weight:700;font-size:16px;display:flex;align-items:center;gap:8px;flex:none;}
-  .sidebar-brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent-light);display:inline-block;}
+  .sidebar-brand .dot{width:9px;height:9px;border-radius:50%;background:rgba(var(--on-accent-rgb),.55);display:inline-block;}
   .sidebar-nav{flex:1;overflow-y:auto;padding:4px 0 14px;}
-  .sidebar-group-header{width:calc(100% - 20px);margin:8px 10px 2px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;background:transparent;border:none;border-radius:12px;color:#e7e9d6;font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:600;opacity:.72;cursor:pointer;font-family:inherit;transition:transform .22s cubic-bezier(.34,1.56,.64,1),background .2s ease,opacity .2s ease;}
-  .sidebar-group-header:hover{opacity:1;background:rgba(255,255,255,.09);backdrop-filter:blur(8px) saturate(160%);transform:scale(1.03) translateX(1px);}
+  .sidebar-group-header{width:calc(100% - 20px);margin:8px 10px 2px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;background:transparent;border:none;border-radius:12px;color:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:600;opacity:.72;cursor:pointer;font-family:inherit;transition:transform .22s cubic-bezier(.34,1.56,.64,1),background .2s ease,opacity .2s ease;}
+  .sidebar-group-header:hover{opacity:1;background:rgba(var(--on-accent-rgb),.09);backdrop-filter:blur(8px) saturate(160%);transform:scale(1.03) translateX(1px);}
   .sidebar-chevron{display:inline-block;font-size:9px;transition:transform .25s ease;}
   .sidebar-chevron.open{transform:rotate(90deg);}
   .sidebar-group-items{display:grid;grid-template-rows:0fr;transition:grid-template-rows .3s cubic-bezier(.4,0,.2,1);}
   .sidebar-group-items.open{grid-template-rows:1fr;}
   .sidebar-group-items-inner{overflow:hidden;min-height:0;}
-  .sidebar-link{display:flex;align-items:center;gap:10px;margin:2px 10px;padding:9px 12px;border-radius:12px;color:#c7cba0;font-size:13.5px;cursor:pointer;text-decoration:none;transition:transform .22s cubic-bezier(.34,1.56,.64,1),background .2s ease,box-shadow .2s ease,color .2s ease;}
+  .sidebar-link{display:flex;align-items:center;gap:10px;margin:2px 10px;padding:9px 12px;border-radius:12px;color:rgba(var(--on-accent-rgb),.78);font-size:13.5px;cursor:pointer;text-decoration:none;transition:transform .22s cubic-bezier(.34,1.56,.64,1),background .2s ease,box-shadow .2s ease,color .2s ease;}
   .sidebar-link .ic{width:18px;text-align:center;font-size:14px;flex:none;}
-  .sidebar-link:hover{background:rgba(255,255,255,.10);backdrop-filter:blur(8px) saturate(160%);color:#fff;transform:scale(1.035) translateX(2px);box-shadow:0 6px 16px rgba(0,0,0,.2);}
-  .sidebar-link.active{background:rgba(255,255,255,.16);backdrop-filter:blur(8px) saturate(160%);color:#fff;font-weight:600;box-shadow:0 4px 14px rgba(0,0,0,.16);}
-  .sidebar-foot{padding:14px 16px 16px;border-top:1px solid rgba(255,255,255,.1);font-size:12px;flex:none;}
-  .sidebar-foot .who-name{font-weight:600;color:#fff;font-size:13px;}
+  .sidebar-link:hover{background:rgba(var(--on-accent-rgb),.10);backdrop-filter:blur(8px) saturate(160%);color:var(--on-accent);transform:scale(1.035) translateX(2px);box-shadow:0 6px 16px rgba(0,0,0,.2);}
+  .sidebar-link.active{background:rgba(var(--on-accent-rgb),.16);backdrop-filter:blur(8px) saturate(160%);color:var(--on-accent);font-weight:600;box-shadow:0 4px 14px rgba(0,0,0,.16);}
+  .sidebar-foot{padding:14px 16px 16px;border-top:1px solid rgba(var(--on-accent-rgb),.1);font-size:12px;flex:none;}
+  .sidebar-foot .who-name{font-weight:600;color:var(--on-accent);font-size:13px;}
   .sidebar-foot .who-role{opacity:.7;margin-top:1px;}
-  .sidebar-foot button{width:100%;margin-top:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);color:#fff;padding:8px;border-radius:12px;font-size:12px;cursor:pointer;transition:transform .2s cubic-bezier(.34,1.56,.64,1),background .2s ease;}
-  .sidebar-foot button:hover{background:rgba(255,255,255,.2);transform:scale(1.02);}
+  .sidebar-foot button{width:100%;margin-top:8px;background:rgba(var(--on-accent-rgb),.1);border:1px solid rgba(var(--on-accent-rgb),.18);color:var(--on-accent);padding:8px;border-radius:12px;font-size:12px;cursor:pointer;transition:transform .2s cubic-bezier(.34,1.56,.64,1),background .2s ease;}
+  .sidebar-foot button:hover{background:rgba(var(--on-accent-rgb),.2);transform:scale(1.02);}
   .sidebar-foot button.logout{background:rgba(192,57,43,.24);border-color:rgba(192,57,43,.4);}
   .sidebar-foot button.logout:hover{background:rgba(192,57,43,.4);}
   .sidebar-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:25;}
@@ -170,9 +179,9 @@
   table th{text-align:left;background:var(--accent-light);color:var(--ink);padding:8px 10px;font-size:12px;}
   table td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
   table tr:hover td{background:#FCFBF2;}
-  .btn{background:var(--accent);color:#fff;border:none;padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer;font-weight:600;}
+  .btn{background:var(--accent);color:var(--on-accent);border:none;padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer;font-weight:600;}
   .btn:hover{background:var(--accent-dark);}
-  .btn.secondary{background:#fff;color:var(--accent);border:1px solid var(--accent);}
+  .btn.secondary{background:#fff;color:var(--accent-text);border:1px solid var(--accent-text);}
   .btn.danger{background:var(--red);}
   .btn.small{padding:4px 10px;font-size:12px;}
   .btn:disabled{opacity:.5;cursor:not-allowed;}
@@ -190,7 +199,7 @@
   .toggle button{border:none;background:#fff;padding:5px 10px;font-size:12px;cursor:pointer;}
   .toggle button.active-ok{background:var(--green);color:#fff;}
   .toggle button.active-bad{background:var(--red);color:#fff;}
-  .photo-btn{border:1px dashed #C9C2A0;background:#FCFBF2;border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;color:var(--accent);}
+  .photo-btn{border:1px dashed #C9C2A0;background:#FCFBF2;border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer;color:var(--accent-text);}
   .thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;}
   .thumbs img{width:44px;height:44px;object-fit:cover;border-radius:8px;border:1px solid var(--border);}
   .role-pick{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:14px 0;}
@@ -261,7 +270,7 @@
   .ai-hero p{margin:0;color:#dcd9f7;font-size:12.5px;position:relative;z-index:1;}
   .ai-chat-window{display:flex;flex-direction:column;gap:10px;max-height:480px;overflow-y:auto;padding:4px 2px;margin-bottom:12px;}
   .ai-msg{max-width:82%;padding:10px 13px;border-radius:14px;font-size:13.5px;line-height:1.55;white-space:pre-wrap;word-break:break-word;}
-  .ai-msg.user{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:4px;}
+  .ai-msg.user{align-self:flex-end;background:var(--accent);color:var(--on-accent);border-bottom-right-radius:4px;}
   .ai-msg.assistant{align-self:flex-start;background:var(--purple-light);color:var(--ink);border-bottom-left-radius:4px;}
   .ai-msg .ai-tag{display:block;font-size:10.5px;font-weight:700;color:var(--purple-dark);margin-bottom:3px;letter-spacing:.03em;text-transform:uppercase;}
   .ai-tools-used{font-size:11px;color:var(--purple-dark);margin-top:6px;opacity:.85;}
@@ -419,6 +428,99 @@ function roleLabel(r){
     workshop_manager:"Workshop Manager", workshop_supervisor:"Workshop Supervisor", mechanic:"Mechanic", helper:"Helper", electrician:"Electrician"}[r] || r;
 }
 const WORKSHOP_STAFF_ROLES = ["workshop_manager","workshop_supervisor","mechanic","helper","electrician"];
+
+// ---------- theme (fixed brand-color picker) ----------
+const THEME_PRESETS = {
+  teal:   { key:"teal",   label:"Teal",          accent:"#00A3A6", text:"#FFFFFF" },
+  lime:   { key:"lime",   label:"Lime",          accent:"#D7E600", text:"#1A1A1A" },
+  maroon: { key:"maroon", label:"Maroon",        accent:"#722F37", text:"#FFFFFF" },
+  gold:   { key:"gold",   label:"Golden Yellow", accent:"#FFC107", text:"#1A1A1A" },
+  black:  { key:"black",  label:"Black",         accent:"#000000", text:"#FFFFFF" },
+  white:  { key:"white",  label:"White",         accent:"#FFFFFF", text:"#1A1A1A" },
+};
+const THEME_ROLE_DEFAULTS = { owner:"teal", admin:"lime" };
+function hexToRgb(hex){
+  const h = hex.replace("#","");
+  const n = h.length===3 ? h.split("").map(c=>c+c).join("") : h;
+  const int = parseInt(n,16);
+  return { r:(int>>16)&255, g:(int>>8)&255, b:int&255 };
+}
+function shadeHex(hex, pct){
+  // pct negative = darker, positive = lighter
+  const {r,g,b} = hexToRgb(hex);
+  const f = pct<0 ? 0 : 255, p = Math.abs(pct);
+  const nr = Math.round((f-r)*p)+r, ng = Math.round((f-g)*p)+g, nb = Math.round((f-b)*p)+b;
+  return "#"+[nr,ng,nb].map(x=>Math.max(0,Math.min(255,x)).toString(16).padStart(2,"0")).join("");
+}
+function applyTheme(themeKey, role){
+  let key = themeKey;
+  if(!key || !THEME_PRESETS[key]){
+    key = THEME_ROLE_DEFAULTS[role] || null;
+  }
+  const root = document.documentElement.style;
+  if(!key || !THEME_PRESETS[key]){
+    // fall back to the app's built-in default look - clear any overrides
+    root.removeProperty("--accent");
+    root.removeProperty("--accent-dark");
+    root.removeProperty("--accent-light");
+    root.removeProperty("--on-accent");
+    root.removeProperty("--on-accent-rgb");
+    root.removeProperty("--accent-text");
+    return;
+  }
+  const preset = THEME_PRESETS[key];
+  const { r, g, b } = hexToRgb(preset.text);
+  root.setProperty("--accent", preset.accent);
+  root.setProperty("--accent-dark", shadeHex(preset.accent, -0.2));
+  root.setProperty("--accent-light", shadeHex(preset.accent, 0.75));
+  root.setProperty("--on-accent", preset.text);
+  root.setProperty("--on-accent-rgb", `${r},${g},${b}`);
+  root.setProperty("--accent-text", preset.accent);
+  try{ localStorage.setItem("themeKey", key); }catch(e){}
+}
+// Pre-hydrate from localStorage immediately (before login/boot completes) to avoid a flash of the wrong theme.
+(function(){
+  try{
+    const saved = localStorage.getItem("themeKey");
+    if(saved && THEME_PRESETS[saved]) applyTheme(saved, null);
+  }catch(e){}
+})();
+async function saveTheme(key){
+  if(currentUser && currentUser.role==="admin"){ alert("The Admin theme is fixed and can't be changed."); return; }
+  try{
+    const updated = await api("/theme", {method:"POST", body:JSON.stringify({theme:key})});
+    currentUser.theme = updated.theme;
+    applyTheme(key, currentUser.role);
+    render();
+  }catch(e){ alert(e.message||"Could not update theme."); }
+}
+async function resetTheme(){
+  if(currentUser && currentUser.role==="admin"){ alert("The Admin theme is fixed and can't be changed."); return; }
+  try{
+    const updated = await api("/theme", {method:"POST", body:JSON.stringify({theme:null})});
+    currentUser.theme = updated.theme;
+    applyTheme(null, currentUser.role);
+    render();
+  }catch(e){ alert(e.message||"Could not reset theme."); }
+}
+function themePickerHtml(){
+  if(!currentUser) return "";
+  if(currentUser.role==="admin"){
+    return `<div class="card"><h3>Theme</h3><p class="muted">The Admin app uses a fixed color scheme and can't be changed.</p></div>`;
+  }
+  const current = (currentUser.theme && currentUser.theme.key) || null;
+  const swatches = Object.values(THEME_PRESETS).map(p=>{
+    const sel = p.key===current;
+    return `<button type="button" onclick="saveTheme('${p.key}')" title="${p.label}" style="width:40px;height:40px;border-radius:50%;background:${p.accent};border:${sel?"3px solid var(--ink)":"1px solid var(--border)"};cursor:pointer;box-shadow:${sel?"0 0 0 2px #fff inset":"none"};"></button>`;
+  }).join("");
+  return `<div class="card">
+    <h3>Theme</h3>
+    <p class="muted" style="margin-bottom:10px;">Pick an accent color for your account. This applies across the app.</p>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">${swatches}
+      <button type="button" class="btn secondary" onclick="resetTheme()">Reset to default</button>
+    </div>
+  </div>`;
+}
 function userName(id){ const u = meta.users.find(x=>x.id===id); return u? u.name : "-"; }
 function userPhone(id){ const u = meta.users.find(x=>x.id===id); return u? (u.phone||"-") : "-"; }
 function siteName(id){ const s = meta.sites.find(x=>x.id===id); return s? s.name : "Unassigned"; }
@@ -684,6 +786,7 @@ async function boot(){
   try{
     const m = await api("/meta");
     meta = m; currentUser = m.me;
+    applyTheme(currentUser.theme && currentUser.theme.key, currentUser.role);
     // First login (or right after an Owner password reset) - the account
     // only has a temporary password, and the server blocks every other
     // endpoint until a real one is set. Show that screen instead of the
@@ -888,6 +991,9 @@ async function changePasswordScreen(){
     ${changePasswordFormHtml("voluntary")}
     <button class="btn" onclick="submitVoluntaryPasswordChange()">Save New Password</button>
     <button class="btn secondary" onclick="goto('home')" style="margin-left:8px;">Cancel</button>
+  </div>
+  <div style="max-width:420px;margin-top:16px;">
+    ${themePickerHtml()}
   </div>`;
 }
 async function submitVoluntaryPasswordChange(){
@@ -6541,7 +6647,7 @@ async function payrollScreen(){
 Object.assign(window, {
   choosePortal,
   doLogin, doLogout, switchTab, goto, toggleSidebar, toggleSidebarGroup, playTripReplay, setFleetMapFilter, setGpsLinkSearch, saveGpsLink, draftSet, updateBreathalyzer, startPhotoCapture,
-  submitForcedPasswordChange, submitVoluntaryPasswordChange,
+  submitForcedPasswordChange, submitVoluntaryPasswordChange, saveTheme, resetTheme,
   updateDoc, updateDocCopy, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, renameClient, editSite, addDriver, addPerson, correctOdometer, captureBillPhoto, submitExpense, decideExpense,
   onExpenseOfficeToggle, setExpensePaymentStage,

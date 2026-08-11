@@ -12,6 +12,7 @@
     --ink:#2B2E1F; --accent:#4C6A2B; --accent-dark:#3A5220; --accent-light:#E9EDA8; --green:#2E7D32;
     --amber:#b8860b; --red:#c0392b; --grey:#6b6b5e; --bg:#FBF8E3; --card:#ffffff;
     --border:#ECE6C8; --purple:#6C63FF; --purple-dark:#4A43C7; --purple-light:#E7E5FF;
+    --on-accent:#ffffff; --on-accent-rgb:255,255,255; --accent-text:var(--accent);
   }
   *{box-sizing:border-box;}
   body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;}
@@ -50,15 +51,20 @@
   .field{margin-bottom:12px;}
   .field label{display:block;font-size:12px;color:var(--grey);margin-bottom:4px;}
   .field input{width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:10px;font-size:14px;}
-  .btn{background:var(--accent);color:#fff;border:none;padding:9px 16px;border-radius:8px;font-size:13.5px;cursor:pointer;font-weight:600;}
+  .btn{background:var(--accent);color:var(--on-accent);border:none;padding:9px 16px;border-radius:8px;font-size:13.5px;cursor:pointer;font-weight:600;}
   .btn:hover{background:var(--accent-dark);}
-  .btn.secondary{background:#fff;color:var(--accent);border:1px solid var(--accent);}
+  .btn.secondary{background:#fff;color:var(--accent-text);border:1px solid var(--accent-text);}
   .btn:disabled{opacity:.5;cursor:not-allowed;}
   .banner{background:#FBF3D6;border:1px solid #EBDA9B;color:#7a5a00;padding:10px 14px;border-radius:10px;font-size:12.5px;margin-bottom:16px;}
   .banner.error{background:#fbe4e1;border-color:#eab3ab;color:#7a2115;}
   .muted{color:var(--grey);font-size:12px;}
   .empty{text-align:center;color:var(--grey);padding:30px 10px;font-size:13px;}
   .footer-note{font-size:11px;color:#9a9576;text-align:center;padding:20px;}
+  header.topbar button.gear{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35);color:#fff;padding:6px 10px;border-radius:8px;font-size:14px;cursor:pointer;margin-left:10px;line-height:1;}
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:100;padding:16px;}
+  .modal-box{background:var(--card);border-radius:16px;padding:20px;max-width:360px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,.25);}
+  .modal-box h3{margin:0 0 10px;color:var(--ink);}
+  .theme-swatch{width:38px;height:38px;border-radius:50%;cursor:pointer;}
 </style>
 </head>
 <body>
@@ -70,6 +76,93 @@ let subvendor = null;
 let dashboard = null;
 let lastError = "";
 let pwChangeError = "";
+let showThemeModal = false;
+
+// ---------- theme (fixed brand-color picker, mirrors server.js/index.html) ----------
+const THEME_PRESETS = {
+  teal:   { key:"teal",   label:"Teal",          accent:"#00A3A6", text:"#FFFFFF" },
+  lime:   { key:"lime",   label:"Lime",          accent:"#D7E600", text:"#1A1A1A" },
+  maroon: { key:"maroon", label:"Maroon",        accent:"#722F37", text:"#FFFFFF" },
+  gold:   { key:"gold",   label:"Golden Yellow", accent:"#FFC107", text:"#1A1A1A" },
+  black:  { key:"black",  label:"Black",         accent:"#000000", text:"#FFFFFF" },
+  white:  { key:"white",  label:"White",         accent:"#FFFFFF", text:"#1A1A1A" },
+};
+function hexToRgbSv(hex){
+  const h = hex.replace("#","");
+  const n = h.length===3 ? h.split("").map(c=>c+c).join("") : h;
+  const int = parseInt(n,16);
+  return { r:(int>>16)&255, g:(int>>8)&255, b:int&255 };
+}
+function shadeHexSv(hex, pct){
+  const {r,g,b} = hexToRgbSv(hex);
+  const f = pct<0 ? 0 : 255, p = Math.abs(pct);
+  const nr = Math.round((f-r)*p)+r, ng = Math.round((f-g)*p)+g, nb = Math.round((f-b)*p)+b;
+  return "#"+[nr,ng,nb].map(x=>Math.max(0,Math.min(255,x)).toString(16).padStart(2,"0")).join("");
+}
+function applyTheme(themeKey){
+  const root = document.documentElement.style;
+  if(!themeKey || !THEME_PRESETS[themeKey]){
+    root.removeProperty("--accent");
+    root.removeProperty("--accent-dark");
+    root.removeProperty("--accent-light");
+    root.removeProperty("--on-accent");
+    root.removeProperty("--on-accent-rgb");
+    root.removeProperty("--accent-text");
+    try{ localStorage.removeItem("themeKey"); }catch(e){}
+    return;
+  }
+  const preset = THEME_PRESETS[themeKey];
+  const { r, g, b } = hexToRgbSv(preset.text);
+  root.setProperty("--accent", preset.accent);
+  root.setProperty("--accent-dark", shadeHexSv(preset.accent, -0.2));
+  root.setProperty("--accent-light", shadeHexSv(preset.accent, 0.75));
+  root.setProperty("--on-accent", preset.text);
+  root.setProperty("--on-accent-rgb", `${r},${g},${b}`);
+  root.setProperty("--accent-text", preset.accent);
+  try{ localStorage.setItem("themeKey", themeKey); }catch(e){}
+}
+(function(){
+  try{
+    const saved = localStorage.getItem("themeKey");
+    if(saved && THEME_PRESETS[saved]) applyTheme(saved);
+  }catch(e){}
+})();
+function toggleThemeModal(){ showThemeModal = !showThemeModal; render(); }
+async function saveTheme(key){
+  try{
+    const updated = await api("/theme", {method:"POST", body:JSON.stringify({theme:key})});
+    subvendor.theme = updated.theme;
+    applyTheme(key);
+    render();
+  }catch(e){ alert(e.message||"Could not update theme."); }
+}
+async function resetTheme(){
+  try{
+    const updated = await api("/theme", {method:"POST", body:JSON.stringify({theme:null})});
+    subvendor.theme = updated.theme;
+    applyTheme(null);
+    render();
+  }catch(e){ alert(e.message||"Could not reset theme."); }
+}
+function themeModalHtml(){
+  if(!showThemeModal) return "";
+  const current = (subvendor && subvendor.theme && subvendor.theme.key) || null;
+  const swatches = Object.values(THEME_PRESETS).map(p=>{
+    const sel = p.key===current;
+    return `<button type="button" class="theme-swatch" onclick="saveTheme('${p.key}')" title="${p.label}" style="background:${p.accent};border:${sel?"3px solid var(--ink)":"1px solid var(--border)"};box-shadow:${sel?"0 0 0 2px #fff inset":"none"};"></button>`;
+  }).join("");
+  return `<div class="modal-overlay" onclick="if(event.target===this) toggleThemeModal()">
+    <div class="modal-box">
+      <h3>Theme</h3>
+      <p class="muted" style="margin-bottom:10px;">Pick an accent color for your account.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">${swatches}</div>
+      <div style="margin-top:16px;display:flex;justify-content:flex-end;gap:8px;">
+        <button type="button" class="btn secondary" onclick="resetTheme()">Reset</button>
+        <button type="button" class="btn" onclick="toggleThemeModal()">Done</button>
+      </div>
+    </div>
+  </div>`;
+}
 
 async function api(path, opts){
   opts = opts || {};
@@ -85,6 +178,7 @@ async function boot(){
   if(!svToken){ renderLogin(); return; }
   try{
     subvendor = await api("/me");
+    applyTheme(subvendor.theme && subvendor.theme.key);
     if(subvendor.mustChangePassword){ renderForcedPasswordChange(); return; }
     dashboard = await api("/dashboard");
     render();
@@ -231,9 +325,11 @@ function render(){
     <div class="brand">🧭 Padmasri <span class="accent-script">Travels</span> - Subvendor Portal</div>
     <div>
       <span class="who">${subvendor ? subvendor.name : ""}</span>
+      <button class="gear" title="Theme" onclick="toggleThemeModal()">&#9881;</button>
       <button class="logout" onclick="doLogout()">Log out</button>
     </div>
   </header>
+  ${themeModalHtml()}
   <main>
     <h1 class="page-title">Welcome, ${subvendor ? subvendor.name : ""}</h1>
     <div class="grid cols-4">
@@ -277,7 +373,7 @@ function render(){
   </main>`;
 }
 
-Object.assign(window, {doLogin, doLogout, submitForcedPasswordChange});
+Object.assign(window, {doLogin, doLogout, submitForcedPasswordChange, toggleThemeModal, saveTheme, resetTheme});
 boot();
 </script>
 </body>
