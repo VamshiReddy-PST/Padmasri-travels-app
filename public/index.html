@@ -113,6 +113,11 @@
      Leaflet's default white marker box/shadow around them. */
   .vehicle-mini-map{width:100%;height:220px;border-radius:12px;overflow:hidden;border:1px solid var(--border);margin-top:10px;}
   .fleet-map{width:100%;height:420px;border-radius:14px;overflow:hidden;border:1px solid var(--border);}
+  /* Tells the phone's browser to hand every touch gesture on the map straight
+     to Leaflet instead of trying to pinch-zoom the whole page - without this,
+     a two-finger pinch on some mobile browsers zooms the page instead of the
+     map underneath it. */
+  .vehicle-mini-map .leaflet-container, .fleet-map .leaflet-container{touch-action:none;}
   .bus-marker-icon{background:transparent;border:none;}
   .replay-inputs{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;}
   .replay-inputs label{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--grey);}
@@ -4710,7 +4715,11 @@ function renderVehicleMiniMap(containerId, lat, lng, status, seatingCapacity){
   const el = document.getElementById(containerId);
   if(!el || typeof L==="undefined" || lat==null || lng==null) return;
   if(_miniMapInstances[containerId]){ _miniMapInstances[containerId].remove(); delete _miniMapInstances[containerId]; }
-  const map = L.map(el, {scrollWheelZoom:false, zoomControl:false}).setView([lat,lng], 15);
+  // touchZoom/tap explicit (Leaflet defaults to on, but stated outright so a
+  // future default change or option elsewhere in the app can't silently turn
+  // off two-finger pinch-zoom on mobile) - scrollWheelZoom stays off so a
+  // two-finger scroll through the page doesn't get hijacked by the map.
+  const map = L.map(el, {scrollWheelZoom:false, zoomControl:false, touchZoom:true, tap:true, bounceAtZoomLimits:false}).setView([lat,lng], 15);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
   L.marker([lat,lng], {icon: busDivIcon(status, seatingCapacity)}).addTo(map);
   _miniMapInstances[containerId] = map;
@@ -4775,7 +4784,7 @@ function renderFleetMapMarkers(list){
   }
   if(_fleetMapInstance){ _fleetMapInstance.remove(); _fleetMapInstance = null; }
   const filtered = fleetMapStatusFilter ? list.filter(v=>fleetMapStatusOf(v)===fleetMapStatusFilter) : list;
-  const map = L.map(el, {scrollWheelZoom:false}).setView([17.4, 78.45], 11);
+  const map = L.map(el, {scrollWheelZoom:false, touchZoom:true, tap:true, bounceAtZoomLimits:false}).setView([17.4, 78.45], 11);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
   _fleetMapInstance = map;
   const bounds = [];
