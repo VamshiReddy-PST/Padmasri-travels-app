@@ -262,6 +262,12 @@
   .scanner-modal img{max-width:100%;max-height:52vh;border-radius:8px;border:1px solid var(--border);object-fit:contain;background:#eee;}
   .scanner-modal .muted{margin:10px 0;}
   .scanner-modal .btn-row{display:flex;gap:10px;justify-content:center;margin-top:14px;flex-wrap:wrap;}
+  .fleet-map{cursor:pointer;}
+  .fullmap-backdrop{position:fixed;inset:0;background:rgba(20,20,20,.72);z-index:9999;display:flex;flex-direction:column;}
+  .fullmap-topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--ink);color:#fff;}
+  .fullmap-topbar h3{margin:0;font-size:15px;}
+  .fullmap-topbar button{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35);color:#fff;padding:7px 14px;border-radius:8px;font-size:13px;cursor:pointer;}
+  .fullmap-container{flex:1;width:100%;}
   /* ---- AI Assistant + command-center dashboard ---- */
   .ai-hero{background:linear-gradient(135deg,#20241A 0%,var(--ink) 45%,#3A2F6B 100%);border-radius:20px;padding:26px 26px 22px;margin-bottom:16px;color:#fff;position:relative;overflow:hidden;box-shadow:0 12px 30px rgba(43,46,31,.22);}
   .ai-hero::before{content:"";position:absolute;top:-50px;right:-50px;width:200px;height:200px;border-radius:50%;background:radial-gradient(circle,rgba(108,99,255,.35),transparent 70%);}
@@ -316,6 +322,7 @@
 <input type="file" id="billInput" accept="image/*,application/pdf" capture="environment" style="display:none" />
 <input type="file" id="scannerFileInput" accept="image/*" capture="environment" style="display:none" onchange="handleScannerFile(event)" />
 <div id="scannerOverlay"></div>
+<div id="fleetMapOverlay"></div>
 <script>
 /* =========================================================================
    FLEET SUPERVISOR APP - talks to the shared backend in server.js.
@@ -4943,6 +4950,26 @@ function setFleetMapFilter(kind){
   }
 }
 let _fleetMapInstance = null;
+// Shared by both the dashboard mini map and the fullscreen map below, so
+// marker icons/popups/fit-bounds behavior never drifts between the two.
+function drawFleetMarkersOnMap(map, filtered){
+  const bounds = [];
+  filtered.forEach(v=>{
+    if(v.latitude==null || v.longitude==null) return;
+    const vMeta = vehicles.find(x=>x.id===v.vehicleId);
+    const marker = L.marker([v.latitude, v.longitude], {icon: busDivIcon(v.status, vMeta ? vMeta.seatingCapacity : null)}).addTo(map);
+    // Tapping a marker shows a quick summary plus a button into that
+    // vehicle's full Today's Status screen (checklist, docs, cost history).
+    const popupDiv = document.createElement("div");
+    popupDiv.innerHTML = `<b>${v.reg}</b><br>${formatLiveStatusLabel(v.status)}${v.speedKmh!=null? ' &middot; '+v.speedKmh+' km/h' : ''}${v.fuelPercent!=null? ' &middot; Fuel '+v.fuelPercent+'%' : ''}<br><button class="btn small" style="margin-top:6px;">View full details &rsaquo;</button>`;
+    popupDiv.querySelector("button").onclick = () => { closeFleetMapFullscreen(); goto('vehicle_status', {vehicleId: v.vehicleId}); };
+    marker.bindPopup(popupDiv);
+    bounds.push([v.latitude, v.longitude]);
+  });
+  if(bounds.length) map.fitBounds(bounds, {padding:[30,30], maxZoom:14});
+  else map.setView([17.4, 78.45], 6); // nothing matches the filter - zoom out to a neutral view instead of an empty close-up
+  return bounds;
+}
 function renderFleetMapMarkers(list){
   const el = document.getElementById("fleetMapContainer");
   const errEl = document.getElementById("fleetMapError");
@@ -4958,26 +4985,45 @@ function renderFleetMapMarkers(list){
   const map = L.map(el, {scrollWheelZoom:false, touchZoom:true, tap:true, bounceAtZoomLimits:false}).setView([17.4, 78.45], 11);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
   _fleetMapInstance = map;
-  const bounds = [];
-  filtered.forEach(v=>{
-    if(v.latitude==null || v.longitude==null) return;
-    const vMeta = vehicles.find(x=>x.id===v.vehicleId);
-    const marker = L.marker([v.latitude, v.longitude], {icon: busDivIcon(v.status, vMeta ? vMeta.seatingCapacity : null)}).addTo(map);
-    // Tapping a marker shows a quick summary plus a button into that
-    // vehicle's full Today's Status screen (checklist, docs, cost history).
-    const popupDiv = document.createElement("div");
-    popupDiv.innerHTML = `<b>${v.reg}</b><br>${formatLiveStatusLabel(v.status)}${v.speedKmh!=null? ' &middot; '+v.speedKmh+' km/h' : ''}${v.fuelPercent!=null? ' &middot; Fuel '+v.fuelPercent+'%' : ''}<br><button class="btn small" style="margin-top:6px;">View full details &rsaquo;</button>`;
-    popupDiv.querySelector("button").onclick = () => goto('vehicle_status', {vehicleId: v.vehicleId});
-    marker.bindPopup(popupDiv);
-    bounds.push([v.latitude, v.longitude]);
-  });
-  if(bounds.length) map.fitBounds(bounds, {padding:[30,30], maxZoom:14});
-  else map.setView([17.4, 78.45], 6); // nothing matches the filter - zoom out to a neutral view instead of an empty close-up
+  drawFleetMarkersOnMap(map, filtered);
+  // Tapping anywhere on the map that isn't a marker (Leaflet stops the
+  // event there) opens the same fleet view full-sized, since the small
+  // dashboard card is too cramped to make sense of a busy fleet at a glance.
+  map.on('click', ()=>openFleetMapFullscreen(list));
   // Leaflet sizes itself off the container's layout at creation time; if the
   // container hasn't fully settled yet (fresh insert, sidebar collapse, etc.)
   // the tiles can render at the wrong size or not at all. invalidateSize()
   // a beat later fixes that without needing the user to resize the window.
   setTimeout(()=>{ if(_fleetMapInstance===map) map.invalidateSize(); }, 150);
+}
+// ---- Fullscreen fleet map (opened by tapping the dashboard mini map) --
+let _fullscreenMapInstance = null;
+function openFleetMapFullscreen(list){
+  const overlay = document.getElementById("fleetMapOverlay");
+  if(!overlay) return;
+  overlay.innerHTML = `
+  <div class="fullmap-backdrop">
+    <div class="fullmap-topbar">
+      <h3>📍 Live Fleet Map${fleetMapStatusFilter ? ' - '+fleetMapStatusFilter[0].toUpperCase()+fleetMapStatusFilter.slice(1) : ''}</h3>
+      <button onclick="closeFleetMapFullscreen()">✕ Close</button>
+    </div>
+    <div id="fleetMapFullscreenContainer" class="fullmap-container"></div>
+  </div>`;
+  setTimeout(()=>{
+    const el = document.getElementById("fleetMapFullscreenContainer");
+    if(!el || typeof L==="undefined") return;
+    const filtered = fleetMapStatusFilter ? list.filter(v=>fleetMapStatusOf(v)===fleetMapStatusFilter) : list;
+    const map = L.map(el, {scrollWheelZoom:true, touchZoom:true, tap:true, bounceAtZoomLimits:false}).setView([17.4, 78.45], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
+    _fullscreenMapInstance = map;
+    drawFleetMarkersOnMap(map, filtered);
+    setTimeout(()=>{ if(_fullscreenMapInstance===map) map.invalidateSize(); }, 100);
+  }, 0);
+}
+function closeFleetMapFullscreen(){
+  const overlay = document.getElementById("fleetMapOverlay");
+  if(_fullscreenMapInstance){ _fullscreenMapInstance.remove(); _fullscreenMapInstance = null; }
+  if(overlay) overlay.innerHTML = "";
 }
 
 // ---- GPS Device Linking (Data Team + Owner) ----------------------------
@@ -5161,6 +5207,10 @@ function collapsibleSection(key, title, count, bodyOrPreview, opts){
 }
 
 async function ownerDashboardScreen(){
+  // Always land on the dashboard with the Live Fleet Map showing every
+  // vehicle - any Running/Idle/Parked filter picked on a previous visit
+  // shouldn't silently carry over and hide vehicles on a fresh page load.
+  fleetMapStatusFilter = null;
   const recs = vehicles.map(v=>records[v.id]).filter(Boolean);
   const total = vehicles.length;
   const submitted = recs.length;
@@ -6646,7 +6696,7 @@ async function payrollScreen(){
 // ---------- expose for inline handlers ----------
 Object.assign(window, {
   choosePortal,
-  doLogin, doLogout, switchTab, goto, toggleSidebar, toggleSidebarGroup, playTripReplay, setFleetMapFilter, setGpsLinkSearch, saveGpsLink, draftSet, updateBreathalyzer, startPhotoCapture,
+  doLogin, doLogout, switchTab, goto, toggleSidebar, toggleSidebarGroup, playTripReplay, setFleetMapFilter, openFleetMapFullscreen, closeFleetMapFullscreen, setGpsLinkSearch, saveGpsLink, draftSet, updateBreathalyzer, startPhotoCapture,
   submitForcedPasswordChange, submitVoluntaryPasswordChange, saveTheme, resetTheme,
   updateDoc, updateDocCopy, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, renameClient, editSite, addDriver, addPerson, correctOdometer, captureBillPhoto, submitExpense, decideExpense,
