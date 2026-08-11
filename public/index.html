@@ -20,39 +20,52 @@
   *{box-sizing:border-box;}
   body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;}
   .accent-script{font-family:'Playfair Display',Georgia,serif;font-style:italic;font-weight:600;}
-  #app{min-height:100vh;background:var(--bg);display:flex;align-items:stretch;}
+  #app{min-height:100vh;background:#f2f1e4;display:flex;align-items:stretch;}
   /* ---- Left sidebar shell (replaces the old top tab bar) ----
-     Desktop: fixed 236px column, sticky full-height, always visible.
+     A floating, rounded "glass" panel inset from the edges rather than a
+     flush-edge bar - soft gradient body, frosted/translucent pill buttons
+     that lift with a slight springy overshoot on hover (the "genie pop"
+     the Owner asked for - kept subtle, not a literal window-warp effect).
+     Desktop: fixed ~228px column, sticky full-height.
      Mobile (<960px): becomes an off-canvas drawer (see .sidebar.open and
      .app-topbar below), toggled by the hamburger button that only shows
      on narrow screens. */
-  .sidebar{width:236px;flex:none;background:var(--ink);color:#fff;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto;z-index:30;}
-  .sidebar-brand{padding:18px 20px 14px;font-weight:700;font-size:16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(255,255,255,.08);flex:none;}
+  .sidebar{width:228px;flex:none;background:linear-gradient(165deg,#33372420,var(--ink) 55%,#20241A);color:#fff;display:flex;flex-direction:column;position:sticky;top:14px;height:calc(100vh - 28px);margin:14px 0 14px 14px;border-radius:22px;overflow:hidden;z-index:30;box-shadow:0 14px 34px rgba(20,22,12,.28);}
+  .sidebar-brand{padding:20px 18px 14px;font-weight:700;font-size:16px;display:flex;align-items:center;gap:8px;flex:none;}
   .sidebar-brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent-light);display:inline-block;}
-  .sidebar-nav{flex:1;overflow-y:auto;padding:8px 0 14px;}
-  .sidebar-group-title{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;opacity:.5;padding:16px 20px 6px;}
-  .sidebar-link{display:flex;align-items:center;gap:10px;padding:10px 20px;color:#c7cba0;font-size:13.5px;cursor:pointer;border-left:3px solid transparent;text-decoration:none;}
+  .sidebar-nav{flex:1;overflow-y:auto;padding:4px 0 14px;}
+  .sidebar-group-header{width:calc(100% - 20px);margin:8px 10px 2px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;background:transparent;border:none;border-radius:12px;color:#e7e9d6;font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:600;opacity:.72;cursor:pointer;font-family:inherit;transition:transform .22s cubic-bezier(.34,1.56,.64,1),background .2s ease,opacity .2s ease;}
+  .sidebar-group-header:hover{opacity:1;background:rgba(255,255,255,.09);backdrop-filter:blur(8px) saturate(160%);transform:scale(1.03) translateX(1px);}
+  .sidebar-chevron{display:inline-block;font-size:9px;transition:transform .25s ease;}
+  .sidebar-chevron.open{transform:rotate(90deg);}
+  .sidebar-group-items{display:grid;grid-template-rows:0fr;transition:grid-template-rows .3s cubic-bezier(.4,0,.2,1);}
+  .sidebar-group-items.open{grid-template-rows:1fr;}
+  .sidebar-group-items-inner{overflow:hidden;min-height:0;}
+  .sidebar-link{display:flex;align-items:center;gap:10px;margin:2px 10px;padding:9px 12px;border-radius:12px;color:#c7cba0;font-size:13.5px;cursor:pointer;text-decoration:none;transition:transform .22s cubic-bezier(.34,1.56,.64,1),background .2s ease,box-shadow .2s ease,color .2s ease;}
   .sidebar-link .ic{width:18px;text-align:center;font-size:14px;flex:none;}
-  .sidebar-link:hover{background:rgba(255,255,255,.06);color:#fff;}
-  .sidebar-link.active{background:rgba(255,255,255,.11);color:#fff;border-left-color:var(--accent-light);font-weight:600;}
-  .sidebar-foot{padding:14px 20px 16px;border-top:1px solid rgba(255,255,255,.1);font-size:12px;flex:none;}
+  .sidebar-link:hover{background:rgba(255,255,255,.10);backdrop-filter:blur(8px) saturate(160%);color:#fff;transform:scale(1.035) translateX(2px);box-shadow:0 6px 16px rgba(0,0,0,.2);}
+  .sidebar-link.active{background:rgba(255,255,255,.16);backdrop-filter:blur(8px) saturate(160%);color:#fff;font-weight:600;box-shadow:0 4px 14px rgba(0,0,0,.16);}
+  .sidebar-foot{padding:14px 16px 16px;border-top:1px solid rgba(255,255,255,.1);font-size:12px;flex:none;}
   .sidebar-foot .who-name{font-weight:600;color:#fff;font-size:13px;}
   .sidebar-foot .who-role{opacity:.7;margin-top:1px;}
-  .sidebar-foot button{width:100%;margin-top:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);color:#fff;padding:8px;border-radius:9px;font-size:12px;cursor:pointer;}
-  .sidebar-foot button:hover{background:rgba(255,255,255,.18);}
-  .sidebar-foot button.logout{background:rgba(192,57,43,.22);border-color:rgba(192,57,43,.4);}
-  .sidebar-foot button.logout:hover{background:rgba(192,57,43,.38);}
+  .sidebar-foot button{width:100%;margin-top:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);color:#fff;padding:8px;border-radius:12px;font-size:12px;cursor:pointer;transition:transform .2s cubic-bezier(.34,1.56,.64,1),background .2s ease;}
+  .sidebar-foot button:hover{background:rgba(255,255,255,.2);transform:scale(1.02);}
+  .sidebar-foot button.logout{background:rgba(192,57,43,.24);border-color:rgba(192,57,43,.4);}
+  .sidebar-foot button.logout:hover{background:rgba(192,57,43,.4);}
   .sidebar-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:25;}
-  .app-col{flex:1;min-width:0;display:flex;flex-direction:column;min-height:100vh;}
-  .app-topbar{display:none;align-items:center;gap:12px;background:var(--ink);color:#fff;padding:12px 16px;position:sticky;top:0;z-index:20;}
+  .app-col{flex:1;min-width:0;display:flex;flex-direction:column;min-height:100vh;background:#fff;margin:14px 14px 14px 0;border-radius:22px;box-shadow:0 8px 26px rgba(20,22,12,.06);}
+  .app-topbar{display:none;align-items:center;gap:12px;background:var(--ink);color:#fff;padding:12px 16px;position:sticky;top:0;z-index:20;border-radius:22px 22px 0 0;}
   .app-topbar .brand{font-weight:700;font-size:15px;display:flex;align-items:center;gap:7px;}
   .app-topbar .brand .dot{width:8px;height:8px;border-radius:50%;background:var(--accent-light);display:inline-block;}
-  button.sidebar-toggle{background:rgba(255,255,255,.12);border:none;color:#fff;width:34px;height:34px;border-radius:9px;font-size:16px;cursor:pointer;flex:none;}
-  main{padding:20px 26px 60px;max-width:1180px;}
+  button.sidebar-toggle{background:rgba(255,255,255,.12);border:none;color:#fff;width:34px;height:34px;border-radius:12px;font-size:16px;cursor:pointer;flex:none;transition:transform .2s cubic-bezier(.34,1.56,.64,1);}
+  button.sidebar-toggle:hover{transform:scale(1.06);}
+  main{padding:22px 28px 60px;max-width:1180px;}
   @media(max-width:960px){
-    .sidebar{position:fixed;left:0;top:0;transform:translateX(-100%);transition:transform .25s ease;box-shadow:0 0 30px rgba(0,0,0,.35);}
+    #app{background:#fff;}
+    .sidebar{position:fixed;left:0;top:0;height:calc(100vh - 20px);margin:10px;transform:translateX(calc(-100% - 10px));transition:transform .25s cubic-bezier(.34,1.56,.64,1);box-shadow:0 20px 40px rgba(0,0,0,.35);}
     .sidebar.open{transform:translateX(0);}
-    .app-topbar{display:flex;}
+    .app-col{margin:0;border-radius:0;}
+    .app-topbar{display:flex;border-radius:0;}
     .sidebar-backdrop.open{display:block;}
     main{padding:16px 14px 50px;}
   }
@@ -71,6 +84,7 @@
   .kpi.warn .num{color:var(--amber);}
   .kpi.bad .num{color:var(--red);}
   .kpi.good .num{color:var(--green);}
+  .kpi.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-light);}
   /* Live Tracking card - a compact, Fleetx-style status strip: colored dot +
      status up top, a few small stat tiles, a simple fuel bar, and a location
      line. Deliberately plain (no table, no borders-within-borders) so it
@@ -997,9 +1011,9 @@ function tabsForInner(role){
   // odometer or fuel readings (they previously had odometer_verify; removed
   // on request).
   if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="admin") return [["admin_dashboard","Dashboard"],["admin_vehicles","Vehicles"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
@@ -1027,7 +1041,7 @@ const SIDEBAR_GROUP_META = {
 const TAB_GROUP_MAP = {
   my_vehicles:"fleet", onboarding:"fleet", admin_vehicles:"fleet", usage:"fleet",
   assignments:"fleet", routes:"fleet", subvendor_expenses:"fleet",
-  odometer_verify:"fleet", fuel_verify:"fleet", repairs:"fleet", workshop:"fleet",
+  odometer_verify:"fleet", fuel_verify:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet",
   subvendors:"fleet", hierarchy:"fleet",
   trips:"trips", my_attendance:"trips", attendance:"trips", my_expenses:"trips", queue:"trips",
   expenses:"finance", expenses_view:"finance", payroll:"finance", backup:"finance",
@@ -1035,6 +1049,16 @@ const TAB_GROUP_MAP = {
   reports:"tools", smart_assistant:"tools", letterhead:"tools",
   dashboard:"tools", admin_dashboard:"tools", operations:"tools",
 };
+// Which sidebar groups are expanded - keyed by group key, defaults to all
+// open so nothing is hidden the first time someone sees the new nav. Lives
+// outside sidebarNavHtml so toggling survives it being called again (e.g.
+// every switchTab() re-render) - only a manual click collapses/expands.
+let sidebarGroupOpen = {fleet:true, trips:true, finance:true, people:true, tools:true};
+function toggleSidebarGroup(key){
+  sidebarGroupOpen[key] = !sidebarGroupOpen[key];
+  const nav = document.querySelector(".sidebar-nav");
+  if(nav) nav.innerHTML = sidebarNavHtml(tabsFor(currentUser.role));
+}
 function sidebarNavHtml(tabs){
   if(!tabs.length) return "";
   const [homeKey, homeLabel] = tabs[0];
@@ -1048,9 +1072,15 @@ function sidebarNavHtml(tabs){
     const items = buckets[g];
     if(!items || !items.length) return "";
     const meta = SIDEBAR_GROUP_META[g];
+    const open = sidebarGroupOpen[g]!==false;
     return `
-    <div class="sidebar-group-title">${meta.icon} ${meta.label}</div>
-    ${items.map(([k,l])=>`<a class="sidebar-link ${view.tab===k?'active':''}" onclick="switchTab('${k}')">${l}</a>`).join("")}`;
+    <button type="button" class="sidebar-group-header" onclick="toggleSidebarGroup('${g}')">
+      <span>${meta.icon} ${meta.label}</span>
+      <span class="sidebar-chevron ${open?'open':''}">&#9656;</span>
+    </button>
+    <div class="sidebar-group-items ${open?'open':''}"><div class="sidebar-group-items-inner">
+      ${items.map(([k,l])=>`<a class="sidebar-link ${view.tab===k?'active':''}" onclick="switchTab('${k}')">${l}</a>`).join("")}
+    </div></div>`;
   }).join("");
   return homeHtml + groupsHtml;
 }
@@ -1112,6 +1142,7 @@ async function routeView(){
   if(tab==="payroll") return payrollScreen();
   if(tab==="odometer_verify") return odometerVerificationScreen();
   if(tab==="fuel_verify") return fuelVerificationScreen();
+  if(tab==="gps_link") return gpsLinkScreen();
   if(tab==="repairs") return repairRequestsScreen();
   if(tab==="workshop") return workshopScreen();
   if(tab==="smart_assistant") return smartAssistantScreen();
@@ -4685,8 +4716,20 @@ function renderVehicleMiniMap(containerId, lat, lng, status, seatingCapacity){
   _miniMapInstances[containerId] = map;
 }
 // ---- Live Fleet Map (dashboard-wide) -----------------------------------
+// The KPI tiles above the map double as filters (click "Running" to show
+// only running vehicles, click again to clear) - fleetMapStatusFilter holds
+// the current choice, _lastFleetLiveVehicles keeps the last-fetched raw
+// list around so filtering/re-rendering doesn't need a fresh API call.
+let fleetMapStatusFilter = null; // null | "running" | "idle" | "other"
+let _lastFleetLiveVehicles = [];
+function fleetMapStatusOf(v){
+  if(v.status==="RUNNING") return "running";
+  if(v.status==="IDLE") return "idle";
+  return "other";
+}
 function fleetMapCardHtml(fleetLive){
   const list = fleetLive.vehicles || [];
+  _lastFleetLiveVehicles = list;
   if(fleetLive.error){
     return `<div class="card"><h2 class="section-title">📍 Live Fleet Map</h2><div class="muted">${fleetLive.error}</div></div>`;
   }
@@ -4694,39 +4737,141 @@ function fleetMapCardHtml(fleetLive){
     return `<div class="card"><h2 class="section-title">📍 Live Fleet Map</h2><div class="muted">No vehicles are linked to a GPS device yet.</div></div>`;
   }
   const counts = {running:0, idle:0, other:0};
-  list.forEach(v=>{
-    if(v.status==="RUNNING") counts.running++;
-    else if(v.status==="IDLE") counts.idle++;
-    else counts.other++;
-  });
+  list.forEach(v=>counts[fleetMapStatusOf(v)]++);
+  const tile = (kind, cls, num, label) => `<div class="kpi ${cls} ${fleetMapStatusFilter===kind?'active':''}" style="cursor:pointer" onclick="setFleetMapFilter('${kind}')" title="Click to ${fleetMapStatusFilter===kind?'clear this filter':'show only '+label.toLowerCase()+' on the map'}"><div class="num">${num}</div><div class="label">${label}</div></div>`;
   return `
   <div class="card">
     <div class="flex-between"><h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">📍 Live Fleet Map</h2><span class="muted">${list.length} of ${vehicles.length} vehicles linked to GPS</span></div>
     <div class="grid cols-3" style="margin:12px 0;">
-      <div class="kpi good"><div class="num">${counts.running}</div><div class="label">Running</div></div>
-      <div class="kpi warn"><div class="num">${counts.idle}</div><div class="label">Idle</div></div>
-      <div class="kpi"><div class="num">${counts.other}</div><div class="label">Parked / other</div></div>
+      ${tile('running','good',counts.running,'Running')}
+      ${tile('idle','warn',counts.idle,'Idle')}
+      ${tile('other','',counts.other,'Parked / other')}
     </div>
     <div id="fleetMapContainer" class="fleet-map"></div>
+    <div id="fleetMapError" class="live-track-empty" style="display:none;margin-top:8px;">Map couldn't load - check your internet connection and refresh.</div>
   </div>`;
+}
+function setFleetMapFilter(kind){
+  fleetMapStatusFilter = fleetMapStatusFilter===kind ? null : kind;
+  // Re-render just the KPI/map card in place rather than the whole
+  // dashboard, so scroll position and everything else on the page stays put.
+  const host = document.getElementById("fleetMapContainer");
+  const card = host ? host.closest(".card") : null;
+  if(card){
+    card.outerHTML = fleetMapCardHtml({vehicles:_lastFleetLiveVehicles});
+    setTimeout(()=>renderFleetMapMarkers(_lastFleetLiveVehicles), 0);
+  }
 }
 let _fleetMapInstance = null;
 function renderFleetMapMarkers(list){
   const el = document.getElementById("fleetMapContainer");
-  if(!el || typeof L==="undefined") return;
+  const errEl = document.getElementById("fleetMapError");
+  if(!el) return;
+  if(typeof L==="undefined"){
+    // Leaflet didn't load (blocked network/extension, offline, etc.) - say
+    // so plainly instead of leaving a silent blank box where the map should be.
+    if(errEl) errEl.style.display = "block";
+    return;
+  }
   if(_fleetMapInstance){ _fleetMapInstance.remove(); _fleetMapInstance = null; }
+  const filtered = fleetMapStatusFilter ? list.filter(v=>fleetMapStatusOf(v)===fleetMapStatusFilter) : list;
   const map = L.map(el, {scrollWheelZoom:false}).setView([17.4, 78.45], 11);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
   _fleetMapInstance = map;
   const bounds = [];
-  list.forEach(v=>{
+  filtered.forEach(v=>{
     if(v.latitude==null || v.longitude==null) return;
     const vMeta = vehicles.find(x=>x.id===v.vehicleId);
     const marker = L.marker([v.latitude, v.longitude], {icon: busDivIcon(v.status, vMeta ? vMeta.seatingCapacity : null)}).addTo(map);
-    marker.bindPopup(`<b>${v.reg}</b><br>${formatLiveStatusLabel(v.status)}${v.speedKmh!=null? ' &middot; '+v.speedKmh+' km/h' : ''}${v.fuelPercent!=null? ' &middot; Fuel '+v.fuelPercent+'%' : ''}`);
+    // Tapping a marker shows a quick summary plus a button into that
+    // vehicle's full Today's Status screen (checklist, docs, cost history).
+    const popupDiv = document.createElement("div");
+    popupDiv.innerHTML = `<b>${v.reg}</b><br>${formatLiveStatusLabel(v.status)}${v.speedKmh!=null? ' &middot; '+v.speedKmh+' km/h' : ''}${v.fuelPercent!=null? ' &middot; Fuel '+v.fuelPercent+'%' : ''}<br><button class="btn small" style="margin-top:6px;">View full details &rsaquo;</button>`;
+    popupDiv.querySelector("button").onclick = () => goto('vehicle_status', {vehicleId: v.vehicleId});
+    marker.bindPopup(popupDiv);
     bounds.push([v.latitude, v.longitude]);
   });
   if(bounds.length) map.fitBounds(bounds, {padding:[30,30], maxZoom:14});
+  else map.setView([17.4, 78.45], 6); // nothing matches the filter - zoom out to a neutral view instead of an empty close-up
+  // Leaflet sizes itself off the container's layout at creation time; if the
+  // container hasn't fully settled yet (fresh insert, sidebar collapse, etc.)
+  // the tiles can render at the wrong size or not at all. invalidateSize()
+  // a beat later fixes that without needing the user to resize the window.
+  setTimeout(()=>{ if(_fleetMapInstance===map) map.invalidateSize(); }, 150);
+}
+
+// ---- GPS Device Linking (Data Team + Owner) ----------------------------
+// Fleetx doesn't always label a device with our registration number - some
+// are named by chassis number, engine number, or just the manufacturer,
+// especially on older/retrofitted units - so the automatic reg-number match
+// (see resolveFleetxMatch in server.js) silently misses those. This screen
+// lists every one of our vehicles next to a picker of every raw Fleetx
+// device (shown with its own driver/status so it's identifiable even when
+// its name doesn't look like a plate), and lets Data Team/Owner pin one to
+// the other. Once saved it's stored on the vehicle (fleetxVehicleNumber)
+// and always wins over the automatic match, permanently, until changed here.
+let gpsLinkSearch = "";
+function setGpsLinkSearch(v){ gpsLinkSearch = v || ""; renderMain(); }
+function gpsDeviceOptionsHtml(devices, selectedValue){
+  let matched = !selectedValue;
+  let opts = `<option value="">— Auto-match by registration number —</option>`;
+  devices.forEach(d=>{
+    if(!d.vehicleNumber) return;
+    const isSelected = !!selectedValue && d.vehicleNumber === selectedValue;
+    if(isSelected) matched = true;
+    const label = `${d.vehicleNumber}${d.driverName? ' · Driver: '+d.driverName : ''}${d.status? ' · '+formatLiveStatusLabel(d.status) : ''}${d.linkedVehicleReg? ' · currently -> '+d.linkedVehicleReg : ''}`;
+    opts += `<option value="${d.vehicleNumber.replace(/"/g,'&quot;')}" ${isSelected?'selected':''}>${label}</option>`;
+  });
+  if(selectedValue && !matched){
+    opts += `<option value="${selectedValue.replace(/"/g,'&quot;')}" selected>${selectedValue} (not currently seen in Fleetx)</option>`;
+  }
+  return opts;
+}
+async function gpsLinkScreen(){
+  let data;
+  try{ data = await api('/fleetx/devices'); }
+  catch(e){ return `<h1 class="page-title">📡 GPS Device Linking</h1><div class="banner error">${e.message}</div>`; }
+  const devices = data.devices || [];
+  const q = gpsLinkSearch.trim().toLowerCase();
+  const filteredVehicles = !q ? vehicles : vehicles.filter(v=>
+    (v.reg||"").toLowerCase().includes(q) || (v.make||"").toLowerCase().includes(q) ||
+    (v.model||"").toLowerCase().includes(q) || (v.chassisNo||"").toLowerCase().includes(q) ||
+    (v.engineNo||"").toLowerCase().includes(q) || (v.fleetxVehicleNumber||"").toLowerCase().includes(q)
+  );
+  const rows = filteredVehicles.map(v=>{
+    const isManual = !!v.fleetxVehicleNumber;
+    const autoDevice = devices.find(d=>d.linkedVehicleId===v.id && !isManual);
+    const statusHtml = isManual
+      ? `<span class="badge approved">Manually linked</span>`
+      : autoDevice ? `<span class="badge">Auto-matched</span>` : `<span class="badge pending">Not linked</span>`;
+    return `<tr>
+      <td><b>${v.reg}</b><div class="muted" style="font-size:11.5px;">${v.make||''} ${v.model||''}</div></td>
+      <td>${statusHtml}</td>
+      <td>
+        <select id="gpsLinkSelect_${v.id}" style="max-width:320px;">${gpsDeviceOptionsHtml(devices, v.fleetxVehicleNumber||"")}</select>
+      </td>
+      <td><button class="btn small" onclick="saveGpsLink('${v.id}')">Save</button></td>
+    </tr>`;
+  }).join("");
+  return `
+  <h1 class="page-title">📡 GPS Device Linking</h1>
+  <div class="banner">Auto-matching pairs a vehicle to a Fleetx device by registration number. If a device is labeled with a chassis number, engine number, or manufacturer name instead, link it manually here - once saved, the manual link always wins and stays until you change it.</div>
+  <div class="card">
+    <input type="text" placeholder="Search by registration, make, model, chassis or engine no..." value="${gpsLinkSearch}" oninput="setGpsLinkSearch(this.value)" style="width:100%;margin-bottom:12px;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;" />
+    <table><tr><th>Vehicle</th><th>Link Status</th><th>Fleetx Device</th><th></th></tr>${rows || `<tr><td colspan="4" class="empty">No vehicles match your search.</td></tr>`}</table>
+  </div>
+  <div class="card"><div class="muted">${devices.length} Fleetx device${devices.length===1?'':'s'} seen in the last live fetch.</div></div>
+  `;
+}
+async function saveGpsLink(vehicleId){
+  const sel = document.getElementById(`gpsLinkSelect_${vehicleId}`);
+  if(!sel) return;
+  try{
+    const v = await api(`/vehicles/${vehicleId}/fleetx-link`, {method:"PATCH", body: JSON.stringify({fleetxVehicleNumber: sel.value || null})});
+    const idx = vehicles.findIndex(x=>x.id===vehicleId);
+    if(idx>-1) vehicles[idx] = v;
+    await renderMain();
+  }catch(e){ alert(e.message); }
 }
 
 // The one page every clickable dashboard row/card for a specific vehicle
@@ -6321,7 +6466,7 @@ async function payrollScreen(){
 // ---------- expose for inline handlers ----------
 Object.assign(window, {
   choosePortal,
-  doLogin, doLogout, switchTab, goto, toggleSidebar, playTripReplay, draftSet, updateBreathalyzer, startPhotoCapture,
+  doLogin, doLogout, switchTab, goto, toggleSidebar, toggleSidebarGroup, playTripReplay, setFleetMapFilter, setGpsLinkSearch, saveGpsLink, draftSet, updateBreathalyzer, startPhotoCapture,
   submitForcedPasswordChange, submitVoluntaryPasswordChange,
   updateDoc, updateDocCopy, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, renameClient, editSite, addDriver, addPerson, correctOdometer, captureBillPhoto, submitExpense, decideExpense,

@@ -1926,6 +1926,7 @@ app.post(
       usage: usage || "fixed_route",
       clientId: null,
       siteId: null,
+      fleetxVehicleNumber: null,
       // A Area Supervisor onboarding a vehicle IS that vehicle's supervisor
       // from the start - no separate assignment step needed. Admin-created
       // vehicles are unassigned until someone explicitly assigns them, same
@@ -6055,6 +6056,25 @@ function liveTrackingPayloadFor(match) {
 // telemetry, not sensitive HR or financial data, so it isn't further
 // role-gated beyond requireAuth. Returns {matched:false} (not an error) when
 // this vehicle simply isn't one Fleetx has a device on yet.
+// Resolves which raw Fleetx vehicle record (if any) belongs to one of our
+// vehicles. Fleetx device names don't always match our registration number
+// cleanly - some are labeled with a chassis number, engine number, or just
+// the manufacturer, especially on older/retrofitted GPS units. Data Team
+// can manually pin a vehicle to a specific Fleetx device (vehicle.
+// fleetxVehicleNumber, see the /fleetx-link endpoint below) - that manual
+// link, once set, ALWAYS wins over the automatic registration-number match,
+// and persists indefinitely (it's just a field on the vehicle record, saved
+// the same way as everything else).
+function resolveFleetxMatch(vehicle, liveVehicles) {
+  if (vehicle.fleetxVehicleNumber) {
+    const wantManual = normalizePlate(vehicle.fleetxVehicleNumber);
+    const manualMatch = liveVehicles.find((fv) => normalizePlate(fv.vehicleNumber) === wantManual);
+    if (manualMatch) return manualMatch;
+  }
+  const wantPlate = normalizePlate(vehicle.reg);
+  return liveVehicles.find((fv) => normalizePlate(fv.vehicleNumber) === wantPlate) || null;
+}
+
 app.get(
   "/api/vehicles/:id/live-tracking",
   requireAuth,
@@ -6067,8 +6087,7 @@ app.get(
     } catch (err) {
       return res.status(err.status || 502).json({ error: err.message });
     }
-    const wantPlate = normalizePlate(vehicle.reg);
-    const match = (live.vehicles || []).find((fv) => normalizePlate(fv.vehicleNumber) === wantPlate);
+    const match = resolveFleetxMatch(vehicle, live.vehicles || []);
     if (!match) return res.json({ matched: false });
     res.json(liveTrackingPayloadFor(match));
   })
@@ -6089,18 +6108,83 @@ app.get(
     } catch (err) {
       return res.status(err.status || 502).json({ error: err.message });
     }
-    const byPlate = new Map();
-    (live.vehicles || []).forEach((fv) => {
-      const key = normalizePlate(fv.vehicleNumber);
-      if (key) byPlate.set(key, fv);
-    });
+    const liveVehicles = live.vehicles || [];
     const results = [];
     db.vehicles.forEach((vehicle) => {
-      const match = byPlate.get(normalizePlate(vehicle.reg));
+      const match = resolveFleetxMatch(vehicle, liveVehicles);
       if (!match) return;
       results.push(Object.assign({ vehicleId: vehicle.id, reg: vehicle.reg }, liveTrackingPayloadFor(match)));
     });
     res.json({ vehicles: results });
+  })
+);
+
+// Lets Data Team/Owner see every raw Fleetx device (as Fleetx itself names
+// it - could be a plate, a chassis number, an engine number, or just the
+// manufacturer) side by side with whichever of our vehicles it currently
+// resolves to, so they can spot and fix mismatches instead of a vehicle
+// silently having no live tracking. See resolveFleetxMatch() above for how
+// the manual link (once set) takes over from the automatic reg-number match.
+app.get(
+  "/api/fleetx/devices",
+  requireAuth,
+  requireRole(...VEHICLE_APPROVAL_ROLES),
+  h(async (req, res) => {
+    let live;
+    try {
+      live = await fetchFleetxLive();
+    } catch (err) {
+      return res.status(err.status || 502).json({ error: err.message });
+    }
+    const liveVehicles = live.vehicles || [];
+    const linkByPlate = new Map(); // normalized fleetx vehicleNumber -> our vehicle
+    db.vehicles.forEach((vehicle) => {
+      const match = resolveFleetxMatch(vehicle, liveVehicles);
+      if (match) linkByPlate.set(normalizePlate(match.vehicleNumber), vehicle);
+    });
+    const devices = liveVehicles.map((fv) => {
+      const linkedVehicle = linkByPlate.get(normalizePlate(fv.vehicleNumber)) || null;
+      return {
+        vehicleNumber: fv.vehicleNumber || null,
+        driverName: fv.driverName || null,
+        status: fv.currentStatus || null,
+        address: fv.address || null,
+        lastUpdatedAt: fv.lastUpdatedAt || null,
+        linkedVehicleId: linkedVehicle ? linkedVehicle.id : null,
+        linkedVehicleReg: linkedVehicle ? linkedVehicle.reg : null,
+        linkedVia: !linkedVehicle
+          ? null
+          : linkedVehicle.fleetxVehicleNumber && normalizePlate(linkedVehicle.fleetxVehicleNumber) === normalizePlate(fv.vehicleNumber)
+          ? "manual"
+          : "auto",
+      };
+    });
+    res.json({ devices });
+  })
+);
+
+// Sets or clears the manual Fleetx device link on one of our vehicles.
+// Passing an empty/omitted fleetxVehicleNumber clears the manual link and
+// falls back to the automatic registration-number match.
+app.patch(
+  "/api/vehicles/:id/fleetx-link",
+  requireAuth,
+  requireRole(...VEHICLE_APPROVAL_ROLES),
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+    const raw = (req.body || {}).fleetxVehicleNumber;
+    const value = raw && String(raw).trim() ? String(raw).trim() : null;
+    const before = vehicle.fleetxVehicleNumber || null;
+    vehicle.fleetxVehicleNumber = value;
+    await audit(
+      req.user,
+      "fleetx_link",
+      value
+        ? `${req.user.name} linked vehicle ${vehicle.reg} to Fleetx device "${value}"${before ? ` (was "${before}")` : ""}`
+        : `${req.user.name} cleared the manual Fleetx link on vehicle ${vehicle.reg}${before ? ` (was "${before}")` : ""}`
+    );
+    res.json(vehicle);
   })
 );
 
