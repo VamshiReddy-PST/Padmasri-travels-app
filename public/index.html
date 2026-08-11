@@ -9,6 +9,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@1,500;1,600;1,700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
   :root{
     --ink:#2B2E1F; --accent:#4C6A2B; --accent-dark:#3A5220; --accent-light:#E9EDA8; --green:#2E7D32;
@@ -18,29 +20,42 @@
   *{box-sizing:border-box;}
   body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;}
   .accent-script{font-family:'Playfair Display',Georgia,serif;font-style:italic;font-weight:600;}
-  #app{max-width:1180px;margin:0 auto;min-height:100vh;background:var(--bg);}
-  header.topbar{background:var(--ink);color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;}
-  header.topbar .brand{font-weight:700;font-size:17px;display:flex;align-items:center;gap:8px;}
-  header.topbar .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent-light);display:inline-block;}
-  header.topbar .who{font-size:13px;opacity:.9;text-align:right;}
-  header.topbar button.logout{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35);color:#fff;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;margin-left:10px;}
-  header.topbar button.logout:hover{background:rgba(255,255,255,.28);}
-  nav.tabbar{background:#20241A;display:flex;gap:2px;padding:0 16px;flex-wrap:wrap;}
-  nav.tabbar button{background:transparent;border:none;color:#c7cba0;padding:11px 16px;font-size:13px;cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;}
-  nav.tabbar button.active{color:#fff;border-bottom-color:var(--accent-light);font-weight:600;}
-  /* Related tabs fold into a dropdown (see NAV_GROUPS) so the header never
-     needs horizontal scrolling no matter how many tabs a role has. */
-  nav.tabbar details.nav-group{position:relative;}
-  nav.tabbar details.nav-group summary{list-style:none;cursor:pointer;color:#c7cba0;padding:11px 14px;font-size:13px;border-bottom:3px solid transparent;white-space:nowrap;user-select:none;display:flex;align-items:center;gap:5px;}
-  nav.tabbar details.nav-group summary::-webkit-details-marker{display:none;}
-  nav.tabbar details.nav-group summary.active,nav.tabbar details.nav-group[open] summary{color:#fff;}
-  nav.tabbar details.nav-group summary.active{border-bottom-color:var(--accent-light);font-weight:600;}
-  nav.tabbar .nav-caret{font-size:9px;opacity:.7;}
-  nav.tabbar .nav-group-menu{position:absolute;top:100%;left:0;background:#20241A;border:1px solid rgba(255,255,255,.15);border-radius:0 0 10px 10px;min-width:200px;z-index:20;box-shadow:0 10px 24px rgba(0,0,0,.35);padding:4px;}
-  nav.tabbar .nav-group-menu button{display:block;width:100%;text-align:left;padding:9px 12px;border-radius:6px;border-bottom:none;}
-  nav.tabbar .nav-group-menu button:hover{background:rgba(255,255,255,.08);color:#fff;}
-  nav.tabbar .nav-group-menu button.active{background:rgba(255,255,255,.12);}
-  main{padding:18px 20px 60px;}
+  #app{min-height:100vh;background:var(--bg);display:flex;align-items:stretch;}
+  /* ---- Left sidebar shell (replaces the old top tab bar) ----
+     Desktop: fixed 236px column, sticky full-height, always visible.
+     Mobile (<960px): becomes an off-canvas drawer (see .sidebar.open and
+     .app-topbar below), toggled by the hamburger button that only shows
+     on narrow screens. */
+  .sidebar{width:236px;flex:none;background:var(--ink);color:#fff;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto;z-index:30;}
+  .sidebar-brand{padding:18px 20px 14px;font-weight:700;font-size:16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid rgba(255,255,255,.08);flex:none;}
+  .sidebar-brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent-light);display:inline-block;}
+  .sidebar-nav{flex:1;overflow-y:auto;padding:8px 0 14px;}
+  .sidebar-group-title{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;opacity:.5;padding:16px 20px 6px;}
+  .sidebar-link{display:flex;align-items:center;gap:10px;padding:10px 20px;color:#c7cba0;font-size:13.5px;cursor:pointer;border-left:3px solid transparent;text-decoration:none;}
+  .sidebar-link .ic{width:18px;text-align:center;font-size:14px;flex:none;}
+  .sidebar-link:hover{background:rgba(255,255,255,.06);color:#fff;}
+  .sidebar-link.active{background:rgba(255,255,255,.11);color:#fff;border-left-color:var(--accent-light);font-weight:600;}
+  .sidebar-foot{padding:14px 20px 16px;border-top:1px solid rgba(255,255,255,.1);font-size:12px;flex:none;}
+  .sidebar-foot .who-name{font-weight:600;color:#fff;font-size:13px;}
+  .sidebar-foot .who-role{opacity:.7;margin-top:1px;}
+  .sidebar-foot button{width:100%;margin-top:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);color:#fff;padding:8px;border-radius:9px;font-size:12px;cursor:pointer;}
+  .sidebar-foot button:hover{background:rgba(255,255,255,.18);}
+  .sidebar-foot button.logout{background:rgba(192,57,43,.22);border-color:rgba(192,57,43,.4);}
+  .sidebar-foot button.logout:hover{background:rgba(192,57,43,.38);}
+  .sidebar-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:25;}
+  .app-col{flex:1;min-width:0;display:flex;flex-direction:column;min-height:100vh;}
+  .app-topbar{display:none;align-items:center;gap:12px;background:var(--ink);color:#fff;padding:12px 16px;position:sticky;top:0;z-index:20;}
+  .app-topbar .brand{font-weight:700;font-size:15px;display:flex;align-items:center;gap:7px;}
+  .app-topbar .brand .dot{width:8px;height:8px;border-radius:50%;background:var(--accent-light);display:inline-block;}
+  button.sidebar-toggle{background:rgba(255,255,255,.12);border:none;color:#fff;width:34px;height:34px;border-radius:9px;font-size:16px;cursor:pointer;flex:none;}
+  main{padding:20px 26px 60px;max-width:1180px;}
+  @media(max-width:960px){
+    .sidebar{position:fixed;left:0;top:0;transform:translateX(-100%);transition:transform .25s ease;box-shadow:0 0 30px rgba(0,0,0,.35);}
+    .sidebar.open{transform:translateX(0);}
+    .app-topbar{display:flex;}
+    .sidebar-backdrop.open{display:block;}
+    main{padding:16px 14px 50px;}
+  }
   .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px 18px;margin-bottom:16px;box-shadow:0 4px 14px rgba(43,46,31,.05);}
   h1.page-title{font-size:20px;margin:4px 0 16px;color:var(--ink);}
   h2.section-title{font-size:15px;margin:0 0 10px;color:var(--ink);border-bottom:2px solid var(--accent-light);padding-bottom:6px;}
@@ -78,6 +93,16 @@
   .live-track-row{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:13px;color:var(--ink);}
   .live-track-row a{white-space:nowrap;font-size:12.5px;}
   .live-track-empty{font-size:13px;color:var(--grey);}
+  /* Leaflet map containers - one small per-vehicle map on each vehicle's
+     Live Tracking card, one large one on the Owner dashboard's Live Fleet
+     Map. Bus markers are plain inline SVG via Leaflet divIcon, so strip out
+     Leaflet's default white marker box/shadow around them. */
+  .vehicle-mini-map{width:100%;height:220px;border-radius:12px;overflow:hidden;border:1px solid var(--border);margin-top:10px;}
+  .fleet-map{width:100%;height:420px;border-radius:14px;overflow:hidden;border:1px solid var(--border);}
+  .bus-marker-icon{background:transparent;border:none;}
+  .replay-inputs{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;}
+  .replay-inputs label{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--grey);}
+  .replay-inputs input{padding:7px 9px;border:1px solid var(--border);border-radius:8px;font-size:12.5px;font-family:inherit;}
   .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;}
   .badge.pending{background:#FBF3D6;color:var(--amber);}
   .badge.approved{background:#E9F3DC;color:var(--green);}
@@ -981,56 +1006,90 @@ function tabsForInner(role){
   return [];
 }
 
-// Tabs that belong together get folded into one dropdown so the header
-// never needs horizontal scrolling, no matter how many tabs a role has
-// (Owner has the most - 15 flat tabs used to overflow the bar). Any tab
-// not listed in a group (a role's main/home screen, plus AI Assistant)
-// stays as its own top-level button so it's never buried a click deeper.
-// Built once, shared by every role - a role simply won't render a group
-// that has none of its tabs in it.
-const NAV_GROUPS = [
-  { key:"trips_vehicles", icon:"🚐", label:"Trips & Vehicles", tabs:["trips","usage","assignments","routes","subvendor_expenses","onboarding"] },
-  { key:"verification", icon:"🛠️", label:"Verification & Repairs", tabs:["odometer_verify","fuel_verify","repairs","workshop"] },
-  { key:"money", icon:"💰", label:"Money", tabs:["expenses","expenses_view","my_expenses","payroll","subvendors","reports","backup"] },
-  { key:"people", icon:"👥", label:"People", tabs:["people","attendance","my_attendance"] },
-  { key:"admin", icon:"📋", label:"Admin", tabs:["audit","approvals"] },
-];
-function navBarHtml(tabs){
-  const tabMap = new Map(tabs); // key -> label, and lets us know which keys actually exist for this role
-  const grouped = new Set();
-  const groupsHtml = NAV_GROUPS.map(g=>{
-    const items = g.tabs.filter(k=>tabMap.has(k));
-    if(!items.length) return "";
-    items.forEach(k=>grouped.add(k));
-    const isActive = items.includes(view.tab);
-    return `<details class="nav-group" name="ownerNav">
-      <summary class="${isActive?'active':''}">${g.icon} ${g.label} <span class="nav-caret">&#9662;</span></summary>
-      <div class="nav-group-menu">
-        ${items.map(k=>`<button class="${view.tab===k?'active':''}" onclick="switchTab('${k}')">${tabMap.get(k)}</button>`).join("")}
-      </div>
-    </details>`;
+// Every tab key in the app buckets into exactly one of these 5 sidebar
+// sections (icon/label pairs for the section headers). The very first tab
+// in each role's tabsForInner() list is deliberately NOT bucketed here -
+// it's rendered on its own as "Home" at the top of the sidebar instead
+// (see sidebarNavHtml()), since that's each role's actual landing screen
+// (Dashboard for Owner, My Vehicles for a Supervisor, Operations for Ops
+// Manager, etc.) and deserves top billing, not to be buried in a group.
+// This replaces the old top tab-bar's dropdown grouping (NAV_GROUPS) with
+// a left sidebar - same underlying tabsFor()/routeView() plumbing, just a
+// different, more consolidated presentation (~15+ flat tabs down to 5
+// sections + Home, matching the Owner's request for a simpler nav).
+const SIDEBAR_GROUP_META = {
+  fleet:   {icon:"🚐", label:"Fleet"},
+  trips:   {icon:"🕒", label:"Trips & Attendance"},
+  finance: {icon:"💰", label:"Finance"},
+  people:  {icon:"👥", label:"People"},
+  tools:   {icon:"🧭", label:"Reports & Tools"},
+};
+const TAB_GROUP_MAP = {
+  my_vehicles:"fleet", onboarding:"fleet", admin_vehicles:"fleet", usage:"fleet",
+  assignments:"fleet", routes:"fleet", subvendor_expenses:"fleet",
+  odometer_verify:"fleet", fuel_verify:"fleet", repairs:"fleet", workshop:"fleet",
+  subvendors:"fleet", hierarchy:"fleet",
+  trips:"trips", my_attendance:"trips", attendance:"trips", my_expenses:"trips", queue:"trips",
+  expenses:"finance", expenses_view:"finance", payroll:"finance", backup:"finance",
+  people:"people", approvals:"people", corrections:"people", audit:"people",
+  reports:"tools", smart_assistant:"tools", letterhead:"tools",
+  dashboard:"tools", admin_dashboard:"tools", operations:"tools",
+};
+function sidebarNavHtml(tabs){
+  if(!tabs.length) return "";
+  const [homeKey, homeLabel] = tabs[0];
+  const homeHtml = `<a class="sidebar-link ${view.tab===homeKey?'active':''}" onclick="switchTab('${homeKey}')"><span class="ic">🏠</span> ${homeLabel}</a>`;
+  const buckets = {};
+  tabs.slice(1).forEach(([k,l])=>{
+    const g = TAB_GROUP_MAP[k] || "tools";
+    (buckets[g] = buckets[g]||[]).push([k,l]);
+  });
+  const groupsHtml = Object.keys(SIDEBAR_GROUP_META).map(g=>{
+    const items = buckets[g];
+    if(!items || !items.length) return "";
+    const meta = SIDEBAR_GROUP_META[g];
+    return `
+    <div class="sidebar-group-title">${meta.icon} ${meta.label}</div>
+    ${items.map(([k,l])=>`<a class="sidebar-link ${view.tab===k?'active':''}" onclick="switchTab('${k}')">${l}</a>`).join("")}`;
   }).join("");
-  const standaloneHtml = tabs.filter(([k])=>!grouped.has(k)).map(([k,l])=>`<button class="${view.tab===k?'active':''}" onclick="switchTab('${k}')">${l}</button>`).join("");
-  return standaloneHtml + groupsHtml;
+  return homeHtml + groupsHtml;
+}
+// Opens/closes the mobile off-canvas sidebar drawer (desktop keeps the
+// sidebar permanently visible via CSS, this only matters under 960px - see
+// the @media block). Called with no args to toggle, or an explicit
+// true/false to force a state (used by the backdrop's click-to-close).
+function toggleSidebar(force){
+  const sb = document.getElementById("sidebar");
+  const bd = document.getElementById("sidebarBackdrop");
+  if(!sb) return;
+  const open = force!==undefined ? force : !sb.classList.contains("open");
+  sb.classList.toggle("open", open);
+  if(bd) bd.classList.toggle("open", open);
 }
 async function render(){
   const app = document.getElementById("app");
   const u = currentUser;
   const tabs = tabsFor(u.role);
   app.innerHTML = `
-    <header class="topbar">
-      <div class="brand"><span class="dot"></span> Padmasri <span class="accent-script">Travels</span></div>
-      <div style="display:flex;align-items:center;">
-        <div class="who">${u.name}<br><span style="opacity:.75">${roleLabel(u.role)}</span></div>
-        <button class="btn small secondary" style="margin-right:8px;" onclick="goto('change_password')">Change Password</button>
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand"><span class="dot"></span> Padmasri <span class="accent-script">Travels</span></div>
+      <nav class="sidebar-nav">${sidebarNavHtml(tabs)}</nav>
+      <div class="sidebar-foot">
+        <div class="who-name">${u.name}</div>
+        <div class="who-role">${roleLabel(u.role)}</div>
+        <button onclick="goto('change_password')">Change Password</button>
         <button class="logout" onclick="doLogout()">Log out</button>
       </div>
-    </header>
-    <nav class="tabbar">
-      ${navBarHtml(tabs)}
-    </nav>
-    <main id="main"><div class="empty">Loading...</div></main>
-    <div class="footer-note">Shared data - everyone signed into this app sees the same fleet records.</div>
+    </aside>
+    <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="toggleSidebar(false)"></div>
+    <div class="app-col">
+      <header class="app-topbar">
+        <button class="sidebar-toggle" onclick="toggleSidebar()">&#9776;</button>
+        <div class="brand"><span class="dot"></span> Padmasri <span class="accent-script">Travels</span></div>
+      </header>
+      <main id="main"><div class="empty">Loading...</div></main>
+      <div class="footer-note">Shared data - everyone signed into this app sees the same fleet records.</div>
+    </div>
   `;
   await renderMain();
 }
@@ -4523,10 +4582,24 @@ async function liveTrackingCardHtml(vehicleId){
   const locationHtml = (d.address || mapLink) ? `
     <div class="live-track-row">
       <span>${d.address || "Location available"}</span>
-      ${mapLink? `<a href="${mapLink}" target="_blank" rel="noopener">View on map &rsaquo;</a>` : ''}
+      ${mapLink? `<a href="${mapLink}" target="_blank" rel="noopener">Open in Google Maps &rsaquo;</a>` : ''}
     </div>` : "";
 
   const driverHtml = d.liveDriverName ? `<div class="live-track-row" style="margin-top:6px;"><span class="muted">Driver (per GPS)</span><span>${d.liveDriverName}</span></div>` : "";
+
+  // A small embedded live map with the vehicle drawn as a bus icon (sized
+  // by that vehicle's seating capacity - see busDivIcon()) - scheduled via
+  // setTimeout the same way the dashboard's charts/fleet map are, since the
+  // map container div doesn't exist in the DOM until this returned HTML has
+  // actually been inserted by the caller.
+  const mapContainerId = `vehicleMiniMap_${vehicleId}`;
+  let mapHtml = "";
+  if(d.latitude!=null && d.longitude!=null){
+    mapHtml = `<div id="${mapContainerId}" class="vehicle-mini-map"></div>`;
+    const vMeta = vehicles.find(v=>v.id===vehicleId);
+    const seatingCapacity = vMeta ? vMeta.seatingCapacity : null;
+    setTimeout(()=>renderVehicleMiniMap(mapContainerId, d.latitude, d.longitude, d.status, seatingCapacity), 0);
+  }
 
   return `
   <div class="live-track">
@@ -4538,8 +4611,122 @@ async function liveTrackingCardHtml(vehicleId){
     ${fuelBarHtml}
     ${locationHtml}
     ${driverHtml}
+    ${mapHtml}
     ${d.hasCameraFeed ? `<div class="live-track-empty" style="margin-top:8px;">📷 Onboard camera - live feed viewing isn't set up yet.</div>` : ''}
+  </div>
+  ${tripReplayCardHtml(vehicleId)}`;
+}
+
+// ---- Trip Replay (UI shell) -------------------------------------------
+// Lets someone pick a date/time range and "play" where a vehicle went - but
+// this needs historical GPS breadcrumbs, which Fleetx's /analytics/live
+// endpoint doesn't provide (it's a current-position snapshot only). The
+// Owner is getting a trip-history endpoint from Fleetx separately; once
+// that's wired up server-side, playTripReplay() below is where the real
+// animated-route logic will go. Until then this stays a clearly-labeled
+// "not connected yet" state rather than a broken/fake feature.
+function tripReplayCardHtml(vehicleId){
+  return `
+  <div class="live-track">
+    <div class="live-track-head">
+      <div class="live-track-status">🗺️ Trip Replay</div>
+    </div>
+    <div class="replay-inputs">
+      <label>From <input type="datetime-local" id="replayFrom_${vehicleId}" /></label>
+      <label>To <input type="datetime-local" id="replayTo_${vehicleId}" /></label>
+      <button class="btn small" onclick="playTripReplay('${vehicleId}')">&#9654; Play Route</button>
+    </div>
+    <div class="live-track-empty" id="replayStatus_${vehicleId}" style="margin-top:8px;">Pick a date/time range and press Play to see the route this vehicle travelled.</div>
+    <div id="replayMap_${vehicleId}" class="vehicle-mini-map" style="display:none;"></div>
   </div>`;
+}
+async function playTripReplay(vehicleId){
+  const fromEl = document.getElementById(`replayFrom_${vehicleId}`);
+  const toEl = document.getElementById(`replayTo_${vehicleId}`);
+  const statusEl = document.getElementById(`replayStatus_${vehicleId}`);
+  if(!fromEl || !toEl || !statusEl) return;
+  if(!fromEl.value || !toEl.value){
+    statusEl.textContent = "Pick both a from and to date/time first.";
+    return;
+  }
+  if(new Date(fromEl.value) >= new Date(toEl.value)){
+    statusEl.textContent = "The \"From\" time needs to be before the \"To\" time.";
+    return;
+  }
+  statusEl.textContent = "Trip replay isn't connected yet - it needs a trip-history feed from Fleetx that hasn't been set up on the server. Once that's ready, this will animate the exact route the vehicle took between the times you picked.";
+}
+// ---- Live map rendering (Leaflet + OpenStreetMap, no API key needed) --
+// Every marker is drawn as a simple bus-shaped icon whose size scales with
+// the vehicle's seating capacity (bigger buses look bigger on the map),
+// colored to match the same status colors used elsewhere (green=running,
+// amber=idle, grey=parked, red=anything that needs attention).
+function busDivIcon(status, seatingCapacity){
+  const size = Math.max(22, Math.min(56, 16 + Math.round((seatingCapacity||18) * 0.55)));
+  const cls = LIVE_STATUS_BADGE_CLASS[status] || "";
+  const color = cls==="ok" ? "#2E7D32" : cls==="pending" ? "#b8860b" : cls==="low" ? "#c0392b" : "#6b6b5e";
+  const svg = `<svg width="${size}" height="${size}" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <rect x="2" y="5.5" width="20" height="12.5" rx="3" fill="${color}" stroke="#fff" stroke-width="1.3"/>
+    <rect x="4" y="7.7" width="4.3" height="4" rx="0.8" fill="#fff" opacity=".9"/>
+    <rect x="9.1" y="7.7" width="4.3" height="4" rx="0.8" fill="#fff" opacity=".9"/>
+    <rect x="14.2" y="7.7" width="4.3" height="4" rx="0.8" fill="#fff" opacity=".9"/>
+    <circle cx="7" cy="18.8" r="2.1" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>
+    <circle cx="17" cy="18.8" r="2.1" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>
+  </svg>`;
+  return L.divIcon({ html: svg, className: "bus-marker-icon", iconSize:[size,size], iconAnchor:[size/2, size/2] });
+}
+const _miniMapInstances = {};
+function renderVehicleMiniMap(containerId, lat, lng, status, seatingCapacity){
+  const el = document.getElementById(containerId);
+  if(!el || typeof L==="undefined" || lat==null || lng==null) return;
+  if(_miniMapInstances[containerId]){ _miniMapInstances[containerId].remove(); delete _miniMapInstances[containerId]; }
+  const map = L.map(el, {scrollWheelZoom:false, zoomControl:false}).setView([lat,lng], 15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
+  L.marker([lat,lng], {icon: busDivIcon(status, seatingCapacity)}).addTo(map);
+  _miniMapInstances[containerId] = map;
+}
+// ---- Live Fleet Map (dashboard-wide) -----------------------------------
+function fleetMapCardHtml(fleetLive){
+  const list = fleetLive.vehicles || [];
+  if(fleetLive.error){
+    return `<div class="card"><h2 class="section-title">📍 Live Fleet Map</h2><div class="muted">${fleetLive.error}</div></div>`;
+  }
+  if(!list.length){
+    return `<div class="card"><h2 class="section-title">📍 Live Fleet Map</h2><div class="muted">No vehicles are linked to a GPS device yet.</div></div>`;
+  }
+  const counts = {running:0, idle:0, other:0};
+  list.forEach(v=>{
+    if(v.status==="RUNNING") counts.running++;
+    else if(v.status==="IDLE") counts.idle++;
+    else counts.other++;
+  });
+  return `
+  <div class="card">
+    <div class="flex-between"><h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">📍 Live Fleet Map</h2><span class="muted">${list.length} of ${vehicles.length} vehicles linked to GPS</span></div>
+    <div class="grid cols-3" style="margin:12px 0;">
+      <div class="kpi good"><div class="num">${counts.running}</div><div class="label">Running</div></div>
+      <div class="kpi warn"><div class="num">${counts.idle}</div><div class="label">Idle</div></div>
+      <div class="kpi"><div class="num">${counts.other}</div><div class="label">Parked / other</div></div>
+    </div>
+    <div id="fleetMapContainer" class="fleet-map"></div>
+  </div>`;
+}
+let _fleetMapInstance = null;
+function renderFleetMapMarkers(list){
+  const el = document.getElementById("fleetMapContainer");
+  if(!el || typeof L==="undefined") return;
+  if(_fleetMapInstance){ _fleetMapInstance.remove(); _fleetMapInstance = null; }
+  const map = L.map(el, {scrollWheelZoom:false}).setView([17.4, 78.45], 11);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
+  _fleetMapInstance = map;
+  const bounds = [];
+  list.forEach(v=>{
+    if(v.latitude==null || v.longitude==null) return;
+    const vMeta = vehicles.find(x=>x.id===v.vehicleId);
+    const marker = L.marker([v.latitude, v.longitude], {icon: busDivIcon(v.status, vMeta ? vMeta.seatingCapacity : null)}).addTo(map);
+    marker.bindPopup(`<b>${v.reg}</b><br>${formatLiveStatusLabel(v.status)}${v.speedKmh!=null? ' &middot; '+v.speedKmh+' km/h' : ''}${v.fuelPercent!=null? ' &middot; Fuel '+v.fuelPercent+'%' : ''}`);
+    bounds.push([v.latitude, v.longitude]);
+  });
+  if(bounds.length) map.fitBounds(bounds, {padding:[30,30], maxZoom:14});
 }
 
 // The one page every clickable dashboard row/card for a specific vehicle
@@ -4710,6 +4897,16 @@ async function ownerDashboardScreen(){
 
   const recentActivity = await auditTableHtml({sinceMinutes: 60, limit: 100});
 
+  // Live Fleet Map - fetched here (not lazily) so the summary counts render
+  // immediately with the rest of the dashboard; the actual Leaflet map
+  // canvas is drawn a tick later via renderFleetMapMarkers(), same
+  // defer-until-DOM-exists pattern as drawCharts() above, since Leaflet
+  // needs a real element in the page to attach to.
+  let fleetLive = {vehicles:[]};
+  try{ fleetLive = await api('/fleet/live-tracking'); }catch(e){ fleetLive = {vehicles:[], error: e.message}; }
+  if(fleetLive.vehicles && fleetLive.vehicles.length) setTimeout(()=>renderFleetMapMarkers(fleetLive.vehicles), 0);
+  const fleetMapCard = fleetMapCardHtml(fleetLive);
+
   return `
   <div class="cmd-hero">
     <div class="cmd-hero-top">
@@ -4729,6 +4926,8 @@ async function ownerDashboardScreen(){
       ${kpi('bad', expiringDocs.length, 'Documents expiring &lt;15 days', 'expiring_docs')}
     </div>
   </div>
+
+  ${fleetMapCard}
 
   ${reminderBanners.length ? collapsibleSection('reminders', '⏰ Reminders', reminderBanners.length, reminderBanners.join(""), {defaultOpen:true}) : ''}
 
@@ -6122,7 +6321,7 @@ async function payrollScreen(){
 // ---------- expose for inline handlers ----------
 Object.assign(window, {
   choosePortal,
-  doLogin, doLogout, switchTab, goto, draftSet, updateBreathalyzer, startPhotoCapture,
+  doLogin, doLogout, switchTab, goto, toggleSidebar, playTripReplay, draftSet, updateBreathalyzer, startPhotoCapture,
   submitForcedPasswordChange, submitVoluntaryPasswordChange,
   updateDoc, updateDocCopy, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, renameClient, editSite, addDriver, addPerson, correctOdometer, captureBillPhoto, submitExpense, decideExpense,

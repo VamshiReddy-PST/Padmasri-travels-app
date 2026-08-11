@@ -6015,6 +6015,41 @@ app.get(
   }
 );
 
+// Turns one raw Fleetx vehicle record into the shape both the single-vehicle
+// and fleet-wide live-tracking endpoints return - shared so the two never
+// drift out of sync with each other.
+function liveTrackingPayloadFor(match) {
+  const attrs = match.otherAttributes || {};
+  const fuelStr = attrs.FUEL_NORMALISED || attrs.fuel || attrs.FUEL_INSTANT || null;
+  const fuelLitres = fuelStr ? parseFloat(fuelStr) : null;
+  const tankCapacity = attrs.fuelTankCapacity ? parseFloat(attrs.fuelTankCapacity) : null;
+  let hasCameraFeed = false;
+  if (attrs.assets) {
+    try {
+      const assets = JSON.parse(attrs.assets);
+      hasCameraFeed = Array.isArray(assets) && assets.some((a) => a && a.type === "CAMERA");
+    } catch (e) {
+      // malformed/unexpected assets field - just treat as no camera
+    }
+  }
+  return {
+    matched: true,
+    status: match.currentStatus || null,
+    speedKmh: typeof match.speed === "number" ? Math.round(match.speed) : null,
+    address: match.address || null,
+    latitude: match.latitude != null ? match.latitude : null,
+    longitude: match.longitude != null ? match.longitude : null,
+    liveDriverName: match.driverName || null,
+    fuelLitres: fuelLitres != null && !isNaN(fuelLitres) ? Math.round(fuelLitres * 10) / 10 : null,
+    fuelTankCapacity: tankCapacity != null && !isNaN(tankCapacity) ? tankCapacity : null,
+    fuelPercent:
+      fuelLitres != null && !isNaN(fuelLitres) && tankCapacity ? Math.round((fuelLitres / tankCapacity) * 100) : null,
+    odometerKm: typeof match.totalOdometer === "number" ? Math.round(match.totalOdometer) : null,
+    lastUpdatedAt: match.lastUpdatedAt || null,
+    hasCameraFeed,
+  };
+}
+
 // Any signed-in staff role can see live tracking for a vehicle they can
 // otherwise already open the detail screen for - this is just location/fuel
 // telemetry, not sensitive HR or financial data, so it isn't further
@@ -6035,37 +6070,37 @@ app.get(
     const wantPlate = normalizePlate(vehicle.reg);
     const match = (live.vehicles || []).find((fv) => normalizePlate(fv.vehicleNumber) === wantPlate);
     if (!match) return res.json({ matched: false });
+    res.json(liveTrackingPayloadFor(match));
+  })
+);
 
-    const attrs = match.otherAttributes || {};
-    const fuelStr = attrs.FUEL_NORMALISED || attrs.fuel || attrs.FUEL_INSTANT || null;
-    const fuelLitres = fuelStr ? parseFloat(fuelStr) : null;
-    const tankCapacity = attrs.fuelTankCapacity ? parseFloat(attrs.fuelTankCapacity) : null;
-    let hasCameraFeed = false;
-    if (attrs.assets) {
-      try {
-        const assets = JSON.parse(attrs.assets);
-        hasCameraFeed = Array.isArray(assets) && assets.some((a) => a && a.type === "CAMERA");
-      } catch (e) {
-        // malformed/unexpected assets field - just treat as no camera
-      }
+// Fleet-wide version of the above, for the Live Fleet Map on the dashboard -
+// one Fleetx call (cached, see fetchFleetxLive) matched against every
+// vehicle at once, instead of the frontend making 100+ individual requests.
+// Only returns vehicles that actually matched a Fleetx device; vehicles with
+// no GPS unit simply aren't in the list (nothing for the map to plot).
+app.get(
+  "/api/fleet/live-tracking",
+  requireAuth,
+  h(async (req, res) => {
+    let live;
+    try {
+      live = await fetchFleetxLive();
+    } catch (err) {
+      return res.status(err.status || 502).json({ error: err.message });
     }
-
-    res.json({
-      matched: true,
-      status: match.currentStatus || null,
-      speedKmh: typeof match.speed === "number" ? Math.round(match.speed) : null,
-      address: match.address || null,
-      latitude: match.latitude != null ? match.latitude : null,
-      longitude: match.longitude != null ? match.longitude : null,
-      liveDriverName: match.driverName || null,
-      fuelLitres: fuelLitres != null && !isNaN(fuelLitres) ? Math.round(fuelLitres * 10) / 10 : null,
-      fuelTankCapacity: tankCapacity != null && !isNaN(tankCapacity) ? tankCapacity : null,
-      fuelPercent:
-        fuelLitres != null && !isNaN(fuelLitres) && tankCapacity ? Math.round((fuelLitres / tankCapacity) * 100) : null,
-      odometerKm: typeof match.totalOdometer === "number" ? Math.round(match.totalOdometer) : null,
-      lastUpdatedAt: match.lastUpdatedAt || null,
-      hasCameraFeed,
+    const byPlate = new Map();
+    (live.vehicles || []).forEach((fv) => {
+      const key = normalizePlate(fv.vehicleNumber);
+      if (key) byPlate.set(key, fv);
     });
+    const results = [];
+    db.vehicles.forEach((vehicle) => {
+      const match = byPlate.get(normalizePlate(vehicle.reg));
+      if (!match) return;
+      results.push(Object.assign({ vehicleId: vehicle.id, reg: vehicle.reg }, liveTrackingPayloadFor(match)));
+    });
+    res.json({ vehicles: results });
   })
 );
 
