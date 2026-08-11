@@ -2674,13 +2674,17 @@ app.patch(
   })
 );
 
-// ---------- Fuel cross-verification (Data Team) ----------
+// ---------- Fuel cross-verification (Site Supervisor, Data Team, Owner) ----------
 // A second, independent check specifically on the fuel numbers (litres,
 // price, station, odometer) a Site/Area Supervisor or Ops Manager entered -
 // separate from whoever already verified the record as a whole. Only ever
 // applies to days fuel was actually filled (crossVerification stays
 // "not_applicable" otherwise, so it never shows up as a pending item).
-const FUEL_CROSS_VERIFY_ROLES = ["data_team", "owner"];
+// Deliberately excludes Operations Manager - per the Owner's explicit
+// request, Ops Manager has no role in approving odometer or fuel readings;
+// only Site Supervisor, Data Team, and Owner can (see ODOMETER_VERIFY_ROLES
+// below for the matching odometer-side list).
+const FUEL_CROSS_VERIFY_ROLES = ["site_supervisor", "data_team", "owner"];
 app.get(
   "/api/fuel-verification/pending",
   requireAuth,
@@ -4573,15 +4577,19 @@ app.get(
   })
 );
 
-// ---------- ODOMETER VERIFICATION (Area Supervisor / Data Team / Ops / Owner) ----------
+// ---------- ODOMETER VERIFICATION (Site Supervisor / Data Team / Owner) ----------
 // Every odometer reading a driver enters needs a human to actually look at
 // the photo and confirm it's real before it's trusted - that's the
-// Supervisor of whichever vehicle the driver is on. Vehicles don't always
-// have a Supervisor assigned though, so Data Team is the fallback for
-// those. Once a reading is verified, it's locked forever - there is no
+// Supervisor of whichever vehicle the driver is on (role key
+// site_supervisor, shown in the UI as "Area Supervisor"). Vehicles don't
+// always have a Supervisor assigned though, so Data Team is the fallback
+// for those. Once a reading is verified, it's locked forever - there is no
 // endpoint anywhere (this file included) that can change a verified
 // reading, by design.
-const ODOMETER_VERIFY_ROLES = ["site_supervisor", "data_team", "ops_manager", "owner"];
+// Operations Manager is deliberately NOT in this list, per the Owner's
+// explicit request - no Ops Manager involvement in odometer/fuel approval
+// at all. They previously had this access; it was removed on request.
+const ODOMETER_VERIFY_ROLES = ["site_supervisor", "data_team", "owner"];
 function shiftVehicleFor(shift) {
   return db.vehicles.find((v) => v.driverId === shift.driverId) || null;
 }

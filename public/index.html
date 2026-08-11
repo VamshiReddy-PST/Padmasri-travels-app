@@ -938,9 +938,18 @@ function tabsFor(role){
 // screen everyone should be able to reach, same reasoning as the free Fleet
 // Assistant tab.
 function tabsForInner(role){
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  // Site Supervisor (role key site_supervisor, shown as "Area Supervisor")
+  // gets both odometer_verify and fuel_verify - per the Owner's explicit
+  // request, they (plus Data Team and Owner) are the only roles that can
+  // approve odometer/fuel readings. See ODOMETER_VERIFY_ROLES and
+  // FUEL_CROSS_VERIFY_ROLES in server.js for the matching backend gate.
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  // Operations Manager deliberately has no odometer_verify/fuel_verify tab -
+  // per the Owner's explicit request, Ops Manager has no role in approving
+  // odometer or fuel readings (they previously had odometer_verify; removed
+  // on request).
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
@@ -5343,10 +5352,12 @@ async function recordMySubvendorPayment(subvendorId, vehicleId, evt){
 }
 
 // ================= ODOMETER VERIFICATION =================
-// Area Supervisor (their own vehicles), Data Team (fallback for vehicles
-// with no Supervisor - status-only for everyone else's), and Ops
-// Manager/Owner (everything) all land on the same screen; the backend does
-// the actual scoping/redaction, this just renders whatever it hands back.
+// Site Supervisor (role key site_supervisor, shown as "Area Supervisor" -
+// their own vehicles), Data Team (fallback for vehicles with no Supervisor
+// - status-only for everyone else's), and Owner (everything) all land on
+// the same screen; the backend does the actual scoping/redaction, this
+// just renders whatever it hands back. Operations Manager does NOT have
+// this tab at all - see ODOMETER_VERIFY_ROLES in server.js.
 // Once a reading shows VERIFIED there is no edit/undo control anywhere -
 // that's enforced server-side, not just hidden here.
 async function odometerVerificationScreen(){
