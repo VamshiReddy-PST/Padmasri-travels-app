@@ -1294,7 +1294,23 @@ async function render(){
 async function switchTab(tab){ view = {tab, name:"home"}; ownerAssignUnlocked = false; assignmentsViewDate = todayStr(); await render(); window.scrollTo(0,0); }
 async function goto(name, params){ view = Object.assign({tab: view.tab}, {name}, params||{}); await renderMain(); window.scrollTo(0,0); }
 
+// Stops every live-map auto-refresh timer and destroys the Leaflet map
+// instances they were driving - called at the very top of renderMain(), the
+// single choke point every navigation goes through, so leaving a screen
+// with a live map on it never leaves its 10-second poll running in the
+// background (which would otherwise keep firing against DOM elements that
+// no longer exist, or - worse - end up with two timers both trying to
+// update the same map if the same vehicle's screen is opened again later).
+function teardownLiveMaps(){
+  if(_liveTrackingPollTimer){ clearInterval(_liveTrackingPollTimer); _liveTrackingPollTimer = null; }
+  if(_fleetMapPollTimer){ clearInterval(_fleetMapPollTimer); _fleetMapPollTimer = null; }
+  Object.values(_miniMapInstances).forEach(inst=>{ try{ inst.map.remove(); }catch(e){} });
+  for(const k in _miniMapInstances) delete _miniMapInstances[k];
+  if(_fleetMapInstance){ try{ _fleetMapInstance.remove(); }catch(e){} _fleetMapInstance = null; }
+  _fleetMapMarkers = {};
+}
 async function renderMain(){
+  teardownLiveMaps();
   const main = document.getElementById("main");
   try{
     main.innerHTML = await routeView();
@@ -4765,16 +4781,14 @@ function fuelBarColor(pct){
   if(pct < 40) return "var(--amber)";
   return "var(--green)";
 }
-async function liveTrackingCardHtml(vehicleId){
-  let d;
-  try{
-    d = await api(`/vehicles/${vehicleId}/live-tracking`);
-  }catch(e){
-    return `<div class="live-track"><div class="live-track-empty">📍 ${e.message||'Live tracking is temporarily unavailable.'}</div></div>`;
-  }
-  if(!d.matched){
-    return `<div class="live-track"><div class="live-track-empty">📍 This vehicle isn't linked to a GPS device yet.</div></div>`;
-  }
+// The status/stats/fuel-bar/location/driver portion of the live tracking
+// card - split out from liveTrackingCardHtml() so the 10-second auto-refresh
+// (see startLiveTrackingPolling()) can swap just this piece back in without
+// ever touching the map div next to it. Replacing the map's own DOM node
+// out from under Leaflet on every poll tick is what "always set at
+// constant" looked like before - Leaflet was getting torn down and
+// recreated (or just never revisited) instead of the marker actually moving.
+function liveTrackInfoInnerHtml(d){
   const dotCls = LIVE_STATUS_BADGE_CLASS[d.status] || "";
   const mapLink = (d.latitude!=null && d.longitude!=null) ? `https://www.google.com/maps?q=${d.latitude},${d.longitude}` : null;
 
@@ -4798,22 +4812,7 @@ async function liveTrackingCardHtml(vehicleId){
 
   const driverHtml = d.liveDriverName ? `<div class="live-track-row" style="margin-top:6px;"><span class="muted">Driver (per GPS)</span><span>${d.liveDriverName}</span></div>` : "";
 
-  // A small embedded live map with the vehicle drawn as a bus icon (sized
-  // by that vehicle's seating capacity - see busDivIcon()) - scheduled via
-  // setTimeout the same way the dashboard's charts/fleet map are, since the
-  // map container div doesn't exist in the DOM until this returned HTML has
-  // actually been inserted by the caller.
-  const mapContainerId = `vehicleMiniMap_${vehicleId}`;
-  let mapHtml = "";
-  if(d.latitude!=null && d.longitude!=null){
-    mapHtml = `<div id="${mapContainerId}" class="vehicle-mini-map"></div>`;
-    const vMeta = vehicles.find(v=>v.id===vehicleId);
-    const seatingCapacity = vMeta ? vMeta.seatingCapacity : null;
-    setTimeout(()=>renderVehicleMiniMap(mapContainerId, d.latitude, d.longitude, d.status, seatingCapacity), 0);
-  }
-
   return `
-  <div class="live-track">
     <div class="live-track-head">
       <div class="live-track-status"><span class="dot ${dotCls}"></span> ${formatLiveStatusLabel(d.status)}</div>
       <div class="live-track-updated">Updated ${timeAgoLabel(d.lastUpdatedAt)}</div>
@@ -4821,11 +4820,70 @@ async function liveTrackingCardHtml(vehicleId){
     ${stats.length ? `<div class="live-track-stats">${stats.join("")}</div>` : ''}
     ${fuelBarHtml}
     ${locationHtml}
-    ${driverHtml}
+    ${driverHtml}`;
+}
+async function liveTrackingCardHtml(vehicleId){
+  let d;
+  try{
+    d = await api(`/vehicles/${vehicleId}/live-tracking`);
+  }catch(e){
+    return `<div class="live-track"><div class="live-track-empty">📍 ${e.message||'Live tracking is temporarily unavailable.'}</div></div>`;
+  }
+  if(!d.matched){
+    return `<div class="live-track"><div class="live-track-empty">📍 This vehicle isn't linked to a GPS device yet.</div></div>`;
+  }
+
+  // A small embedded live map with the vehicle drawn as a bus icon (sized
+  // by that vehicle's seating capacity - see busDivIcon()) - scheduled via
+  // setTimeout the same way the dashboard's charts/fleet map are, since the
+  // map container div doesn't exist in the DOM until this returned HTML has
+  // actually been inserted by the caller. Once drawn, starts polling for
+  // fresh GPS/fuel data every 10 seconds (matching the backend's own
+  // LOCATION_POLL_MS) so the marker actually moves as the vehicle does,
+  // instead of freezing at whatever position was current when the screen
+  // first loaded.
+  const mapContainerId = `vehicleMiniMap_${vehicleId}`;
+  let mapHtml = "";
+  if(d.latitude!=null && d.longitude!=null){
+    mapHtml = `<div id="${mapContainerId}" class="vehicle-mini-map"></div>`;
+    const vMeta = vehicles.find(v=>v.id===vehicleId);
+    const seatingCapacity = vMeta ? vMeta.seatingCapacity : null;
+    setTimeout(()=>{
+      renderVehicleMiniMap(mapContainerId, d.latitude, d.longitude, d.status, seatingCapacity);
+      startLiveTrackingPolling(vehicleId);
+    }, 0);
+  }
+
+  return `
+  <div class="live-track">
+    <div id="liveTrackInfo_${vehicleId}">${liveTrackInfoInnerHtml(d)}</div>
     ${mapHtml}
     ${d.hasCameraFeed ? `<div class="live-track-empty" style="margin-top:8px;">📷 Onboard camera - live feed viewing isn't set up yet.</div>` : ''}
   </div>
   ${tripReplayCardHtml(vehicleId)}`;
+}
+// Polls this one vehicle's live-tracking endpoint every 10s and updates the
+// stats block + map marker in place - never re-fetches/rebuilds the rest of
+// the screen, so this can run indefinitely without disturbing whatever else
+// the person is doing on the page. Only one of these runs at a time (a
+// person is only ever looking at one vehicle's detail screen); see
+// teardownLiveMaps(), called at the top of every renderMain(), for how this
+// gets stopped the moment they navigate away.
+let _liveTrackingPollTimer = null;
+function startLiveTrackingPolling(vehicleId){
+  if(_liveTrackingPollTimer) clearInterval(_liveTrackingPollTimer);
+  _liveTrackingPollTimer = setInterval(async ()=>{
+    const infoEl = document.getElementById(`liveTrackInfo_${vehicleId}`);
+    if(!infoEl){ clearInterval(_liveTrackingPollTimer); _liveTrackingPollTimer = null; return; } // screen changed since this timer was started - stop
+    let d;
+    try{ d = await api(`/vehicles/${vehicleId}/live-tracking`); }catch(e){ return; } // transient failure - skip this tick, keep showing the last good reading
+    if(!d.matched) return;
+    infoEl.innerHTML = liveTrackInfoInnerHtml(d);
+    if(d.latitude!=null && d.longitude!=null){
+      const vMeta = vehicles.find(v=>v.id===vehicleId);
+      renderVehicleMiniMap(`vehicleMiniMap_${vehicleId}`, d.latitude, d.longitude, d.status, vMeta ? vMeta.seatingCapacity : null);
+    }
+  }, 10000);
 }
 
 // ---- Trip Replay ---------------------------------------------------------
@@ -4943,19 +5001,28 @@ function busDivIcon(status, seatingCapacity){
   </svg>`;
   return L.divIcon({ html: svg, className: "bus-marker-icon", iconSize:[size,size], iconAnchor:[size/2, size/2] });
 }
-const _miniMapInstances = {};
+const _miniMapInstances = {}; // containerId -> {map, marker}
 function renderVehicleMiniMap(containerId, lat, lng, status, seatingCapacity){
   const el = document.getElementById(containerId);
   if(!el || typeof L==="undefined" || lat==null || lng==null) return;
-  if(_miniMapInstances[containerId]){ _miniMapInstances[containerId].remove(); delete _miniMapInstances[containerId]; }
+  const existing = _miniMapInstances[containerId];
+  if(existing){
+    // Same map, same marker - just move it (and refresh its icon in case
+    // status changed) so the bus actually glides to its new position on
+    // every 10-second poll instead of the whole map flashing and
+    // re-centering, and so whatever zoom/pan the person left it at stays put.
+    existing.marker.setLatLng([lat,lng]);
+    existing.marker.setIcon(busDivIcon(status, seatingCapacity));
+    return;
+  }
   // touchZoom/tap explicit (Leaflet defaults to on, but stated outright so a
   // future default change or option elsewhere in the app can't silently turn
   // off two-finger pinch-zoom on mobile) - scrollWheelZoom stays off so a
   // two-finger scroll through the page doesn't get hijacked by the map.
   const map = L.map(el, {scrollWheelZoom:false, zoomControl:false, touchZoom:true, tap:true, bounceAtZoomLimits:false}).setView([lat,lng], 15);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
-  L.marker([lat,lng], {icon: busDivIcon(status, seatingCapacity)}).addTo(map);
-  _miniMapInstances[containerId] = map;
+  const marker = L.marker([lat,lng], {icon: busDivIcon(status, seatingCapacity)}).addTo(map);
+  _miniMapInstances[containerId] = {map, marker};
 }
 // ---- Live Fleet Map (dashboard-wide) -----------------------------------
 // The KPI tiles above the map double as filters (click "Running" to show
@@ -4980,10 +5047,10 @@ function fleetMapCardHtml(fleetLive){
   }
   const counts = {running:0, idle:0, other:0};
   list.forEach(v=>counts[fleetMapStatusOf(v)]++);
-  const tile = (kind, cls, num, label) => `<div class="kpi ${cls} ${fleetMapStatusFilter===kind?'active':''}" style="cursor:pointer" onclick="setFleetMapFilter('${kind}')" title="Click to ${fleetMapStatusFilter===kind?'clear this filter':'show only '+label.toLowerCase()+' on the map'}"><div class="num">${num}</div><div class="label">${label}</div></div>`;
+  const tile = (kind, cls, num, label) => `<div class="kpi ${cls} ${fleetMapStatusFilter===kind?'active':''}" style="cursor:pointer" onclick="setFleetMapFilter('${kind}')" title="Click to ${fleetMapStatusFilter===kind?'clear this filter':'show only '+label.toLowerCase()+' on the map'}"><div class="num" id="fleetMapCount_${kind}">${num}</div><div class="label">${label}</div></div>`;
   return `
   <div class="card">
-    <div class="flex-between"><h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">📍 Live Fleet Map</h2><span class="muted">${list.length} of ${vehicles.length} vehicles linked to GPS</span></div>
+    <div class="flex-between"><h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">📍 Live Fleet Map</h2><span class="muted" id="fleetMapLinkedCount">${list.length} of ${vehicles.length} vehicles linked to GPS</span></div>
     <div class="grid cols-3" style="margin:12px 0;">
       ${tile('running','good',counts.running,'Running')}
       ${tile('idle','warn',counts.idle,'Idle')}
@@ -5005,25 +5072,38 @@ function setFleetMapFilter(kind){
   }
 }
 let _fleetMapInstance = null;
-// Shared by both the dashboard mini map and the fullscreen map below, so
-// marker icons/popups/fit-bounds behavior never drifts between the two.
+let _fleetMapMarkers = {}; // vehicleId -> marker, for the dashboard's persistent mini map only (not the fullscreen one) - lets the 10s poll move existing markers instead of redrawing the whole map
+// Builds one marker + its popup - shared by the initial full draw
+// (drawFleetMarkersOnMap, used by both the dashboard mini map and the
+// fullscreen map) and the poll-driven per-marker updates below, so marker
+// look/behavior never drifts between the three call sites.
+function createFleetMarker(map, v){
+  const vMeta = vehicles.find(x=>x.id===v.vehicleId);
+  const marker = L.marker([v.latitude, v.longitude], {icon: busDivIcon(v.status, vMeta ? vMeta.seatingCapacity : null)}).addTo(map);
+  bindFleetMarkerPopup(marker, v);
+  return marker;
+}
+// Tapping a marker shows a quick summary plus a button into that vehicle's
+// full Today's Status screen (checklist, docs, cost history). Split out so
+// a poll refresh can re-bind fresh popup content (speed/fuel change) onto
+// an existing marker without recreating it.
+function bindFleetMarkerPopup(marker, v){
+  const popupDiv = document.createElement("div");
+  popupDiv.innerHTML = `<b>${v.reg}</b><br>${formatLiveStatusLabel(v.status)}${v.speedKmh!=null? ' &middot; '+v.speedKmh+' km/h' : ''}${v.fuelPercent!=null? ' &middot; Fuel '+v.fuelPercent+'%' : ''}<br><button class="btn small" style="margin-top:6px;">View full details &rsaquo;</button>`;
+  popupDiv.querySelector("button").onclick = () => { closeFleetMapFullscreen(); goto('vehicle_status', {vehicleId: v.vehicleId}); };
+  marker.bindPopup(popupDiv);
+}
 function drawFleetMarkersOnMap(map, filtered){
   const bounds = [];
+  const markerMap = {};
   filtered.forEach(v=>{
     if(v.latitude==null || v.longitude==null) return;
-    const vMeta = vehicles.find(x=>x.id===v.vehicleId);
-    const marker = L.marker([v.latitude, v.longitude], {icon: busDivIcon(v.status, vMeta ? vMeta.seatingCapacity : null)}).addTo(map);
-    // Tapping a marker shows a quick summary plus a button into that
-    // vehicle's full Today's Status screen (checklist, docs, cost history).
-    const popupDiv = document.createElement("div");
-    popupDiv.innerHTML = `<b>${v.reg}</b><br>${formatLiveStatusLabel(v.status)}${v.speedKmh!=null? ' &middot; '+v.speedKmh+' km/h' : ''}${v.fuelPercent!=null? ' &middot; Fuel '+v.fuelPercent+'%' : ''}<br><button class="btn small" style="margin-top:6px;">View full details &rsaquo;</button>`;
-    popupDiv.querySelector("button").onclick = () => { closeFleetMapFullscreen(); goto('vehicle_status', {vehicleId: v.vehicleId}); };
-    marker.bindPopup(popupDiv);
+    markerMap[v.vehicleId] = createFleetMarker(map, v);
     bounds.push([v.latitude, v.longitude]);
   });
   if(bounds.length) map.fitBounds(bounds, {padding:[30,30], maxZoom:14});
   else map.setView([17.4, 78.45], 6); // nothing matches the filter - zoom out to a neutral view instead of an empty close-up
-  return bounds;
+  return markerMap;
 }
 function renderFleetMapMarkers(list){
   const el = document.getElementById("fleetMapContainer");
@@ -5036,11 +5116,12 @@ function renderFleetMapMarkers(list){
     return;
   }
   if(_fleetMapInstance){ _fleetMapInstance.remove(); _fleetMapInstance = null; }
+  _fleetMapMarkers = {};
   const filtered = fleetMapStatusFilter ? list.filter(v=>fleetMapStatusOf(v)===fleetMapStatusFilter) : list;
   const map = L.map(el, {scrollWheelZoom:false, touchZoom:true, tap:true, bounceAtZoomLimits:false}).setView([17.4, 78.45], 11);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
   _fleetMapInstance = map;
-  drawFleetMarkersOnMap(map, filtered);
+  _fleetMapMarkers = drawFleetMarkersOnMap(map, filtered);
   // Tapping anywhere on the map that isn't a marker (Leaflet stops the
   // event there) opens the same fleet view full-sized, since the small
   // dashboard card is too cramped to make sense of a busy fleet at a glance.
@@ -5050,6 +5131,63 @@ function renderFleetMapMarkers(list){
   // the tiles can render at the wrong size or not at all. invalidateSize()
   // a beat later fixes that without needing the user to resize the window.
   setTimeout(()=>{ if(_fleetMapInstance===map) map.invalidateSize(); }, 150);
+  startFleetMapPolling();
+}
+// Every 10 seconds, fetches fresh positions for the whole fleet and moves
+// the existing markers to match - never tears the map down or re-fits
+// bounds on a poll tick, so a person's manual pan/zoom is never yanked out
+// from under them just because time passed. Only one of these runs at a
+// time; see teardownLiveMaps(), called at the top of every renderMain(),
+// for how this stops the moment the dashboard is navigated away from.
+let _fleetMapPollTimer = null;
+function startFleetMapPolling(){
+  if(_fleetMapPollTimer) clearInterval(_fleetMapPollTimer);
+  _fleetMapPollTimer = setInterval(async ()=>{
+    if(!document.getElementById("fleetMapContainer") || !_fleetMapInstance){ clearInterval(_fleetMapPollTimer); _fleetMapPollTimer = null; return; }
+    let fresh;
+    try{ fresh = await api('/fleet/live-tracking'); }catch(e){ return; } // transient failure - keep showing the last good positions
+    const list = fresh.vehicles || [];
+    _lastFleetLiveVehicles = list;
+    updateFleetMapMarkerPositions(list);
+    updateFleetMapCountsInPlace(list);
+  }, 10000);
+}
+function updateFleetMapMarkerPositions(list){
+  if(!_fleetMapInstance) return;
+  const filtered = fleetMapStatusFilter ? list.filter(v=>fleetMapStatusOf(v)===fleetMapStatusFilter) : list;
+  const seenIds = new Set();
+  filtered.forEach(v=>{
+    if(v.latitude==null || v.longitude==null) return;
+    seenIds.add(v.vehicleId);
+    if(_fleetMapMarkers[v.vehicleId]){
+      const marker = _fleetMapMarkers[v.vehicleId];
+      const vMeta = vehicles.find(x=>x.id===v.vehicleId);
+      marker.setLatLng([v.latitude, v.longitude]);
+      marker.setIcon(busDivIcon(v.status, vMeta ? vMeta.seatingCapacity : null));
+      bindFleetMarkerPopup(marker, v); // refresh popup content in case speed/fuel/status changed since the last poll
+    } else {
+      // A vehicle that wasn't in the filtered set a moment ago (just
+      // started/stopped matching the current Running/Idle/Parked filter, or
+      // got GPS-linked) - add it fresh rather than waiting for a full redraw.
+      _fleetMapMarkers[v.vehicleId] = createFleetMarker(_fleetMapInstance, v);
+    }
+  });
+  // Anything still on the map that no longer belongs (dropped out of the
+  // filter, or lost its GPS fix) gets removed instead of left stranded at
+  // its last known spot.
+  Object.keys(_fleetMapMarkers).forEach(vid=>{
+    if(!seenIds.has(vid)){ _fleetMapInstance.removeLayer(_fleetMapMarkers[vid]); delete _fleetMapMarkers[vid]; }
+  });
+}
+function updateFleetMapCountsInPlace(list){
+  const counts = {running:0, idle:0, other:0};
+  list.forEach(v=>counts[fleetMapStatusOf(v)]++);
+  ['running','idle','other'].forEach(kind=>{
+    const el = document.getElementById(`fleetMapCount_${kind}`);
+    if(el) el.textContent = counts[kind];
+  });
+  const linkedEl = document.getElementById('fleetMapLinkedCount');
+  if(linkedEl) linkedEl.textContent = `${list.length} of ${vehicles.length} vehicles linked to GPS`;
 }
 // ---- Fullscreen fleet map (opened by tapping the dashboard mini map) --
 let _fullscreenMapInstance = null;
