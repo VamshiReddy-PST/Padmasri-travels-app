@@ -904,6 +904,50 @@ const LOCATION_RETENTION_DAYS = 30;
 const LOCATION_DIR = path.join(DATA_DIR, "locationHistory");
 const _lastLoggedPoint = {}; // vehicleId -> {lat,lng,status,ts} - in-memory, avoids re-reading storage just to dedupe each tick
 
+// ---------- FUEL SENSOR FILTER (PT2 / cascaded double first-order lag) ----------
+// Raw fuel-tank sensor readings carry genuine short-term noise while a
+// vehicle is actually being driven - slosh from turns, braking,
+// acceleration and bumps rocks the fuel level around inside the tank well
+// before any fuel is actually gained or lost. Left unfiltered, that noise
+// shows up as spurious dips/rises on the Fuel Pattern graph and could in
+// principle line up with the moment a vehicle stops moving and look like a
+// sudden drop. This runs every raw reading through a PT2 (2nd-order
+// low-pass) element before it's stored or handed to the theft check below,
+// so "fuel" everywhere downstream means the damped, actual trend - not the
+// raw sensor value.
+//
+// Built the standard practical way: two cascaded first-order lags (PT1)
+// with the same time constant - critically damped, no overshoot. Each
+// stage only needs the elapsed time since its last update rather than a
+// fixed sample rate, which matters here since breadcrumb points arrive at
+// irregular, event-driven intervals (see LOCATION_MIN_GAP_METERS etc.
+// above), not a fixed clock.
+const FUEL_FILTER_TIME_CONSTANT_S = 90; // seconds - long enough to average out slosh from a turn/bump/brake, short enough to still track a real refuel/drain within a couple of minutes
+const _fuelFilterState = {}; // vehicleId -> {stage1, stage2, ts}
+function filterFuelReading(vehicleId, rawFuelLitres, nowTs) {
+  if (rawFuelLitres == null) return null;
+  const state = _fuelFilterState[vehicleId];
+  if (!state) {
+    // First-ever reading for this vehicle - start both stages exactly at
+    // the raw value so there's no fake startup lag.
+    _fuelFilterState[vehicleId] = { stage1: rawFuelLitres, stage2: rawFuelLitres, ts: nowTs };
+    return rawFuelLitres;
+  }
+  const dtSeconds = Math.max(0, (nowTs - state.ts) / 1000);
+  // A very long gap (server down, vehicle out of range, etc.) - snapping
+  // straight to the new raw value is more honest than slowly crawling
+  // toward it over the next hour.
+  if (dtSeconds > 30 * 60) {
+    _fuelFilterState[vehicleId] = { stage1: rawFuelLitres, stage2: rawFuelLitres, ts: nowTs };
+    return rawFuelLitres;
+  }
+  const alpha = 1 - Math.exp(-dtSeconds / FUEL_FILTER_TIME_CONSTANT_S);
+  const stage1 = state.stage1 + (rawFuelLitres - state.stage1) * alpha;
+  const stage2 = state.stage2 + (stage1 - state.stage2) * alpha;
+  _fuelFilterState[vehicleId] = { stage1, stage2, ts: nowTs };
+  return Math.round(stage2 * 10) / 10;
+}
+
 function locationDayFile(vehicleId, dateStr) {
   return path.join(LOCATION_DIR, `${vehicleId}_${dateStr}.json`);
 }
@@ -980,13 +1024,15 @@ async function pollLocationHistory() {
     // GET /api/vehicles/:id/trip-history, which already returns these
     // points) and the fuel-theft check right after.
     const livePayload = liveTrackingPayloadFor(match);
+    const nowTs = Date.now();
+    const filteredFuelLitres = filterFuelReading(vehicle.id, livePayload.fuelLitres, nowTs);
     const point = {
       ts: nowIso(),
       lat: match.latitude,
       lng: match.longitude,
       speed: typeof match.speed === "number" ? Math.round(match.speed) : null,
       status: match.currentStatus || null,
-      fuel: livePayload.fuelLitres,
+      fuel: filteredFuelLitres, // PT2-damped, not the raw sensor value - see filterFuelReading() above
       odometer: livePayload.odometerKm,
     };
     _lastLoggedPoint[vehicle.id] = { lat: point.lat, lng: point.lng, status: point.status, ts: point.ts };
@@ -996,7 +1042,9 @@ async function pollLocationHistory() {
       console.error(`Location history: failed to log a point for vehicle ${vehicle.id}:`, err.message);
     }
     try {
-      await checkFuelTheftForVehicle(vehicle, livePayload);
+      // Feed the theft check the same damped reading the graph shows, so a
+      // slosh spike right as the vehicle stops can't masquerade as a drop.
+      await checkFuelTheftForVehicle(vehicle, Object.assign({}, livePayload, { fuelLitres: filteredFuelLitres }));
     } catch (err) {
       console.error(`Fuel theft check: failed for vehicle ${vehicle.id}:`, err.message);
     }
@@ -1020,10 +1068,24 @@ async function pollLocationHistory() {
 // sensor has its own noise/rounding, and this can't distinguish "topped up
 // then immediately drained" from "sensor glitch". It's a first-pass alarm
 // for the owner/data team to go verify, not an automatic accusation.
-const FUEL_THEFT_MIN_DROP_LITRES = 5; // ignore anything smaller - sensor noise/rounding, not worth an alarm
+//
+// Two extra patterns beyond simple tick-to-tick drops are checked
+// specifically, because the vehicle stopping/restarting is exactly when
+// theft is most likely and easiest to disguise:
+//  - A sudden dip right at the instant the vehicle stops (the last RUNNING
+//    reading vs the first stationary reading right after) gets zero
+//    allowance and is flagged immediately - the engine was on a moment
+//    ago, so there's no idle/off burn to explain a multi-litre drop.
+//  - A slow drain spread across an entire parked spell, where each
+//    individual tick's drop stayed under the noise floor and so never
+//    tripped on its own, is caught on restart by comparing the fuel level
+//    now against the level right before the vehicle was parked.
+const FUEL_THEFT_MIN_DROP_LITRES = 3; // more than this many litres of difference gets flagged
 const FUEL_THEFT_IDLE_ALLOWANCE_LPH = 1.5; // litres/hour a genuinely-idling engine can plausibly burn
-const FUEL_THEFT_MAX_GAP_HOURS = 2; // a bigger gap than this (server was down, Fleetx was unreachable, etc.) isn't a reliable comparison - skip it rather than guess
+const FUEL_THEFT_MAX_GAP_HOURS = 2; // a bigger gap than this (server was down, Fleetx was unreachable, etc.) isn't a reliable tick-to-tick comparison - skip it rather than guess
+const FUEL_THEFT_MAX_PARKED_HOURS = 18; // upper bound for the "compare fuel at restart to fuel before parking" check - longer than this and other factors (multi-day gaps, server downtime) make the comparison unreliable
 const _lastFuelCheck = {}; // vehicleId -> {fuelLitres, status, ts} - in-memory tick-to-tick baseline, same pattern as _lastLoggedPoint above
+const _lastRunningFuel = {}; // vehicleId -> {fuelLitres, ts} - fuel level the last time this vehicle was seen RUNNING, used for the restart-drain check
 function isVehicleStationaryStatus(status) {
   return !!status && status !== "RUNNING";
 }
@@ -1105,13 +1167,30 @@ async function checkFuelTheftForVehicle(vehicle, payload) {
   const nowTs = Date.now();
   const nowIsoStr = new Date(nowTs).toISOString();
   const prev = _lastFuelCheck[vehicle.id];
+  const lastRunning = _lastRunningFuel[vehicle.id];
   _lastFuelCheck[vehicle.id] = { fuelLitres: payload.fuelLitres, status: payload.status, ts: nowTs };
 
-  // The vehicle is genuinely moving/running again, or fuel went up (a
-  // refuel) - either way, whatever was happening before is over. Close out
-  // any open incident so a later drop starts a fresh one instead of quietly
-  // padding an old total.
   if (payload.status === "RUNNING") {
+    // Just started moving again. If it was sitting parked/stationary before
+    // this, compare the fuel level now against the level right before it
+    // stopped - this is the only way to catch a slow drain spread across
+    // many small ticks that each individually stayed under
+    // FUEL_THEFT_MIN_DROP_LITRES and so never tripped the tick-to-tick
+    // check below while the vehicle was sitting there.
+    if (lastRunning && prev && isVehicleStationaryStatus(prev.status)) {
+      const parkedHours = (nowTs - lastRunning.ts) / 3600000;
+      if (parkedHours > 0 && parkedHours <= FUEL_THEFT_MAX_PARKED_HOURS) {
+        const totalDrop = Math.round((lastRunning.fuelLitres - payload.fuelLitres) * 10) / 10;
+        if (totalDrop > FUEL_THEFT_MIN_DROP_LITRES) {
+          await recordFuelTheftEvent(vehicle, totalDrop, lastRunning, payload, nowIsoStr);
+        }
+      }
+    }
+    _lastRunningFuel[vehicle.id] = { fuelLitres: payload.fuelLitres, ts: nowTs };
+    // Whatever was happening before is over now - close out any open
+    // incident so a later drop starts a fresh one instead of quietly
+    // padding an old total. (The restart-drain check just above already
+    // recorded anything suspicious from the spell that just ended.)
     await resolveActiveFuelTheftIncident(vehicle.id, "Vehicle started moving again.", nowIsoStr);
     return;
   }
@@ -1123,11 +1202,16 @@ async function checkFuelTheftForVehicle(vehicle, payload) {
 
   const hoursElapsed = (nowTs - prev.ts) / 3600000;
   if (hoursElapsed <= 0 || hoursElapsed > FUEL_THEFT_MAX_GAP_HOURS) return; // too long a gap to trust the comparison
-  if (!isVehicleStationaryStatus(prev.status) || !isVehicleStationaryStatus(payload.status)) return; // was moving at some point in this window - normal consumption
+  const prevWasRunning = prev.status === "RUNNING";
+  if (!prevWasRunning && !isVehicleStationaryStatus(prev.status)) return; // previous status unknown - not a reliable comparison
+  if (!isVehicleStationaryStatus(payload.status)) return; // currently moving - normal consumption
 
   const drop = prev.fuelLitres - payload.fuelLitres;
   if (drop <= 0) return;
-  const allowance = allowedFuelDropLitres(payload.status, hoursElapsed);
+  // A drop measured on the very tick the vehicle stopped (prev was still
+  // RUNNING) gets zero allowance - no idle/off burn applies to a reading
+  // taken while the engine was still on a moment ago.
+  const allowance = prevWasRunning ? 0 : allowedFuelDropLitres(payload.status, hoursElapsed);
   const suspiciousDrop = Math.round((drop - allowance) * 10) / 10;
   if (suspiciousDrop < FUEL_THEFT_MIN_DROP_LITRES) return;
 
