@@ -117,6 +117,17 @@ async function initStorage() {
     // Trip Replay reads by vehicle+time-range constantly, and pruning
     // deletes by time - this index makes both fast even at millions of rows.
     await locationHistoryCol.createIndex({ vehicleId: 1, ts: 1 }).catch((err) => console.error("Location history index setup failed (non-fatal):", err.message));
+    transportEmployeesCol = mdb.collection("transportEmployees");
+    transportRequestsCol = mdb.collection("transportRequests");
+    transportRoutesCol = mdb.collection("transportRoutes");
+    // Every Employee Transport query filters by clientId first (a client's
+    // roster, requests, or routes) - this is what keeps those lookups fast
+    // even once a single client has tens of thousands of employees.
+    await Promise.all([
+      transportEmployeesCol.createIndex({ clientId: 1, phone: 1 }),
+      transportRequestsCol.createIndex({ clientId: 1, status: 1 }),
+      transportRoutesCol.createIndex({ clientId: 1, direction: 1, status: 1 }),
+    ]).catch((err) => console.error("Employee Transport index setup failed (non-fatal):", err.message));
     const existing = await appDataCol.findOne({ _id: "main" });
     if (existing) {
       delete existing._id;
@@ -128,6 +139,7 @@ async function initStorage() {
       await persistNow();
       console.log("Storage: connected to MongoDB, no existing data found - seeded with demo data.");
     }
+    await loadTransportData();
     await runBackup("startup");
     setInterval(() => runBackup("daily"), BACKUP_INTERVAL_MS);
     await archiveOverdueDriverDocs();
@@ -140,6 +152,7 @@ async function initStorage() {
     if (!fs.existsSync(DATA_FILE)) fs.copyFileSync(SEED_FILE, DATA_FILE);
     db = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
     backfillDefaults();
+    await loadTransportData();
     console.warn(
       "Storage: MONGODB_URI not set - using local file storage. This is fine for local testing, but on Render's " +
         "free tier this data (and uploaded photos) will be WIPED on every redeploy/restart. Set MONGODB_URI to fix " +
@@ -222,6 +235,49 @@ function backfillDefaults() {
   (db.clients || []).forEach((c) => {
     if (c.routeCap === undefined) c.routeCap = 0;
     if (!Array.isArray(c.routes)) c.routes = [];
+    // Employee Transport module - a client can optionally turn this on and
+    // set an office location, per-seater-type contracted rates, and comfort
+    // limits the route optimizer respects (see TRANSPORT_SEATER_TIERS and
+    // runTransportOptimizer() below).
+    if (!c.transportConfig) {
+      c.transportConfig = {
+        enabled: false,
+        officeLat: null,
+        officeLng: null,
+        officeAddress: "",
+        seaterRates: {}, // { "5": 1200, "7": 1500, ... } - ₹ per route per day, filled in by Ops/Owner
+        maxPickupDetourKm: 6, // how much further than a direct line a stop may add to the route before it's flagged
+        maxRideMinutes: 75, // longest any one employee should be aboard, assuming ~25km/h average
+      };
+    } else {
+      if (c.transportConfig.enabled === undefined) c.transportConfig.enabled = false;
+      if (c.transportConfig.officeLat === undefined) c.transportConfig.officeLat = null;
+      if (c.transportConfig.officeLng === undefined) c.transportConfig.officeLng = null;
+      if (c.transportConfig.officeAddress === undefined) c.transportConfig.officeAddress = "";
+      if (!c.transportConfig.seaterRates) c.transportConfig.seaterRates = {};
+      if (c.transportConfig.maxPickupDetourKm === undefined) c.transportConfig.maxPickupDetourKm = 6;
+      if (c.transportConfig.maxRideMinutes === undefined) c.transportConfig.maxRideMinutes = 75;
+    }
+  });
+  // ---------- Employee Transport module ----------
+  // Client-portal staff logins (Travel Desk Manager/Billing/HOD) stay in the
+  // main db blob like every other login type - there are only ever a
+  // handful per client. The employee roster/requests/routes do NOT: a
+  // client can have 1,000-100,000+ employees, and this data changes
+  // constantly (self-service location pins, request approvals, re-running
+  // the optimizer) - keeping that inside `db` would mean every one of those
+  // touches rewrites the ENTIRE app dataset via persistNow(), and worse,
+  // every UNRELATED save() anywhere else in the app (a login, an expense
+  // entry) would also be rewriting a potentially huge roster it never
+  // touched. See loadTransportData()/saveTransportData() further down,
+  // which follow the same "large data lives outside the main blob" pattern
+  // already used for photos/backups/location history.
+  if (!Array.isArray(db.clientUsers)) db.clientUsers = [];
+  (db.clientUsers || []).forEach((cu) => {
+    if (cu.theme === undefined) cu.theme = null;
+    if (!Array.isArray(cu.passwordHistory)) cu.passwordHistory = [];
+    if (cu.mustChangePassword === undefined) cu.mustChangePassword = false;
+    if (cu.active === undefined) cu.active = true;
   });
   (db.users || []).forEach((u) => {
     if (u.phone === undefined) u.phone = "";
@@ -325,6 +381,11 @@ function backfillDefaults() {
     // for blowing the deadline (distinct from a real HR-initiated exit).
     if (d.docsDeadline === undefined) d.docsDeadline = null;
     if (d.docsArchived === undefined) d.docsArchived = false;
+    // Home location for the Employee Transport route optimizer (see below) -
+    // null until Ops/HR fills it in via the driver's People-tab profile.
+    if (d.homeLat === undefined) d.homeLat = null;
+    if (d.homeLng === undefined) d.homeLng = null;
+    if (d.homeAddress === undefined) d.homeAddress = "";
   });
   if (!Array.isArray(db.driverShifts)) db.driverShifts = [];
   (db.driverShifts || []).forEach((s) => {
@@ -427,6 +488,153 @@ function backfillDefaults() {
     if (r.expenseId === undefined) r.expenseId = null;
     if (r.urgency === undefined) r.urgency = "normal";
   });
+}
+
+// ---------- Employee Transport data (kept OUT of `db` - see the comment in
+// backfillDefaults() above for why) ----------
+// A client's roster can run into the tens or hundreds of thousands of
+// employees, and this data is read/written far more often (self-service
+// location pins, request approvals, optimizer re-runs) than it would be
+// safe to bundle into the same all-or-nothing blob as everything else.
+// Kept fully in memory (same as `db` itself) for fast filtering in the
+// optimizer, but persisted to its own storage: real Mongo collections
+// (one document per employee/request/route, indexed by clientId) in Mongo
+// mode, or its own JSON files under ./data/transport in local-file mode.
+let transportEmployees = [];
+let transportRequests = [];
+let transportRoutes = [];
+let transportEmployeesCol = null;
+let transportRequestsCol = null;
+let transportRoutesCol = null;
+const TRANSPORT_DIR = path.join(DATA_DIR, "transport");
+const TRANSPORT_EMPLOYEES_FILE = path.join(TRANSPORT_DIR, "employees.json");
+const TRANSPORT_REQUESTS_FILE = path.join(TRANSPORT_DIR, "requests.json");
+const TRANSPORT_ROUTES_FILE = path.join(TRANSPORT_DIR, "routes.json");
+
+function backfillTransportEmployee(e) {
+  if (e.theme === undefined) e.theme = null;
+  if (e.pin === undefined) e.pin = "1234";
+  if (e.active === undefined) e.active = true;
+  if (e.homeLat === undefined) e.homeLat = null;
+  if (e.homeLng === undefined) e.homeLng = null;
+  if (e.homeAddress === undefined) e.homeAddress = "";
+  if (e.locationPinnedAt === undefined) e.locationPinnedAt = null;
+  if (e.department === undefined) e.department = "";
+  if (e.empCode === undefined) e.empCode = "";
+  if (e.shiftStart === undefined) e.shiftStart = "09:00";
+  if (e.shiftEnd === undefined) e.shiftEnd = "18:00";
+  return e;
+}
+
+async function loadTransportData() {
+  if (USE_MONGO) {
+    const [emps, reqs, routes] = await Promise.all([
+      transportEmployeesCol.find({}).toArray(),
+      transportRequestsCol.find({}).toArray(),
+      transportRoutesCol.find({}).toArray(),
+    ]);
+    transportEmployees = emps.map((e) => { delete e._id; return backfillTransportEmployee(e); });
+    transportRequests = reqs.map((r) => { delete r._id; return r; });
+    transportRoutes = routes.map((r) => { delete r._id; return r; });
+  } else {
+    if (!fs.existsSync(TRANSPORT_DIR)) fs.mkdirSync(TRANSPORT_DIR, { recursive: true });
+    const readJson = (file) => {
+      if (!fs.existsSync(file)) return [];
+      try { return JSON.parse(fs.readFileSync(file, "utf8")); } catch (e) { return []; }
+    };
+    transportEmployees = readJson(TRANSPORT_EMPLOYEES_FILE).map(backfillTransportEmployee);
+    transportRequests = readJson(TRANSPORT_REQUESTS_FILE);
+    transportRoutes = readJson(TRANSPORT_ROUTES_FILE);
+  }
+}
+// IMPORTANT: a naive "rewrite the whole array to disk/collection on every
+// change" approach (which is what save()/persistNow() does for the main
+// `db`) would be fine at hundreds of records but actively harmful here - if
+// 10,000-100,000 employees each pin their location once during a rollout,
+// that's 10,000-100,000 full rewrites of a dataset that size, i.e. roughly
+// O(n^2) total work. So this data gets genuinely targeted, per-record
+// persistence instead:
+//  - Mongo mode: a real collection with a per-record upsert/delete - O(1)
+//    per mutation no matter how large the collection gets, exactly like any
+//    other database-backed table. This is the recommended path at real
+//    scale (10k+ employees) for the same reason MONGODB_URI is already
+//    recommended over local-file mode everywhere else in this app.
+//  - Local-file mode: mutations update the in-memory array immediately (so
+//    every read in this same process is always instant and correct), and
+//    the actual file write is debounced by a couple of seconds so a burst
+//    of many employees pinning their location around the same time
+//    coalesces into one disk write instead of one per employee. This is
+//    the same "fine for local testing, not the durable/production path"
+//    tier local-file mode already is everywhere else in this app.
+let _transportSaveTimer = null;
+// Short on purpose: long enough to coalesce a genuine burst (many employees
+// pinning their location within the same second or two during a rollout),
+// short enough to bound how much could be lost if the process exits
+// unexpectedly between now and the next scheduled write. flushTransportFileSaveSync()
+// below also runs on graceful shutdown to close that window entirely for
+// normal restarts/redeploys - only an abrupt crash/kill within this window
+// could still lose the last few seconds of local-file-mode writes, which is
+// exactly the kind of gap MONGODB_URI mode (real per-record writes, no
+// debounce, see persistTransportEmployee() etc. above) doesn't have at all.
+const TRANSPORT_SAVE_DEBOUNCE_MS = 500;
+function flushTransportFileSaveSync() {
+  if (USE_MONGO) return;
+  if (_transportSaveTimer) { clearTimeout(_transportSaveTimer); _transportSaveTimer = null; }
+  try {
+    if (!fs.existsSync(TRANSPORT_DIR)) fs.mkdirSync(TRANSPORT_DIR, { recursive: true });
+    fs.writeFileSync(TRANSPORT_EMPLOYEES_FILE, JSON.stringify(transportEmployees));
+    fs.writeFileSync(TRANSPORT_REQUESTS_FILE, JSON.stringify(transportRequests));
+    fs.writeFileSync(TRANSPORT_ROUTES_FILE, JSON.stringify(transportRoutes));
+  } catch (err) {
+    console.error("Failed to persist transport data:", err);
+  }
+}
+function scheduleTransportFileSave() {
+  if (USE_MONGO) return;
+  if (_transportSaveTimer) return;
+  _transportSaveTimer = setTimeout(() => {
+    _transportSaveTimer = null;
+    flushTransportFileSaveSync();
+  }, TRANSPORT_SAVE_DEBOUNCE_MS);
+}
+// Graceful shutdown (Render/Docker sending SIGTERM on redeploy, or Ctrl+C
+// locally) flushes immediately instead of waiting out the debounce window.
+process.on("SIGTERM", () => { flushTransportFileSaveSync(); process.exit(0); });
+process.on("SIGINT", () => { flushTransportFileSaveSync(); process.exit(0); });
+// Call after adding/updating ONE employee (already pushed/mutated in the
+// in-memory transportEmployees array by the caller).
+async function persistTransportEmployee(e) {
+  if (USE_MONGO) await transportEmployeesCol.replaceOne({ _id: e.id }, Object.assign({ _id: e.id }, e), { upsert: true });
+  else scheduleTransportFileSave();
+}
+// Bulk roster import - the realistic way hundreds/thousands/tens of
+// thousands of employees actually arrive (one CSV/JSON upload, not one
+// request per person), so this is one batched write, not N.
+async function persistTransportEmployeesBulk(list) {
+  if (USE_MONGO) {
+    const BATCH = 2000;
+    for (let i = 0; i < list.length; i += BATCH) {
+      await transportEmployeesCol.insertMany(list.slice(i, i + BATCH).map((e) => Object.assign({ _id: e.id }, e)));
+    }
+  } else scheduleTransportFileSave();
+}
+async function persistTransportRequest(r) {
+  if (USE_MONGO) await transportRequestsCol.replaceOne({ _id: r.id }, Object.assign({ _id: r.id }, r), { upsert: true });
+  else scheduleTransportFileSave();
+}
+async function persistTransportRoute(r) {
+  if (USE_MONGO) await transportRoutesCol.replaceOne({ _id: r.id }, Object.assign({ _id: r.id }, r), { upsert: true });
+  else scheduleTransportFileSave();
+}
+// Used by the optimizer: swaps out a client+direction's DRAFT routes for a
+// freshly computed set in one batch, without touching any other client's
+// or direction's routes (those were never loaded into `removedIds`/`added`
+// in the first place).
+async function persistTransportRoutesReplaced(removedIds, added) {
+  if (USE_MONGO) {
+    if (removedIds.length) await transportRoutesCol.deleteMany({ _id: { $in: removedIds } });
+    if (added.length) await transportRoutesCol.insertMany(added.map((r) => Object.assign({ _id: r.id }, r)));
+  } else scheduleTransportFileSave();
 }
 
 // MongoDB Atlas's free (M0) tier doesn't include automatic cloud backups -
@@ -811,6 +1019,244 @@ async function getLocationHistory(vehicleId, fromIso, toIso) {
 }
 
 const GEOFENCE_METERS = 400; // configurable "close enough to site" radius
+
+// ---------- Employee Transport (client roster -> optimized vehicle routes) ----------
+// A client (e.g. a large office campus) can turn this on for themselves and
+// get: employees pin their own home location and raise a "I need a ride"
+// request; once Travel Desk approves it, the optimizer below groups
+// everyone needing a ride into vehicle-sized, geographically-sane routes
+// and (where possible) hands each route to whichever available driver
+// already lives closest to that route's first pickup / last drop point.
+//
+// The optimizer is a practical heuristic (sweep + nearest-neighbor), not a
+// true VRP solver - it needs no external routing API or paid geocoding
+// (employees supply their own coordinates by dropping a pin in-app), and
+// runs instantly even for a client with 1000+ employees.
+const TRANSPORT_SEATER_TIERS = [5, 7, 8, 12, 22, 40];
+const CLIENT_STAFF_ROLES = ["travel_desk_manager", "billing", "hod"];
+const TRANSPORT_AVG_SPEED_KMH = 25; // assumed average city speed - converts the client's "max ride minutes" comfort limit into a distance budget
+
+function smallestFittingTier(count) {
+  return TRANSPORT_SEATER_TIERS.find((t) => t >= count) || TRANSPORT_SEATER_TIERS[TRANSPORT_SEATER_TIERS.length - 1];
+}
+
+// Bearing (0-360) from point A to point B - sweeping employees around the
+// office in angular order groups people who live in the same direction out
+// of town together, which is the whole idea behind "zone" clustering when
+// there's no pre-defined zone/pincode map to work from.
+function bearingDeg(lat1, lng1, lat2, lng2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const toDeg = (r) => (r * 180) / Math.PI;
+  const dLng = toRad(lng2 - lng1);
+  const y = Math.sin(dLng) * Math.cos(toRad(lat2));
+  const x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLng);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+// Sweeps a client's employees in angular order around their office and
+// greedily packs them into clusters, closing a cluster early if the next
+// employee would either push it past the largest vehicle we have, or make
+// the cluster's farthest-apart stops wider than the client's comfort budget.
+function clusterEmployeesForRoutes(employees, client) {
+  const officeLat = client.transportConfig.officeLat;
+  const officeLng = client.transportConfig.officeLng;
+  const maxRideKm = (client.transportConfig.maxRideMinutes / 60) * TRANSPORT_AVG_SPEED_KMH;
+  const maxTier = TRANSPORT_SEATER_TIERS[TRANSPORT_SEATER_TIERS.length - 1];
+
+  const withBearing = employees
+    .map((e) => ({
+      employee: e,
+      bearing: bearingDeg(officeLat, officeLng, e.homeLat, e.homeLng),
+      distKm: distanceMeters(officeLat, officeLng, e.homeLat, e.homeLng) / 1000,
+    }))
+    .sort((a, b) => a.bearing - b.bearing);
+
+  const clusters = [];
+  let current = [];
+  withBearing.forEach((entry) => {
+    const candidate = [...current, entry];
+    const distsKm = candidate.map((c) => c.distKm);
+    const spreadKm = Math.max(...distsKm) - Math.min(...distsKm);
+    const overCapacity = candidate.length > maxTier;
+    const overComfort = current.length > 0 && spreadKm > maxRideKm;
+    if (overCapacity || overComfort) {
+      if (current.length) clusters.push(current);
+      current = [entry];
+    } else {
+      current = candidate;
+    }
+  });
+  if (current.length) clusters.push(current);
+  return clusters.map((c) => c.map((x) => x.employee));
+}
+
+// Orders one cluster's stops into an actual route: for a pickup route, the
+// vehicle starts at whoever lives farthest from the office and works inward
+// (nearest-neighbor) so it never doubles back across town; for a drop
+// route, it starts at the office and fans outward the same way.
+function orderStopsNearestNeighbor(employees, officeLat, officeLng, direction) {
+  const remaining = employees.slice();
+  const ordered = [];
+  let current = { lat: officeLat, lng: officeLng };
+  if (direction === "pickup") {
+    let farthest = null, farthestDist = -1;
+    remaining.forEach((e) => {
+      const d = distanceMeters(officeLat, officeLng, e.homeLat, e.homeLng);
+      if (d != null && d > farthestDist) { farthestDist = d; farthest = e; }
+    });
+    if (farthest) {
+      ordered.push(farthest);
+      remaining.splice(remaining.indexOf(farthest), 1);
+      current = { lat: farthest.homeLat, lng: farthest.homeLng };
+    }
+  }
+  while (remaining.length) {
+    let nearest = null, nearestDist = Infinity, nearestIdx = -1;
+    remaining.forEach((e, i) => {
+      const d = distanceMeters(current.lat, current.lng, e.homeLat, e.homeLng);
+      if (d != null && d < nearestDist) { nearestDist = d; nearest = e; nearestIdx = i; }
+    });
+    if (!nearest) break;
+    ordered.push(nearest);
+    remaining.splice(nearestIdx, 1);
+    current = { lat: nearest.homeLat, lng: nearest.homeLng };
+  }
+  return ordered;
+}
+
+function driverDistanceMeters(driverId, point) {
+  const driver = db.drivers.find((d) => d.id === driverId);
+  if (!driver || driver.homeLat == null || driver.homeLng == null || !point) return null;
+  return distanceMeters(driver.homeLat, driver.homeLng, point.lat, point.lng);
+}
+
+// Runs the optimizer for one client + direction ("pickup" or "drop"),
+// replacing that client's existing DRAFT routes for that direction only -
+// any route already approved or dispatched is left completely alone, so
+// re-running never disrupts a route that's already live on the road.
+async function runTransportOptimizer(clientId, direction, actorUser) {
+  const client = db.clients.find((c) => c.id === clientId);
+  if (!client) throw Object.assign(new Error("Client not found."), { status: 404 });
+  if (!client.transportConfig || !client.transportConfig.enabled) {
+    throw Object.assign(new Error("Employee Transport isn't enabled for this client yet."), { status: 400 });
+  }
+  if (client.transportConfig.officeLat == null || client.transportConfig.officeLng == null) {
+    throw Object.assign(new Error("Set the client's office location before running the optimizer."), { status: 400 });
+  }
+  if (!["pickup", "drop"].includes(direction)) {
+    throw Object.assign(new Error('direction must be "pickup" or "drop".'), { status: 400 });
+  }
+
+  const activeRequestEmployeeIds = new Set(
+    transportRequests
+      .filter((r) => r.clientId === clientId && r.status === "approved" && (r.type === direction || r.type === "both"))
+      .map((r) => r.employeeId)
+  );
+  const employees = transportEmployees.filter(
+    (e) => e.clientId === clientId && e.active !== false && e.homeLat != null && e.homeLng != null && activeRequestEmployeeIds.has(e.id)
+  );
+
+  const staleDrafts = transportRoutes.filter((r) => r.clientId === clientId && r.direction === direction && r.status === "draft");
+  const staleDraftIds = staleDrafts.map((r) => r.id);
+  transportRoutes = transportRoutes.filter((r) => !staleDraftIds.includes(r.id));
+
+  if (!employees.length) {
+    await persistTransportRoutesReplaced(staleDraftIds, []);
+    return [];
+  }
+
+  const clusters = clusterEmployeesForRoutes(employees, client);
+  const officeLat = client.transportConfig.officeLat, officeLng = client.transportConfig.officeLng;
+  const maxRideKm = (client.transportConfig.maxRideMinutes / 60) * TRANSPORT_AVG_SPEED_KMH;
+  const maxDetourKm = client.transportConfig.maxPickupDetourKm;
+
+  // Vehicles already claimed by any other draft/approved/dispatched route
+  // (for this client or any other) shouldn't be double-booked by this run.
+  const busyVehicleIds = new Set(transportRoutes.filter((r) => r.assignedVehicleId).map((r) => r.assignedVehicleId));
+
+  const newRoutes = [];
+  clusters.forEach((clusterEmployees) => {
+    const tier = smallestFittingTier(clusterEmployees.length);
+    const ordered = orderStopsNearestNeighbor(clusterEmployees, officeLat, officeLng, direction);
+
+    // Leg-by-leg distance between consecutive stops, used below to work out
+    // how far each INDIVIDUAL employee actually rides - not the same as raw
+    // cumulative distance from the start of the route, since for a pickup
+    // route the first person aboard rides through every remaining stop,
+    // while for a drop route it's the last person off who rides the longest.
+    const legs = ordered.map((e, i) => {
+      const prev = i === 0 ? null : ordered[i - 1];
+      const from = prev ? { lat: prev.homeLat, lng: prev.homeLng } : direction === "drop" ? { lat: officeLat, lng: officeLng } : null;
+      if (!from) return 0; // pickup's first leg is a deadhead drive to the farthest employee - nobody's aboard yet, so it isn't anyone's ride
+      return distanceMeters(from.lat, from.lng, e.homeLat, e.homeLng) / 1000;
+    });
+    const finalLegKm = direction === "pickup"
+      ? distanceMeters(ordered[ordered.length - 1].homeLat, ordered[ordered.length - 1].homeLng, officeLat, officeLng) / 1000
+      : 0;
+    const totalOnboardKm = legs.reduce((a, b) => a + b, 0) + finalLegKm;
+
+    let runningFromStart = 0;
+    const stops = ordered.map((e, i) => {
+      runningFromStart += legs[i];
+      const rideKm = direction === "drop" ? runningFromStart : totalOnboardKm - (runningFromStart - legs[i]);
+      return {
+        employeeId: e.id,
+        name: e.name,
+        seq: i + 1,
+        lat: e.homeLat,
+        lng: e.homeLng,
+        legKm: Math.round(legs[i] * 10) / 10,
+        rideKm: Math.round(rideKm * 10) / 10,
+        comfortFlag: rideKm > maxRideKm || legs[i] > maxDetourKm,
+      };
+    });
+
+    const keyStop = direction === "pickup" ? ordered[0] : ordered[ordered.length - 1];
+    const keyPoint = { lat: keyStop.homeLat, lng: keyStop.homeLng };
+    const candidateVehicles = db.vehicles.filter(
+      (v) => v.active !== false && v.seatingCapacity && v.seatingCapacity >= clusterEmployees.length && v.driverId && !busyVehicleIds.has(v.id)
+    );
+    candidateVehicles.sort((a, b) => {
+      if (a.seatingCapacity !== b.seatingCapacity) return a.seatingCapacity - b.seatingCapacity;
+      const da = driverDistanceMeters(a.driverId, keyPoint);
+      const db_ = driverDistanceMeters(b.driverId, keyPoint);
+      if (da == null && db_ == null) return 0;
+      if (da == null) return 1;
+      if (db_ == null) return -1;
+      return da - db_;
+    });
+    const chosenVehicle = candidateVehicles[0] || null;
+    if (chosenVehicle) busyVehicleIds.add(chosenVehicle.id);
+
+    const occupancyRatio = Math.round((clusterEmployees.length / (chosenVehicle ? chosenVehicle.seatingCapacity : tier)) * 100);
+    const route = {
+      id: uid("troute"),
+      clientId,
+      direction,
+      seaterTier: tier,
+      assignedVehicleId: chosenVehicle ? chosenVehicle.id : null,
+      assignedDriverId: chosenVehicle ? chosenVehicle.driverId : null,
+      stops,
+      totalEmployees: clusterEmployees.length,
+      totalDistanceKm: Math.round(totalOnboardKm * 10) / 10,
+      occupancyRatio,
+      comfortViolations: stops.filter((s) => s.comfortFlag).length,
+      status: "draft",
+      createdAt: nowIso(),
+      createdBy: actorUser ? actorUser.id : null,
+      createdByName: actorUser ? actorUser.name : null,
+      approvedBy: null,
+      approvedByName: null,
+      approvedAt: null,
+      dispatchedAt: null,
+    };
+    transportRoutes.push(route);
+    newRoutes.push(route);
+  });
+
+  await persistTransportRoutesReplaced(staleDraftIds, newRoutes);
+  return newRoutes;
+}
 
 // ---------- app ----------
 const app = express();
@@ -1480,6 +1926,688 @@ app.patch(
   })
 );
 
+// ---------- EMPLOYEE TRANSPORT ----------
+function publicClientUser(cu) {
+  if (!cu) return null;
+  const { passwordHash, passwordHistory, ...rest } = cu;
+  return rest;
+}
+function publicTransportEmployee(e) {
+  if (!e) return null;
+  const { pin, ...rest } = e;
+  return rest;
+}
+function findTransportEmployeePhoneClash(phone, excludeId) {
+  return transportEmployees.find((e) => e.phone && e.phone === phone && e.id !== excludeId);
+}
+function transportOccupancySummary(clientId) {
+  const routes = transportRoutes.filter((r) => (clientId ? r.clientId === clientId : true) && ["approved", "dispatched"].includes(r.status));
+  const totalEmployees = routes.reduce((a, r) => a + r.totalEmployees, 0);
+  const totalCapacity = routes.reduce((a, r) => a + (r.assignedVehicleId ? (db.vehicles.find((v) => v.id === r.assignedVehicleId)?.seatingCapacity || r.seaterTier) : r.seaterTier), 0);
+  return {
+    routeCount: routes.length,
+    totalEmployees,
+    totalCapacity,
+    averageOccupancyRatio: totalCapacity ? Math.round((totalEmployees / totalCapacity) * 100) : 0,
+    byTier: TRANSPORT_SEATER_TIERS.map((tier) => {
+      const tierRoutes = routes.filter((r) => r.seaterTier === tier);
+      const emp = tierRoutes.reduce((a, r) => a + r.totalEmployees, 0);
+      return { tier, routeCount: tierRoutes.length, totalEmployees: emp };
+    }),
+  };
+}
+
+// -------- Staff-app side (Owner/Ops Manager/Data Team) --------
+app.patch(
+  "/api/clients/:id/transport-config",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const { enabled, officeLat, officeLng, officeAddress, seaterRates, maxPickupDetourKm, maxRideMinutes } = req.body || {};
+    if (enabled !== undefined) client.transportConfig.enabled = !!enabled;
+    if (officeLat !== undefined) client.transportConfig.officeLat = officeLat === null || officeLat === "" ? null : Number(officeLat);
+    if (officeLng !== undefined) client.transportConfig.officeLng = officeLng === null || officeLng === "" ? null : Number(officeLng);
+    if (officeAddress !== undefined) client.transportConfig.officeAddress = officeAddress || "";
+    if (seaterRates && typeof seaterRates === "object") {
+      const cleaned = {};
+      TRANSPORT_SEATER_TIERS.forEach((t) => {
+        const v = seaterRates[String(t)];
+        if (v !== undefined && v !== "" && v !== null) cleaned[String(t)] = Number(v);
+      });
+      client.transportConfig.seaterRates = cleaned;
+    }
+    if (maxPickupDetourKm !== undefined) client.transportConfig.maxPickupDetourKm = Number(maxPickupDetourKm) || 6;
+    if (maxRideMinutes !== undefined) client.transportConfig.maxRideMinutes = Number(maxRideMinutes) || 75;
+    await audit(req.user, "update_transport_config", `${req.user.name} updated Employee Transport settings for ${client.name}`);
+    res.json(client);
+  })
+);
+
+// Travel Desk Manager / Billing / HOD logins for a client - a handful per
+// client, so these live in the main db blob like every other login type.
+app.post(
+  "/api/clients/:id/client-users",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const { name, role, email, phone, password } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "Name is required." });
+    if (!CLIENT_STAFF_ROLES.includes(role)) return res.status(400).json({ error: `Role must be one of: ${CLIENT_STAFF_ROLES.join(", ")}.` });
+    if (!email && !phone) return res.status(400).json({ error: "An email or mobile number is required to log in." });
+    if (!password) return res.status(400).json({ error: "A temporary password is required." });
+    const policyError = passwordPolicyError(password);
+    if (policyError) return res.status(400).json({ error: policyError });
+    const idNorm = (email || phone || "").trim().toLowerCase();
+    const clash = db.clientUsers.find((u) => (u.email && u.email.toLowerCase() === idNorm) || (u.phone && u.phone === (phone || "").trim()));
+    if (clash) return res.status(400).json({ error: "That email/mobile number is already registered to a client portal user." });
+    const cu = {
+      id: uid("cu"),
+      clientId: client.id,
+      name: String(name).trim(),
+      role,
+      email: email || "",
+      phone: phone || "",
+      passwordHash: hashPassword(password),
+      passwordHistory: [],
+      mustChangePassword: true,
+      theme: null,
+      active: true,
+      createdAt: nowIso(),
+    };
+    db.clientUsers.push(cu);
+    await audit(req.user, "create_client_user", `${req.user.name} created a ${role} portal login for ${client.name}: ${cu.name}`);
+    res.json(publicClientUser(cu));
+  })
+);
+app.get(
+  "/api/clients/:id/client-users",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  (req, res) => {
+    res.json(db.clientUsers.filter((u) => u.clientId === req.params.id).map(publicClientUser));
+  }
+);
+app.patch(
+  "/api/client-users/:id/deactivate",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const cu = db.clientUsers.find((u) => u.id === req.params.id);
+    if (!cu) return res.status(404).json({ error: "Client portal user not found." });
+    cu.active = req.body && req.body.active === false ? false : req.body && req.body.active === true ? true : !cu.active;
+    await audit(req.user, "update_client_user", `${req.user.name} ${cu.active ? "reactivated" : "deactivated"} client portal login ${cu.name}`);
+    res.json(publicClientUser(cu));
+  })
+);
+
+app.get(
+  "/api/transport/employees",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  (req, res) => {
+    const { clientId } = req.query;
+    let list = transportEmployees;
+    if (clientId) list = list.filter((e) => e.clientId === clientId);
+    res.json(list.map(publicTransportEmployee));
+  }
+);
+app.get(
+  "/api/transport/requests",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  (req, res) => {
+    const { clientId, status } = req.query;
+    let list = transportRequests;
+    if (clientId) list = list.filter((r) => r.clientId === clientId);
+    if (status) list = list.filter((r) => r.status === status);
+    res.json(list);
+  }
+);
+app.post(
+  "/api/transport/optimize",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const { clientId, direction } = req.body || {};
+    if (!clientId) return res.status(400).json({ error: "clientId is required." });
+    try {
+      const routes = await runTransportOptimizer(clientId, direction, req.user);
+      await audit(req.user, "run_transport_optimizer", `${req.user.name} ran the ${direction} route optimizer for ${clientNameServer(clientId)} - ${routes.length} route(s) generated`);
+      res.json({ routes });
+    } catch (err) {
+      res.status(err.status || 500).json({ error: err.message });
+    }
+  })
+);
+app.get(
+  "/api/transport/routes",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  (req, res) => {
+    const { clientId, direction, status } = req.query;
+    let list = transportRoutes;
+    if (clientId) list = list.filter((r) => r.clientId === clientId);
+    if (direction) list = list.filter((r) => r.direction === direction);
+    if (status) list = list.filter((r) => r.status === status);
+    res.json(list);
+  }
+);
+app.post(
+  "/api/transport/routes/:id/assign-vehicle",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const route = transportRoutes.find((r) => r.id === req.params.id);
+    if (!route) return res.status(404).json({ error: "Route not found." });
+    const { vehicleId } = req.body || {};
+    const vehicle = vehicleId ? db.vehicles.find((v) => v.id === vehicleId) : null;
+    if (vehicleId && !vehicle) return res.status(400).json({ error: "Vehicle not found." });
+    if (vehicle && vehicle.seatingCapacity < route.totalEmployees) {
+      return res.status(400).json({ error: `That vehicle only seats ${vehicle.seatingCapacity} - this route has ${route.totalEmployees} employees.` });
+    }
+    route.assignedVehicleId = vehicle ? vehicle.id : null;
+    route.assignedDriverId = vehicle ? vehicle.driverId : null;
+    route.occupancyRatio = Math.round((route.totalEmployees / (vehicle ? vehicle.seatingCapacity : route.seaterTier)) * 100);
+    await persistTransportRoute(route);
+    await audit(req.user, "assign_transport_route_vehicle", `${req.user.name} assigned ${vehicle ? vehicle.reg : "no vehicle"} to a ${route.direction} route for ${clientNameServer(route.clientId)}`);
+    res.json(route);
+  })
+);
+app.post(
+  "/api/transport/routes/:id/approve",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const route = transportRoutes.find((r) => r.id === req.params.id);
+    if (!route) return res.status(404).json({ error: "Route not found." });
+    if (route.status !== "draft") return res.status(400).json({ error: "Only a draft route can be approved." });
+    route.status = "approved";
+    route.approvedBy = req.user.id;
+    route.approvedByName = req.user.name;
+    route.approvedAt = nowIso();
+    await persistTransportRoute(route);
+    await audit(req.user, "approve_transport_route", `${req.user.name} approved a ${route.direction} route for ${clientNameServer(route.clientId)} (${route.totalEmployees} employees)`);
+    res.json(route);
+  })
+);
+app.post(
+  "/api/transport/routes/:id/dispatch",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const route = transportRoutes.find((r) => r.id === req.params.id);
+    if (!route) return res.status(404).json({ error: "Route not found." });
+    if (route.status !== "approved") return res.status(400).json({ error: "Only an approved route can be dispatched." });
+    if (!route.assignedVehicleId) return res.status(400).json({ error: "Assign a vehicle before dispatching." });
+    route.status = "dispatched";
+    route.dispatchedAt = nowIso();
+    await persistTransportRoute(route);
+    await audit(req.user, "dispatch_transport_route", `${req.user.name} dispatched a ${route.direction} route for ${clientNameServer(route.clientId)}`);
+    res.json(route);
+  })
+);
+app.get(
+  "/api/transport/occupancy",
+  requireAuth,
+  requireRole(...ADMIN_ROLES, "owner"),
+  (req, res) => {
+    const { clientId } = req.query;
+    res.json(transportOccupancySummary(clientId || null));
+  }
+);
+
+// -------- Client Portal auth (Travel Desk Manager / Billing / HOD) --------
+// Same "staff-style" email/mobile + password pattern as subvendor-auth -
+// there are only ever a handful of these per client.
+const clientAuthSessions = new Map(); // token -> clientUserId
+function clientAuth(req, res, next) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  const cuId = token && clientAuthSessions.get(token);
+  const cu = cuId && db.clientUsers.find((u) => u.id === cuId && u.active !== false);
+  if (!cu) return res.status(401).json({ error: "Not signed in. Please log in again." });
+  if (cu.mustChangePassword && !["/api/client-auth/me", "/api/client-auth/change-password", "/api/client-auth/logout"].includes(req.path)) {
+    return res.status(403).json({ error: "You must set a new password before continuing.", mustChangePassword: true });
+  }
+  req.clientUser = cu;
+  req.clientUserToken = token;
+  next();
+}
+function requireClientRole(...roles) {
+  return (req, res, next) => {
+    if (!roles.includes(req.clientUser.role)) {
+      return res.status(403).json({ error: `This action needs one of these roles: ${roles.join(", ")}.` });
+    }
+    next();
+  };
+}
+app.post(
+  "/api/client-auth/login",
+  h(async (req, res) => {
+    const { identifier, password } = req.body || {};
+    if (!identifier || !password) return res.status(400).json({ error: "Email/mobile and password are required." });
+    const idNorm = String(identifier).trim().toLowerCase();
+    const cu = db.clientUsers.find(
+      (u) => u.active !== false && ((u.email && u.email.toLowerCase() === idNorm) || (u.phone && u.phone === String(identifier).trim()))
+    );
+    if (!cu || !verifyPassword(password, cu.passwordHash)) {
+      return res.status(401).json({ error: "Incorrect email/mobile or password." });
+    }
+    const token = uid("ctok");
+    clientAuthSessions.set(token, cu.id);
+    await audit(cu, "client_user_login", `${cu.name} (${cu.role}) logged in to the client portal`);
+    res.json({ token, user: publicClientUser(cu) });
+  })
+);
+app.get("/api/client-auth/me", clientAuth, (req, res) => {
+  const client = db.clients.find((c) => c.id === req.clientUser.clientId);
+  res.json({
+    user: publicClientUser(req.clientUser),
+    client: client ? { id: client.id, name: client.name, transportConfig: client.transportConfig } : null,
+    themePresets: THEME_PRESETS,
+  });
+});
+app.post(
+  "/api/client-auth/change-password",
+  clientAuth,
+  h(async (req, res) => {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: "Current and new password are required." });
+    if (!verifyPassword(currentPassword, req.clientUser.passwordHash)) return res.status(400).json({ error: "Current password is incorrect." });
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError) return res.status(400).json({ error: policyError });
+    if (passwordReused(newPassword, req.clientUser)) {
+      return res.status(400).json({ error: "New password cannot be the same as your current or a recent previous password." });
+    }
+    req.clientUser.passwordHistory = [req.clientUser.passwordHash, ...(req.clientUser.passwordHistory || [])].slice(0, PASSWORD_HISTORY_LIMIT);
+    req.clientUser.passwordHash = hashPassword(newPassword);
+    req.clientUser.mustChangePassword = false;
+    await audit(req.clientUser, "client_user_change_password", `${req.clientUser.name} changed their own password`);
+    res.json(publicClientUser(req.clientUser));
+  })
+);
+app.post(
+  "/api/client-auth/theme",
+  clientAuth,
+  h(async (req, res) => {
+    const { value, error } = themeFromBody(req.body);
+    if (error) return res.status(400).json({ error });
+    req.clientUser.theme = value;
+    await save();
+    res.json(publicClientUser(req.clientUser));
+  })
+);
+app.post(
+  "/api/client-auth/logout",
+  clientAuth,
+  h(async (req, res) => {
+    clientAuthSessions.delete(req.clientUserToken);
+    await audit(req.clientUser, "client_user_logout", `${req.clientUser.name} logged out`);
+    res.json({ ok: true });
+  })
+);
+
+// Travel Desk Manager - roster, requests, optimizer, route dispatch.
+app.get(
+  "/api/client-auth/employees",
+  clientAuth,
+  requireClientRole("travel_desk_manager"),
+  (req, res) => {
+    res.json(transportEmployees.filter((e) => e.clientId === req.clientUser.clientId).map(publicTransportEmployee));
+  }
+);
+app.post(
+  "/api/client-auth/employees",
+  clientAuth,
+  requireClientRole("travel_desk_manager"),
+  h(async (req, res) => {
+    const { name, phone, empCode, department, email, shiftStart, shiftEnd } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "Name is required." });
+    if (!phone || !String(phone).trim()) return res.status(400).json({ error: "Mobile number is required." });
+    if (findTransportEmployeePhoneClash(String(phone).trim())) {
+      return res.status(400).json({ error: `Mobile number ${phone} is already registered to another employee.` });
+    }
+    const e = backfillTransportEmployee({
+      id: uid("temp"),
+      clientId: req.clientUser.clientId,
+      name: String(name).trim(),
+      phone: String(phone).trim(),
+      empCode: empCode || "",
+      department: department || "",
+      email: email || "",
+      shiftStart: shiftStart || "09:00",
+      shiftEnd: shiftEnd || "18:00",
+      createdAt: nowIso(),
+    });
+    transportEmployees.push(e);
+    await persistTransportEmployee(e);
+    await audit(req.clientUser, "add_transport_employee", `${req.clientUser.name} added employee ${e.name} to the transport roster`);
+    res.json(publicTransportEmployee(e));
+  })
+);
+// Bulk roster import - the realistic way hundreds to hundreds-of-thousands
+// of employees actually arrive (one upload). Expects an array of
+// {name, phone, empCode, department, email, shiftStart, shiftEnd} - rows
+// missing a name/phone, or reusing a phone number already on file (either
+// in this batch or the existing roster), are skipped and reported back
+// rather than silently dropped or allowed to clash.
+app.post(
+  "/api/client-auth/employees/bulk",
+  clientAuth,
+  requireClientRole("travel_desk_manager"),
+  h(async (req, res) => {
+    const { rows } = req.body || {};
+    if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ error: "rows must be a non-empty array." });
+    const seenPhones = new Set(transportEmployees.map((e) => e.phone));
+    const added = [];
+    const skipped = [];
+    rows.forEach((row, i) => {
+      const name = (row.name || "").toString().trim();
+      const phone = (row.phone || "").toString().trim();
+      if (!name || !phone) { skipped.push({ row: i + 1, reason: "missing name or phone" }); return; }
+      if (seenPhones.has(phone)) { skipped.push({ row: i + 1, reason: `phone ${phone} already registered` }); return; }
+      seenPhones.add(phone);
+      const e = backfillTransportEmployee({
+        id: uid("temp"),
+        clientId: req.clientUser.clientId,
+        name,
+        phone,
+        empCode: row.empCode || "",
+        department: row.department || "",
+        email: row.email || "",
+        shiftStart: row.shiftStart || "09:00",
+        shiftEnd: row.shiftEnd || "18:00",
+        createdAt: nowIso(),
+      });
+      transportEmployees.push(e);
+      added.push(e);
+    });
+    await persistTransportEmployeesBulk(added);
+    await audit(req.clientUser, "bulk_add_transport_employees", `${req.clientUser.name} bulk-imported ${added.length} employee(s) (${skipped.length} skipped)`);
+    res.json({ added: added.length, skipped });
+  })
+);
+app.patch(
+  "/api/client-auth/employees/:id",
+  clientAuth,
+  requireClientRole("travel_desk_manager"),
+  h(async (req, res) => {
+    const e = transportEmployees.find((x) => x.id === req.params.id && x.clientId === req.clientUser.clientId);
+    if (!e) return res.status(404).json({ error: "Employee not found." });
+    const { name, phone, empCode, department, email, shiftStart, shiftEnd, active } = req.body || {};
+    if (phone !== undefined && phone) {
+      const clash = findTransportEmployeePhoneClash(String(phone).trim(), e.id);
+      if (clash) return res.status(400).json({ error: `Mobile number ${phone} is already registered to another employee.` });
+    }
+    if (name !== undefined) e.name = name;
+    if (phone !== undefined) e.phone = phone;
+    if (empCode !== undefined) e.empCode = empCode;
+    if (department !== undefined) e.department = department;
+    if (email !== undefined) e.email = email;
+    if (shiftStart !== undefined) e.shiftStart = shiftStart;
+    if (shiftEnd !== undefined) e.shiftEnd = shiftEnd;
+    if (active !== undefined) e.active = !!active;
+    await persistTransportEmployee(e);
+    await audit(req.clientUser, "update_transport_employee", `${req.clientUser.name} updated employee ${e.name}`);
+    res.json(publicTransportEmployee(e));
+  })
+);
+app.get(
+  "/api/client-auth/requests",
+  clientAuth,
+  requireClientRole("travel_desk_manager"),
+  (req, res) => {
+    const { status } = req.query;
+    let list = transportRequests.filter((r) => r.clientId === req.clientUser.clientId);
+    if (status) list = list.filter((r) => r.status === status);
+    res.json(list);
+  }
+);
+app.post(
+  "/api/client-auth/requests/:id/decide",
+  clientAuth,
+  requireClientRole("travel_desk_manager"),
+  h(async (req, res) => {
+    const request = transportRequests.find((r) => r.id === req.params.id && r.clientId === req.clientUser.clientId);
+    if (!request) return res.status(404).json({ error: "Request not found." });
+    if (request.status !== "pending") return res.status(400).json({ error: "This request has already been decided on." });
+    const { decision, note } = req.body || {};
+    if (!["approved", "rejected"].includes(decision)) return res.status(400).json({ error: "decision must be approved or rejected." });
+    request.status = decision;
+    request.decidedBy = req.clientUser.id;
+    request.decidedByName = req.clientUser.name;
+    request.decidedAt = nowIso();
+    request.note = note || "";
+    await persistTransportRequest(request);
+    await audit(req.clientUser, "decide_transport_request", `${req.clientUser.name} ${decision} a transport request`);
+    res.json(request);
+  })
+);
+app.post(
+  "/api/client-auth/optimize",
+  clientAuth,
+  requireClientRole("travel_desk_manager"),
+  h(async (req, res) => {
+    const { direction } = req.body || {};
+    try {
+      const routes = await runTransportOptimizer(req.clientUser.clientId, direction, req.clientUser);
+      await audit(req.clientUser, "run_transport_optimizer", `${req.clientUser.name} ran the ${direction} route optimizer - ${routes.length} route(s) generated`);
+      res.json({ routes });
+    } catch (err) {
+      res.status(err.status || 500).json({ error: err.message });
+    }
+  })
+);
+app.get(
+  "/api/client-auth/routes",
+  clientAuth,
+  requireClientRole("travel_desk_manager", "billing", "hod"),
+  (req, res) => {
+    const { direction, status } = req.query;
+    let list = transportRoutes.filter((r) => r.clientId === req.clientUser.clientId);
+    if (direction) list = list.filter((r) => r.direction === direction);
+    if (status) list = list.filter((r) => r.status === status);
+    res.json(list);
+  }
+);
+app.post(
+  "/api/client-auth/routes/:id/approve",
+  clientAuth,
+  requireClientRole("travel_desk_manager"),
+  h(async (req, res) => {
+    const route = transportRoutes.find((r) => r.id === req.params.id && r.clientId === req.clientUser.clientId);
+    if (!route) return res.status(404).json({ error: "Route not found." });
+    if (route.status !== "draft") return res.status(400).json({ error: "Only a draft route can be approved." });
+    route.status = "approved";
+    route.approvedBy = req.clientUser.id;
+    route.approvedByName = req.clientUser.name;
+    route.approvedAt = nowIso();
+    await persistTransportRoute(route);
+    await audit(req.clientUser, "approve_transport_route", `${req.clientUser.name} approved a ${route.direction} route (${route.totalEmployees} employees)`);
+    res.json(route);
+  })
+);
+
+// Billing - costing summary (fixed rate per seater-type, per the client's
+// transportConfig.seaterRates) and occupancy, read-only.
+app.get(
+  "/api/client-auth/billing/summary",
+  clientAuth,
+  requireClientRole("billing", "travel_desk_manager"),
+  (req, res) => {
+    const client = db.clients.find((c) => c.id === req.clientUser.clientId);
+    const routes = transportRoutes.filter((r) => r.clientId === req.clientUser.clientId && ["approved", "dispatched"].includes(r.status));
+    const byTier = TRANSPORT_SEATER_TIERS.map((tier) => {
+      const tierRoutes = routes.filter((r) => r.seaterTier === tier);
+      const rate = (client && client.transportConfig.seaterRates[String(tier)]) || 0;
+      return { tier, routeCount: tierRoutes.length, ratePerRoute: rate, dailyCost: tierRoutes.length * rate };
+    });
+    const totalDailyCost = byTier.reduce((a, t) => a + t.dailyCost, 0);
+    res.json({ byTier, totalDailyCost, occupancy: transportOccupancySummary(req.clientUser.clientId) });
+  }
+);
+
+// HOD (and anyone else at the client) - read-only summary.
+app.get(
+  "/api/client-auth/overview",
+  clientAuth,
+  requireClientRole("travel_desk_manager", "billing", "hod"),
+  (req, res) => {
+    const clientId = req.clientUser.clientId;
+    const employees = transportEmployees.filter((e) => e.clientId === clientId);
+    const pendingRequests = transportRequests.filter((r) => r.clientId === clientId && r.status === "pending").length;
+    res.json({
+      totalEmployees: employees.length,
+      employeesWithLocation: employees.filter((e) => e.homeLat != null).length,
+      pendingRequests,
+      occupancy: transportOccupancySummary(clientId),
+    });
+  }
+);
+
+// -------- Employee self-service (mirrors driver-auth: mobile + PIN) --------
+const clientEmployeeSessions = new Map(); // token -> employeeId
+function clientEmployeeAuth(req, res, next) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  const empId = token && clientEmployeeSessions.get(token);
+  const emp = empId && transportEmployees.find((e) => e.id === empId && e.active !== false);
+  if (!emp) return res.status(401).json({ error: "Not signed in. Please log in again." });
+  req.transportEmployee = emp;
+  req.transportEmployeeToken = token;
+  next();
+}
+app.post(
+  "/api/client-employee-auth/login",
+  h(async (req, res) => {
+    const { phone, pin } = req.body || {};
+    if (!phone || !pin) return res.status(400).json({ error: "Mobile number and PIN are required." });
+    const phoneNorm = String(phone).trim();
+    const emp = transportEmployees.find((e) => e.active !== false && e.phone === phoneNorm);
+    if (!emp || String(emp.pin || "1234") !== String(pin).trim()) {
+      return res.status(401).json({ error: "Incorrect mobile number or PIN." });
+    }
+    const token = uid("etok");
+    clientEmployeeSessions.set(token, emp.id);
+    res.json({ token, employee: publicTransportEmployee(emp) });
+  })
+);
+app.get("/api/client-employee-auth/me", clientEmployeeAuth, (req, res) => {
+  const client = db.clients.find((c) => c.id === req.transportEmployee.clientId);
+  res.json({
+    employee: publicTransportEmployee(req.transportEmployee),
+    client: client ? { id: client.id, name: client.name } : null,
+    themePresets: THEME_PRESETS,
+  });
+});
+// Employee drops a pin on a map (or uses device GPS) for their home
+// location - this is the ONLY geocoding source the optimizer uses (see the
+// clarified design: no bulk/paid geocoding API), so it's a required step
+// before an employee's request can ever be routed. Deliberately NOT run
+// through the shared audit() trail - see the comment on backfillDefaults()
+// above about why employee-scale actions stay out of that path.
+app.post(
+  "/api/client-employee-auth/location",
+  clientEmployeeAuth,
+  h(async (req, res) => {
+    const { lat, lng, address } = req.body || {};
+    const latNum = Number(lat), lngNum = Number(lng);
+    if (!Number.isFinite(latNum) || !Number.isFinite(lngNum)) return res.status(400).json({ error: "A valid lat/lng is required." });
+    req.transportEmployee.homeLat = latNum;
+    req.transportEmployee.homeLng = lngNum;
+    req.transportEmployee.homeAddress = address || "";
+    req.transportEmployee.locationPinnedAt = nowIso();
+    await persistTransportEmployee(req.transportEmployee);
+    res.json(publicTransportEmployee(req.transportEmployee));
+  })
+);
+app.post(
+  "/api/client-employee-auth/theme",
+  clientEmployeeAuth,
+  h(async (req, res) => {
+    const { value, error } = themeFromBody(req.body);
+    if (error) return res.status(400).json({ error });
+    req.transportEmployee.theme = value;
+    await persistTransportEmployee(req.transportEmployee);
+    res.json(publicTransportEmployee(req.transportEmployee));
+  })
+);
+app.post("/api/client-employee-auth/logout", clientEmployeeAuth, (req, res) => {
+  clientEmployeeSessions.delete(req.transportEmployeeToken);
+  res.json({ ok: true });
+});
+app.get("/api/client-employee-auth/requests", clientEmployeeAuth, (req, res) => {
+  res.json(transportRequests.filter((r) => r.employeeId === req.transportEmployee.id).sort((a, b) => (b.raisedAt || "").localeCompare(a.raisedAt || "")));
+});
+app.post(
+  "/api/client-employee-auth/requests",
+  clientEmployeeAuth,
+  h(async (req, res) => {
+    if (req.transportEmployee.homeLat == null) {
+      return res.status(400).json({ error: "Pin your home location first - the transport team needs it to plan your route." });
+    }
+    const { type } = req.body || {};
+    if (!["pickup", "drop", "both"].includes(type)) return res.status(400).json({ error: "type must be pickup, drop, or both." });
+    const existing = transportRequests.find((r) => r.employeeId === req.transportEmployee.id && ["pending", "approved"].includes(r.status));
+    if (existing) return res.status(400).json({ error: "You already have an active or pending transport request." });
+    const request = {
+      id: uid("treq"),
+      clientId: req.transportEmployee.clientId,
+      employeeId: req.transportEmployee.id,
+      employeeName: req.transportEmployee.name,
+      type,
+      status: "pending",
+      raisedAt: nowIso(),
+      decidedBy: null,
+      decidedByName: null,
+      decidedAt: null,
+      note: "",
+    };
+    transportRequests.push(request);
+    await persistTransportRequest(request);
+    res.json(request);
+  })
+);
+app.post(
+  "/api/client-employee-auth/requests/:id/cancel",
+  clientEmployeeAuth,
+  h(async (req, res) => {
+    const request = transportRequests.find((r) => r.id === req.params.id && r.employeeId === req.transportEmployee.id);
+    if (!request) return res.status(404).json({ error: "Request not found." });
+    if (!["pending", "approved"].includes(request.status)) return res.status(400).json({ error: "Only a pending or approved request can be cancelled." });
+    request.status = "cancelled";
+    await persistTransportRequest(request);
+    res.json(request);
+  })
+);
+// The employee's currently assigned route (if any) - vehicle, driver, and
+// where in the stop order they are, for both pickup and drop.
+app.get("/api/client-employee-auth/my-route", clientEmployeeAuth, (req, res) => {
+  const routes = transportRoutes.filter(
+    (r) => ["approved", "dispatched"].includes(r.status) && r.stops.some((s) => s.employeeId === req.transportEmployee.id)
+  );
+  const result = routes.map((r) => {
+    const stop = r.stops.find((s) => s.employeeId === req.transportEmployee.id);
+    const vehicle = r.assignedVehicleId ? db.vehicles.find((v) => v.id === r.assignedVehicleId) : null;
+    const driver = r.assignedDriverId ? db.drivers.find((d) => d.id === r.assignedDriverId) : null;
+    return {
+      routeId: r.id,
+      direction: r.direction,
+      status: r.status,
+      stopSeq: stop.seq,
+      totalStops: r.stops.length,
+      vehicleReg: vehicle ? vehicle.reg : null,
+      driverName: driver ? driver.name : null,
+      driverPhone: driver ? driver.phone : null,
+    };
+  });
+  res.json({ routes: result });
+});
+
 // ---------- SITES ----------
 app.post(
   "/api/sites",
@@ -1760,6 +2888,7 @@ app.patch(
       healthRecordNumber, healthRecordDate, healthRecordCopy,
       trainingCertNumber, trainingCertDate, trainingCertCopy,
       policeVerificationNumber, policeVerificationDate, policeVerificationCopy,
+      homeLat, homeLng, homeAddress,
     } = req.body || {};
     if (drivingLevel !== undefined && drivingLevel && !DRIVING_LEVELS.includes(drivingLevel)) {
       return res.status(400).json({ error: `Driving level must be one of: ${DRIVING_LEVELS.join(", ")}.` });
@@ -1832,6 +2961,16 @@ app.patch(
       const url = await savePhoto(policeVerificationCopy, "driver_police_" + driver.id);
       if (url) { driver.policeVerificationCopyUrl = url; changed = true; }
     }
+    // Home location - used by the Employee Transport route optimizer to
+    // prefer assigning a driver whose own home is close to their route's
+    // first pickup/last drop point, so the driver isn't the one traveling
+    // furthest out of their way at the start/end of the day.
+    if (homeLat !== undefined && homeLng !== undefined) {
+      driver.homeLat = homeLat === null || homeLat === "" ? null : Number(homeLat);
+      driver.homeLng = homeLng === null || homeLng === "" ? null : Number(homeLng);
+      changed = true;
+    }
+    if (homeAddress !== undefined) { driver.homeAddress = homeAddress || ""; changed = true; }
     // Re-check the mandatory-documents deadline any time documents change -
     // uploading the last missing one clears the deadline immediately.
     if (changed) evaluateDriverDocsDeadline(driver);
