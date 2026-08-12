@@ -412,6 +412,26 @@ function fmtDMY(dateStr){
   const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   return m ? `${m[3]}/${m[2]}/${m[1]}` : s;
 }
+// Small inline badge for the sensor-based fill-to-fill average mileage
+// (see computeTankToTankMileage() on the backend - refreshed hourly and
+// cached directly on the vehicle record, so this needs no extra fetch).
+// Shown wherever a vehicle's reg number appears in a list, as the
+// objective, tank-to-tank measurement used for driver performance
+// evaluation - distinct from the daily self-reported mileage entries.
+// Shows a trend arrow against the last genuinely different reading when
+// one is available, so the previous value stays visible, not just the
+// latest.
+function avgMileageBadgeHtml(v){
+  const m = v && v.avgMileage;
+  if(!m || m.value==null) return '';
+  let trend = '';
+  if(m.previousValue!=null && m.previousValue!==m.value){
+    trend = m.value>m.previousValue
+      ? ` <span style="color:#2e7d32;">&#9650;</span>`
+      : ` <span style="color:#c0392b;">&#9660;</span>`;
+  }
+  return `<div class="muted" style="font-size:11px;white-space:nowrap;" title="Fill-to-fill average mileage (sensor-based), last ${m.cycleCount} complete cycle${m.cycleCount===1?'':'s'}">⛽ ${m.value} km/l avg${trend}${m.previousValue!=null?` <span style="opacity:.7;">(prev ${m.previousValue})</span>`:''}</div>`;
+}
 function daysUntil(dateStr){
   if(!dateStr) return 9999;
   const d = new Date(dateStr), n = new Date(todayStr());
@@ -1388,7 +1408,7 @@ const FUEL_PAYMENT_MODES = ["Cash","UPI","Card","Other"];
 function vehicleUsageScreen(){
   const rows = vehicles.map(v=>`
     <tr>
-      <td><b>${v.reg}</b></td>
+      <td><b>${v.reg}</b>${avgMileageBadgeHtml(v)}</td>
       <td>${v.route || siteName(v.siteId)}</td>
       <td>${v.clientId? clientName(v.clientId) : '-'}</td>
       <td>${driverName(v.driverId)}</td>
@@ -1429,6 +1449,7 @@ function supervisorHome(){
     const label = status==="not_submitted" ? "NOT SUBMITTED TODAY" : status.toUpperCase();
     return `<div class="vehicle-card" onclick="goto('vehicle_detail',{vehicleId:'${v.id}'})">
       <div class="reg">${v.reg}</div>
+      ${avgMileageBadgeHtml(v)}
       <div class="route">${v.route || siteName(v.siteId)} · Driver: ${driverName(v.driverId)}</div>
       <span class="badge ${badgeClass}">${label}</span>
     </div>`;
@@ -2580,7 +2601,7 @@ async function setLeave(id, status){
 async function adminVehiclesScreen(){
   const rows = vehicles.map(v=>`
     <tr>
-      <td><b>${v.reg}</b></td>
+      <td><b>${v.reg}</b>${avgMileageBadgeHtml(v)}</td>
       <td>${v.make||'-'} ${v.model||''}</td>
       <td>${v.vehicleType||'-'} / ${v.fuelType||'-'}</td>
       <td>${v.siteId ? siteName(v.siteId) : '<span class="muted">Unassigned</span>'}</td>
@@ -2749,7 +2770,7 @@ async function assignmentsDateViewCardHtml(){
   const recordsForDate = await fetchRecordsForDate(date);
   const rows = vehicles.map(v=>`
     <tr>
-      <td><b>${v.reg}</b>${vehicleAssignmentWarningHtml(v)}</td>
+      <td><b>${v.reg}</b>${vehicleAssignmentWarningHtml(v)}${avgMileageBadgeHtml(v)}</td>
       <td>${v.clientId? clientName(v.clientId) : 'Internal / Fixed Route'}</td>
       <td>${areaSupervisorNameForVehicle(v)}</td>
       <td>${v.supervisorId? userName(v.supervisorId) : '-'}</td>
@@ -2911,7 +2932,7 @@ async function assignmentsEditorHtml(){
     const clientRoutes = client ? (client.routes||[]) : [];
     return `
     <tr>
-      <td><b>${v.reg}</b>${vehicleAssignmentWarningHtml(v)}</td>
+      <td><b>${v.reg}</b>${vehicleAssignmentWarningHtml(v)}${avgMileageBadgeHtml(v)}</td>
       <td>${v.vehicleType||'-'} / ${v.fuelType||'-'}</td>
       <td><select onchange="assignField('${v.id}','clientId', this.value||null)">
         <option value="">- none (internal route) -</option>
@@ -4240,6 +4261,7 @@ const REPORT_DATASETS = [
   {key:"odometer", label:"Odometer Readings", desc:"Day-start and day-close odometer readings logged by supervisors, per vehicle per day.", dateRange:true},
   {key:"monthly", label:"Monthly Vehicle Summary", desc:"One row per vehicle per month - total distance, fuel cost, average mileage, and driver absent days.", dateRange:true},
   {key:"audit", label:"Audit Log", desc:"Every action taken in the app, who did it, and when.", dateRange:true, roles:["owner","ops_manager"]},
+  {key:"average-mileage", label:"Average Mileage (Fill-to-Fill, GPS/Fuel Sensor)", desc:"Per vehicle: average km/l, total distance and fuel consumed, and number of complete refuel-to-refuel cycles, computed from the GPS/fuel-sensor data - the objective figure used for evaluating driver performance. Leave the dates blank for the current month.", dateRange:true, roles:["owner","ops_manager","data_team","admin","site_supervisor","area_supervisor"]},
 ];
 // ================= ROUTES (read-only for Area/Regional Supervisors) =================
 async function routesViewScreen(){
@@ -5104,7 +5126,7 @@ async function gpsLinkScreen(){
       ? `<span class="badge approved">Manually linked</span>`
       : autoDevice ? `<span class="badge">Auto-matched</span>` : `<span class="badge pending">Not linked</span>`;
     return `<tr>
-      <td><b>${v.reg}</b><div class="muted" style="font-size:11.5px;">${v.make||''} ${v.model||''}</div></td>
+      <td><b>${v.reg}</b><div class="muted" style="font-size:11.5px;">${v.make||''} ${v.model||''}</div>${avgMileageBadgeHtml(v)}</td>
       <td>${statusHtml}</td>
       <td>
         <select id="gpsLinkSelect_${v.id}" style="max-width:320px;">${gpsDeviceOptionsHtml(devices, v.fleetxVehicleNumber||"")}</select>
@@ -5171,7 +5193,8 @@ async function vehicleTodayStatusScreen(vehicleId){
   return `
   <button class="btn secondary small" onclick="goto('home')">&larr; Back to Dashboard</button>
   <h1 class="page-title">${v.reg} - Today's Status</h1>
-  <button class="btn secondary small" style="margin-bottom:12px;" onclick="goto('fuel_graph',{vehicleId:'${v.id}'})">⛽ View Fuel Pattern &rsaquo;</button>
+  ${avgMileageBadgeHtml(v)}
+  <button class="btn secondary small" style="margin-bottom:12px;margin-top:4px;" onclick="goto('fuel_graph',{vehicleId:'${v.id}'})">⛽ View Fuel Pattern &rsaquo;</button>
   ${liveCard}
   <div class="card">
     <table>
@@ -5235,18 +5258,33 @@ async function fuelGraphScreen(vehicleId){
   const odoPoints = points.filter(p=>p.odometer!=null);
   let summary = null;
   if(fuelPoints.length || odoPoints.length){
-    let totalDrop = 0;
-    for(let i=1;i<fuelPoints.length;i++){ const d = fuelPoints[i-1].fuel - fuelPoints[i].fuel; if(d>0) totalDrop += d; }
+    // Net change from the first reading in this window to the last - NOT a
+    // sum of every individual dip, which used to double-count normal
+    // consumption across many small ticks. This answers "how much fuel did
+    // this vehicle actually use from the start of this window to the end
+    // of it" - a refuel inside the window will pull this number down
+    // (possibly to a net gain), which is correct: that's genuinely how
+    // much less fuel is in the tank now vs. when the window started.
+    const netChange = fuelPoints.length>=2 ? Math.round((fuelPoints[0].fuel - fuelPoints[fuelPoints.length-1].fuel)*10)/10 : null;
     const kmRun = odoPoints.length>=2 ? Math.round((odoPoints[odoPoints.length-1].odometer - odoPoints[0].odometer)*10)/10 : null;
     summary = {
       min: fuelPoints.length ? Math.min(...fuelPoints.map(p=>p.fuel)) : null,
       max: fuelPoints.length ? Math.max(...fuelPoints.map(p=>p.fuel)) : null,
-      totalDrop: Math.round(totalDrop*10)/10,
+      netChange,
       kmRun,
     };
   }
 
   const spatialPoints = points.filter(p=>p.fuel!=null && p.odometer!=null);
+
+  // Fill-to-fill average mileage for this same window - the objective,
+  // sensor-based number (see computeTankToTankMileage() on the backend),
+  // shown right alongside the graph since they share the same date/time
+  // range pickers.
+  let avgMileage = null, avgMileageError = "";
+  try{
+    avgMileage = await api(`/vehicles/${vehicleId}/average-mileage?from=${from}&to=${to}&fromTime=${fromTime}&toTime=${toTime}`);
+  }catch(e){ avgMileageError = e.message; }
 
   setTimeout(()=>{ drawFuelChart(points, {showFuel, showOdo}); drawFuel3D(spatialPoints); }, 0);
 
@@ -5278,9 +5316,21 @@ async function fuelGraphScreen(vehicleId){
   <div class="grid cols-4">
     <div class="kpi"><div class="num">${summary.min!=null?summary.min:'-'} L</div><div class="label">Lowest fuel reading</div></div>
     <div class="kpi"><div class="num">${summary.max!=null?summary.max:'-'} L</div><div class="label">Highest fuel reading</div></div>
-    <div class="kpi ${summary.totalDrop>15?'warn':''}"><div class="num">${summary.totalDrop} L</div><div class="label">Total fuel drop (all dips combined)</div></div>
+    <div class="kpi ${summary.netChange>15?'warn':''}"><div class="num">${summary.netChange!=null?(summary.netChange>=0?summary.netChange:'+'+Math.abs(summary.netChange)):'-'} L</div><div class="label">${summary.netChange!=null && summary.netChange<0?'Net fuel gained (refuel exceeded use)':'Total fuel used - start &rarr; end of window'}</div></div>
     <div class="kpi"><div class="num">${summary.kmRun!=null?summary.kmRun:'-'}</div><div class="label">Kilometers run in this window</div></div>
   </div>` : ""}
+  <div class="card">
+    <h2 class="section-title">Average mileage (fill-to-fill), this window</h2>
+    <p class="muted" style="margin-bottom:10px;">Measured from actual refuel events in the fuel-sensor data - litres consumed from right after one full-up to right before the next, against distance covered in between. Uses complete cycles only within ${fmtDMY(from)} to ${fmtDMY(to)}; this is the same objective, sensor-based figure used to evaluate driver performance, distinct from the daily self-reported mileage entries elsewhere in the app.</p>
+    ${avgMileageError ? `<div class="banner error">${avgMileageError}</div>` :
+      avgMileage && avgMileage.averageMileageKmPerLitre!=null ? `
+      <div class="grid cols-4">
+        <div class="kpi"><div class="num">${avgMileage.averageMileageKmPerLitre} km/l</div><div class="label">Average mileage</div></div>
+        <div class="kpi"><div class="num">${avgMileage.totalDistanceKm}</div><div class="label">Distance covered (km)</div></div>
+        <div class="kpi"><div class="num">${avgMileage.totalFuelConsumedLitres} L</div><div class="label">Fuel consumed</div></div>
+        <div class="kpi"><div class="num">${avgMileage.completeCycleCount}</div><div class="label">Complete fill-to-fill cycles</div></div>
+      </div>` : `<div class="empty">${(avgMileage && avgMileage.note) || 'Not enough refuel events detected in this window yet for a reliable average - needs at least 2 full-ups.'}</div>`}
+  </div>
   ${spatialPoints.length>1 ? `
   <div class="card">
     <h2 class="section-title">3D view: fuel &times; odometer &times; time</h2>
@@ -5851,12 +5901,33 @@ async function priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpen
     ${tempRows || "<tr><td colspan='10' class='empty'>No temporary drivers recorded yet.</td></tr>"}
     </table>`;
 
+  // Fill-to-fill (sensor-based) fleet average mileage - the objective
+  // cross-check for driver performance, distinct from the daily
+  // self-reported figures in the section above. Reads straight off
+  // vehicles[].avgMileage (refreshed hourly on the backend, see
+  // refreshAllVehicleAverageMileage()) - no extra fetch needed here.
+  const sensorMileageVehicles = vehicles.filter(v=>v.avgMileage && v.avgMileage.value!=null).sort((a,b)=>a.avgMileage.value-b.avgMileage.value);
+  const sensorMileageRows = sensorMileageVehicles.map(v=>`
+    <tr style="cursor:pointer" onclick="goto('fuel_graph',{vehicleId:'${v.id}'})" title="Click for this vehicle's Fuel Pattern and full cycle breakdown">
+      <td><b>${v.reg}</b></td>
+      <td>${v.avgMileage.value} km/l${v.avgMileage.previousValue!=null && v.avgMileage.previousValue!==v.avgMileage.value ? (v.avgMileage.value>v.avgMileage.previousValue?' <span style="color:#2e7d32;">&#9650;</span>':' <span style="color:#c0392b;">&#9660;</span>')+` <span class="muted" style="font-size:11px;">(prev ${v.avgMileage.previousValue})</span>` : ''}</td>
+      <td>${v.avgMileage.distanceKm} km</td>
+      <td>${v.avgMileage.fuelLitres} L</td>
+      <td>${v.avgMileage.cycleCount}</td>
+    </tr>`).join("");
+
   return `
   ${collapsibleSection('mileage_worst', 'Mileage by vehicle type &amp; fuel - worst performers', mileageWorstCount, `
     <p class="muted">Each vehicle class/fuel combination gets its own average - a single blended fleet figure hides which class is actually underperforming. Only the lowest-mileage vehicles in each group are listed.</p>
     <div class="grid cols-2" style="gap:14px;">
       ${mileageCategoryCards || "<div class='empty'>No fuel entries recorded yet.</div>"}
     </div>`, {defaultOpen:false})}
+
+  ${collapsibleSection('sensor_mileage', 'Average mileage - fill-to-fill (GPS/fuel sensor)', sensorMileageVehicles.length, `
+    <p class="muted">Computed automatically from actual refuel events in the GPS/fuel-sensor data - litres consumed from right after one full-up to right before the next, against distance covered in between (last 60 days). Objective and can't be mis-entered, unlike the daily self-reported figures above - this is the number to use for evaluating driver performance. Worst first. Click a vehicle to see its full cycle history and pick a custom date range.</p>
+    <table><tr><th>Vehicle</th><th>Average Mileage</th><th>Distance</th><th>Fuel Consumed</th><th>Complete Cycles</th></tr>
+    ${sensorMileageRows || "<tr><td colspan='5' class='empty'>Not enough refuel events detected yet across the fleet - needs at least 2 full-ups per vehicle in the sensor data.</td></tr>"}
+    </table>`, {defaultOpen:false})}
 
   ${collapsibleSection('expiring_docs', 'Document expiry alerts (&lt;15 days)', expiringDocs.length, docPreviewHtml, {redirect:"goto('dashboard_detail',{metric:'expiring_docs'})"})}
 

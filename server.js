@@ -147,6 +147,7 @@ async function initStorage() {
     await pruneLocationHistory();
     setInterval(() => pruneLocationHistory(), BACKUP_INTERVAL_MS);
     setInterval(() => pollLocationHistory(), LOCATION_POLL_MS);
+    refreshAllVehicleAverageMileage().catch((err) => console.error("Average mileage refresh error:", err.message));
   } else {
     if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
     if (!fs.existsSync(DATA_FILE)) fs.copyFileSync(SEED_FILE, DATA_FILE);
@@ -163,6 +164,7 @@ async function initStorage() {
     await pruneLocationHistory();
     setInterval(() => pruneLocationHistory(), BACKUP_INTERVAL_MS);
     setInterval(() => pollLocationHistory(), LOCATION_POLL_MS);
+    refreshAllVehicleAverageMileage().catch((err) => console.error("Average mileage refresh error:", err.message));
   }
 }
 
@@ -1249,6 +1251,117 @@ async function getLocationHistory(vehicleId, fromIso, toIso) {
   return points;
 }
 
+// ---------- SENSOR-BASED AVERAGE MILEAGE (fill-to-fill / tank-to-tank) ----------
+// A second, independent mileage measurement alongside the one drivers
+// self-report at daily checklist time (records[].fuel.mileage - litres
+// filled vs distance driven THAT DAY, typed in by the driver). This one is
+// computed entirely from the GPS/Fleetx fuel-sensor breadcrumb trail
+// (getLocationHistory() above - the same PT2-filtered fuel + odometer
+// readings the Fuel Pattern graph and fuel-theft detector already use), so
+// it can't be mis-entered or gamed - meant as an objective cross-check for
+// driver performance evaluation.
+//
+// Thumb rule: a vehicle's real mileage is best measured tank-to-tank - from
+// the moment right after one full refill to the moment right before the
+// next one. Litres consumed over that stretch = the fuel level right after
+// the first refill minus whatever's left right before the second; km/l =
+// (odometer at the second refill - odometer at the first) divided by that
+// litres figure. A visible jump in the fuel-sensor reading, well bigger
+// than any slosh/noise the PT2 filter would leave behind, is treated as a
+// refuel event and used as the boundary between cycles.
+const TANK_REFUEL_MIN_RISE_LITRES = 8; // a rise at least this big is a real top-up, not sensor noise
+async function computeTankToTankMileage(vehicleId, fromIso, toIso) {
+  const points = (await getLocationHistory(vehicleId, fromIso, toIso))
+    .filter((p) => p.fuel != null && p.odometer != null)
+    .sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+  const refuelIndexes = [];
+  for (let i = 1; i < points.length; i++) {
+    if (points[i].fuel - points[i - 1].fuel >= TANK_REFUEL_MIN_RISE_LITRES) refuelIndexes.push(i);
+  }
+  const cycles = [];
+  // A "complete" cycle runs from one detected refuel point to the next -
+  // both ends are anchored to an actual observed refill, so the litres and
+  // distance in between are trustworthy. The stretch before the first
+  // detected refuel and after the last one are deliberately left out of
+  // the average: there's no way to know how full the tank was at the very
+  // start of the window or how much is left at the very end, so treating
+  // either as a "cycle" would be a guess dressed up as a measurement.
+  for (let c = 0; c < refuelIndexes.length - 1; c++) {
+    const startPoint = points[refuelIndexes[c]];
+    const endPoint = points[refuelIndexes[c + 1] - 1]; // right before the next refuel jump
+    const fuelConsumed = Math.round((startPoint.fuel - endPoint.fuel) * 10) / 10;
+    const distanceKm = Math.round((endPoint.odometer - startPoint.odometer) * 10) / 10;
+    if (fuelConsumed > 0 && distanceKm > 0) {
+      cycles.push({
+        fromTs: startPoint.ts,
+        toTs: endPoint.ts,
+        fuelConsumedLitres: fuelConsumed,
+        distanceKm,
+        mileageKmPerLitre: Math.round((distanceKm / fuelConsumed) * 10) / 10,
+      });
+    }
+  }
+  const totalDistanceKm = Math.round(cycles.reduce((s, c) => s + c.distanceKm, 0) * 10) / 10;
+  const totalFuelConsumedLitres = Math.round(cycles.reduce((s, c) => s + c.fuelConsumedLitres, 0) * 10) / 10;
+  // Weighted (total distance / total fuel), not a plain average of each
+  // cycle's own km/l - that would let a handful of short cycles skew the
+  // result as much as a handful of long ones.
+  const averageMileageKmPerLitre = totalFuelConsumedLitres > 0 ? Math.round((totalDistanceKm / totalFuelConsumedLitres) * 10) / 10 : null;
+  return {
+    averageMileageKmPerLitre,
+    totalDistanceKm,
+    totalFuelConsumedLitres,
+    completeCycleCount: cycles.length,
+    cycles,
+    refuelEventsDetected: refuelIndexes.length,
+    note:
+      refuelIndexes.length < 2
+        ? "Not enough refuel events detected in this window yet for a reliable fill-to-fill average - needs at least 2 refills."
+        : null,
+  };
+}
+const AVG_MILEAGE_ROLES = ["owner", "ops_manager", "data_team", "admin", "site_supervisor", "area_supervisor"];
+// Hourly cache of each vehicle's trailing average mileage, stored directly
+// on the vehicle record (persisted via the normal save() path, same as any
+// other vehicle field) so every screen that already fetches /api/vehicles
+// gets this for free - no extra round trip per vehicle per screen.
+const AVG_MILEAGE_REFRESH_MS = 60 * 60 * 1000; // this is a slow-moving number - it takes at least 2 full refuel cycles to shift - hourly is plenty
+const AVG_MILEAGE_LOOKBACK_DAYS = 60; // enough history to usually catch a handful of refuel cycles without dragging in ancient data
+async function refreshAllVehicleAverageMileage() {
+  if (!db || !Array.isArray(db.vehicles)) return;
+  const toIso = nowIso();
+  const fromIso = new Date(Date.now() - AVG_MILEAGE_LOOKBACK_DAYS * 86400000).toISOString();
+  let changed = false;
+  for (const vehicle of db.vehicles) {
+    try {
+      const result = await computeTankToTankMileage(vehicle.id, fromIso, toIso);
+      const prev = vehicle.avgMileage || null;
+      const nextValue = result.averageMileageKmPerLitre;
+      // Only move "previousValue" forward when the number actually changed,
+      // so it always reflects the last genuinely different reading rather
+      // than getting overwritten with a duplicate of itself every hour.
+      const previousValue = prev && prev.value != null && prev.value !== nextValue ? prev.value : prev ? prev.previousValue : null;
+      vehicle.avgMileage = {
+        value: nextValue,
+        previousValue,
+        distanceKm: result.totalDistanceKm,
+        fuelLitres: result.totalFuelConsumedLitres,
+        cycleCount: result.completeCycleCount,
+        computedAt: toIso,
+      };
+      changed = true;
+    } catch (err) {
+      console.error(`Average mileage refresh failed for vehicle ${vehicle.id}:`, err.message);
+    }
+  }
+  if (changed) await save();
+}
+// First run happens once storage is ready (see the storage-init block
+// further down which calls refreshAllVehicleAverageMileage() after boot),
+// then every hour after that.
+setInterval(() => {
+  refreshAllVehicleAverageMileage().catch((err) => console.error("Average mileage refresh error:", err.message));
+}, AVG_MILEAGE_REFRESH_MS);
 const GEOFENCE_METERS = 400; // configurable "close enough to site" radius
 
 // ---------- Employee Transport (client roster -> optimized vehicle routes) ----------
@@ -7942,6 +8055,73 @@ app.get(
     res.json({ points });
   })
 );
+
+// Per-vehicle fill-to-fill average mileage for a custom date/time range -
+// see computeTankToTankMileage() near getLocationHistory() above. Powers
+// the average-mileage card on the Fuel Pattern screen, sharing the same
+// from/to/fromTime/toTime the graph itself uses.
+app.get("/api/vehicles/:id/average-mileage", requireAuth, requireRole(...AVG_MILEAGE_ROLES), async (req, res) => {
+  const vehicle = (db.vehicles || []).find((v) => v.id === req.params.id);
+  if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+  if (!visibleVehiclesFor(req.user).some((v) => v.id === vehicle.id)) {
+    return res.status(403).json({ error: "This vehicle is not visible to you." });
+  }
+  const from = req.query.from ? `${req.query.from}T${req.query.fromTime || "00:00"}:00.000Z` : new Date(Date.now() - 90 * 86400000).toISOString();
+  const to = req.query.to ? `${req.query.to}T${req.query.toTime || "23:59"}:59.999Z` : nowIso();
+  try {
+    const result = await computeTankToTankMileage(vehicle.id, from, to);
+    res.json(Object.assign({ vehicleId: vehicle.id, reg: vehicle.reg }, result));
+  } catch (err) {
+    res.status(500).json({ error: "Could not compute average mileage for this vehicle." });
+  }
+});
+// Bulk, date-ranged version of the same figure for every vehicle the
+// requester can see - powers the Reports tab download (monthly by
+// default, or any custom from/to) used to evaluate driver performance
+// across the fleet at once rather than one vehicle at a time. Registered
+// as its own route (not folded into the generic /api/reports/:dataset
+// handler just below) since it needs its own per-vehicle computation loop
+// rather than a single buildReport() row-builder.
+app.get("/api/reports/average-mileage", requireAuth, requireRole(...AVG_MILEAGE_ROLES), async (req, res) => {
+  const now = new Date();
+  const defaultFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const from = req.query.from || defaultFrom;
+  const to = req.query.to || todayStr();
+  const fromIso = `${from}T00:00:00.000Z`;
+  const toIso = `${to}T23:59:59.999Z`;
+  const reqVehicles = visibleVehiclesFor(req.user);
+  const rows = [];
+  for (const vehicle of reqVehicles) {
+    let result;
+    try {
+      result = await computeTankToTankMileage(vehicle.id, fromIso, toIso);
+    } catch (err) {
+      continue;
+    }
+    const site = vehicle.siteId ? db.sites.find((s) => s.id === vehicle.siteId) : null;
+    const driver = vehicle.driverId ? db.drivers.find((d) => d.id === vehicle.driverId) : null;
+    rows.push({
+      reg: vehicle.reg,
+      site: site ? site.name : "",
+      driver: driver ? driver.name : "",
+      averageMileageKmPerLitre: result.averageMileageKmPerLitre,
+      totalDistanceKm: result.totalDistanceKm,
+      totalFuelConsumedLitres: result.totalFuelConsumedLitres,
+      completeCycleCount: result.completeCycleCount,
+    });
+  }
+  if (req.query.json === "1") return res.json({ from, to, rows });
+  const columns = [
+    { label: "Vehicle", key: "reg" },
+    { label: "Area/Site", key: "site" },
+    { label: "Driver", key: "driver" },
+    { label: "Average Mileage (km/l)", key: "averageMileageKmPerLitre" },
+    { label: "Total Distance (km)", key: "totalDistanceKm" },
+    { label: "Total Fuel Consumed (L)", key: "totalFuelConsumedLitres" },
+    { label: "Complete Fill-to-Fill Cycles", key: "completeCycleCount" },
+  ];
+  sendDownload(res, rows, columns, `average_mileage_${from}_${to}`, req.query.format);
+});
 
 app.get(
   "/api/reports/:dataset",
