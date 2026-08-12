@@ -5670,13 +5670,133 @@ let transportOccupancy = null;
 let transportClientUsersList = [];
 let transportRoutesList = [];
 let _transportPinMap = null, _transportPinMarker = null, _transportPinLatLng = null;
-function setTransportClient(id){ transportClientId = id; goto('transport'); }
+let editingRouteTemplateId = null; // null = "add new" form; else pre-filled edit form for this template id
+const TRANSPORT_SEATER_TIERS_FE = [5,7,8,12,22,40];
+// Every contract prices differently - a 5-seater cab doing short local hops
+// is usually a flat rate per pickup, a 40-seater bus is usually a flat
+// monthly number, some clients (e.g. AIESL-style contracts) pay strictly
+// per km travelled. These five cover what's actually seen in practice; each
+// seater-type on a client can use a different one.
+const TRANSPORT_BILLING_MODELS_FE = [
+  ["per_seat","Per Seat (₹ per employee riding, per day)"],
+  ["per_trip","Per Trip (flat ₹ each time the vehicle runs)"],
+  ["per_km","Per KM (₹ per km travelled after pickup)"],
+  ["fixed_monthly","Fixed Monthly (flat ₹ per month, any usage)"],
+  ["slab","Slab: Flat + Extra KM (₹ flat for the first N km, then ₹/km beyond)"],
+];
+function setTransportClient(id){ transportClientId = id; editingRouteTemplateId = null; goto('transport'); }
+function rateCardEditorHtml(tier, cfg){
+  const rc = Object.assign({model:"per_seat",perSeat:0,perTrip:0,perKm:0,fixedMonthly:0,slabFlatKm:15,slabFlatRate:0,slabExtraPerKm:0}, (cfg.rateCards||{})[tier]||{});
+  return `
+  <div class="card" style="background:var(--surface-2,#f7f7f5);">
+    <div class="flex-between"><b>${tier}-seater</b></div>
+    <div class="field"><label>Billing Model</label>
+      <select id="tr_rc_model_${tier}" onchange="updateRateCardFieldVisibility(${tier})">
+        ${TRANSPORT_BILLING_MODELS_FE.map(([v,l])=>`<option value="${v}" ${rc.model===v?'selected':''}>${l}</option>`).join("")}
+      </select>
+    </div>
+    <div id="tr_rc_fields_${tier}">
+      <div data-model="per_seat" class="field"><label>₹ per seat / day</label><input type="number" min="0" id="tr_rc_perSeat_${tier}" value="${rc.perSeat||''}" placeholder="0" /></div>
+      <div data-model="per_trip" class="field"><label>₹ per trip</label><input type="number" min="0" id="tr_rc_perTrip_${tier}" value="${rc.perTrip||''}" placeholder="0" /></div>
+      <div data-model="per_km" class="field"><label>₹ per km</label><input type="number" min="0" id="tr_rc_perKm_${tier}" value="${rc.perKm||''}" placeholder="0" /></div>
+      <div data-model="fixed_monthly" class="field"><label>₹ fixed per month</label><input type="number" min="0" id="tr_rc_fixedMonthly_${tier}" value="${rc.fixedMonthly||''}" placeholder="0" /></div>
+      <div data-model="slab" class="grid cols-3">
+        <div class="field"><label>Flat covers (km)</label><input type="number" min="0" id="tr_rc_slabFlatKm_${tier}" value="${rc.slabFlatKm||''}" placeholder="15" /></div>
+        <div class="field"><label>₹ flat rate</label><input type="number" min="0" id="tr_rc_slabFlatRate_${tier}" value="${rc.slabFlatRate||''}" placeholder="0" /></div>
+        <div class="field"><label>₹ per extra km</label><input type="number" min="0" id="tr_rc_slabExtraPerKm_${tier}" value="${rc.slabExtraPerKm||''}" placeholder="0" /></div>
+      </div>
+    </div>
+  </div>`;
+}
+function updateRateCardFieldVisibility(tier){
+  const sel = document.getElementById('tr_rc_model_'+tier);
+  const model = sel ? sel.value : 'per_seat';
+  const container = document.getElementById('tr_rc_fields_'+tier);
+  if(!container) return;
+  container.querySelectorAll('[data-model]').forEach(el=>{ el.style.display = el.getAttribute('data-model')===model ? '' : 'none'; });
+}
+function readRateCardFromForm(tier){
+  const g = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+  return {
+    model: g('tr_rc_model_'+tier) || 'per_seat',
+    perSeat: g('tr_rc_perSeat_'+tier),
+    perTrip: g('tr_rc_perTrip_'+tier),
+    perKm: g('tr_rc_perKm_'+tier),
+    fixedMonthly: g('tr_rc_fixedMonthly_'+tier),
+    slabFlatKm: g('tr_rc_slabFlatKm_'+tier),
+    slabFlatRate: g('tr_rc_slabFlatRate_'+tier),
+    slabExtraPerKm: g('tr_rc_slabExtraPerKm_'+tier),
+  };
+}
+function billingModelSummary(rc){
+  if(!rc) return '';
+  switch(rc.model){
+    case 'per_seat': return `₹${rc.perSeat||0}/seat/day`;
+    case 'per_trip': return `₹${rc.perTrip||0}/trip`;
+    case 'per_km': return `₹${rc.perKm||0}/km`;
+    case 'fixed_monthly': return `₹${rc.fixedMonthly||0}/month flat`;
+    case 'slab': return `₹${rc.slabFlatRate||0} flat (first ${rc.slabFlatKm||0}km) + ₹${rc.slabExtraPerKm||0}/extra km`;
+    default: return '';
+  }
+}
+function routeTemplateFormHtml(client, cfg, seaterTiers){
+  const editing = editingRouteTemplateId ? (cfg.routeTemplates||[]).find(rt=>rt.id===editingRouteTemplateId) : null;
+  const rc = Object.assign({model:"per_seat",perSeat:0,perTrip:0,perKm:0,fixedMonthly:0,slabFlatKm:15,slabFlatRate:0,slabExtraPerKm:0}, (editing&&editing.billing)||{});
+  return `
+  <h3 style="margin-top:14px;">${editing?'Edit Route Template':'Add Route Template'}</h3>
+  <div class="grid cols-3">
+    <div class="field"><label>Name</label><input type="text" id="tr_rt_name" value="${editing?(editing.name||'').replace(/"/g,'&quot;'):''}" placeholder="e.g. Route 4 - Gachibowli" /></div>
+    <div class="field"><label>Direction</label>
+      <select id="tr_rt_direction">
+        <option value="pickup" ${editing&&editing.direction==='pickup'?'selected':''}>Pickup</option>
+        <option value="drop" ${editing&&editing.direction==='drop'?'selected':''}>Drop</option>
+        <option value="both" ${!editing||editing.direction==='both'?'selected':''}>Both</option>
+      </select>
+    </div>
+    <div class="field"><label>Vehicle Type</label>
+      <select id="tr_rt_tier">
+        ${seaterTiers.map(t=>`<option value="${t}" ${editing?(editing.seaterTier===t?'selected':''):(t===seaterTiers[0]?'selected':'')}>${t}-seater</option>`).join("")}
+      </select>
+    </div>
+    <div class="field"><label># Vehicles on this route</label><input type="number" min="1" id="tr_rt_count" value="${editing?(editing.vehicleCount||1):1}" /></div>
+    <div class="field"><label>Schedule (optional)</label><input type="text" id="tr_rt_schedule" value="${editing?(editing.schedule||'').replace(/"/g,'&quot;'):''}" placeholder="e.g. Mon-Sat 8:30 AM" /></div>
+    <div class="field"><label>Notes (optional)</label><input type="text" id="tr_rt_notes" value="${editing?(editing.notes||'').replace(/"/g,'&quot;'):''}" placeholder="e.g. AIESL contract" /></div>
+  </div>
+  <label style="display:flex;align-items:center;gap:8px;margin:10px 0;">
+    <input type="checkbox" id="tr_rt_override" ${editing&&editing.billing?'checked':''} onchange="document.getElementById('tr_rt_billing_fields').style.display=this.checked?'':'none'" />
+    Override pricing for this specific route (otherwise it uses the seater-type default set above)
+  </label>
+  <div id="tr_rt_billing_fields" style="display:${editing&&editing.billing?'':'none'};">
+    <div class="field" style="max-width:420px;"><label>Model</label>
+      <select id="tr_rc_model_rt" onchange="updateRateCardFieldVisibility('rt')">
+        ${TRANSPORT_BILLING_MODELS_FE.map(([v,l])=>`<option value="${v}" ${rc.model===v?'selected':''}>${l}</option>`).join("")}
+      </select>
+    </div>
+    <div id="tr_rc_fields_rt">
+      <div data-model="per_seat" class="field"><label>₹ per seat / day</label><input type="number" min="0" id="tr_rc_perSeat_rt" value="${rc.perSeat||''}" placeholder="0" /></div>
+      <div data-model="per_trip" class="field"><label>₹ per trip</label><input type="number" min="0" id="tr_rc_perTrip_rt" value="${rc.perTrip||''}" placeholder="0" /></div>
+      <div data-model="per_km" class="field"><label>₹ per km</label><input type="number" min="0" id="tr_rc_perKm_rt" value="${rc.perKm||''}" placeholder="0" /></div>
+      <div data-model="fixed_monthly" class="field"><label>₹ fixed per month</label><input type="number" min="0" id="tr_rc_fixedMonthly_rt" value="${rc.fixedMonthly||''}" placeholder="0" /></div>
+      <div data-model="slab" class="grid cols-3">
+        <div class="field"><label>Flat covers (km)</label><input type="number" min="0" id="tr_rc_slabFlatKm_rt" value="${rc.slabFlatKm||''}" placeholder="15" /></div>
+        <div class="field"><label>₹ flat rate</label><input type="number" min="0" id="tr_rc_slabFlatRate_rt" value="${rc.slabFlatRate||''}" placeholder="0" /></div>
+        <div class="field"><label>₹ per extra km</label><input type="number" min="0" id="tr_rc_slabExtraPerKm_rt" value="${rc.slabExtraPerKm||''}" placeholder="0" /></div>
+      </div>
+    </div>
+  </div>
+  <div style="display:flex;gap:8px;margin-top:6px;">
+    <button class="btn" onclick="saveRouteTemplate('${client.id}')">${editing?'Save Changes':'+ Add Route Template'}</button>
+    ${editing?`<button class="btn secondary" onclick="cancelEditRouteTemplate()">Cancel</button>`:''}
+  </div>`;
+}
 async function transportScreen(){
   const clients = meta.clients || [];
   if(!clients.length) return `<h1 class="page-title">📍 Employee Transport</h1><div class="empty">No clients yet - add one under Overview first.</div>`;
   if(!transportClientId || !clients.find(c=>c.id===transportClientId)) transportClientId = clients[0].id;
   const client = clients.find(c=>c.id===transportClientId);
-  const cfg = client.transportConfig || {enabled:false, officeLat:null, officeLng:null, officeAddress:"", seaterRates:{}, maxPickupDetourKm:6, maxRideMinutes:75};
+  const cfg = client.transportConfig || {enabled:false, officeLat:null, officeLng:null, officeAddress:"", seaterRates:{}, maxPickupDetourKm:6, maxRideMinutes:75, fleetArrangement:{onDemand:true,fixedPool:false,fixedRoutes:false}, contractedFleet:[], billingModel:"per_seat", rateCards:{}, routeTemplates:[]};
+  const fleetArr = cfg.fleetArrangement || {onDemand:true,fixedPool:false,fixedRoutes:false};
+  const contractedFleetMap = {}; (cfg.contractedFleet||[]).forEach(f=>{ contractedFleetMap[f.tier]=f.count; });
 
   let occupancy = {routeCount:0,totalEmployees:0,totalCapacity:0,averageOccupancyRatio:0,byTier:[]};
   let clientUsers = [], routes = [], employees = [], pendingRequests = 0;
@@ -5692,11 +5812,13 @@ async function transportScreen(){
   }catch(e){ /* fields keep their defaults below */ }
   transportOccupancy = occupancy; transportClientUsersList = clientUsers; transportRoutesList = routes;
 
-  const seaterTiers = [5,7,8,12,22,40];
-  const rateInputs = seaterTiers.map(t=>`
-    <div class="field"><label>${t}-seater rate (₹/day)</label><input type="number" min="0" id="tr_rate_${t}" value="${(cfg.seaterRates||{})[t]||''}" placeholder="0" /></div>`).join("");
+  const seaterTiers = TRANSPORT_SEATER_TIERS_FE;
 
-  setTimeout(()=>initTransportPinMap(cfg.officeLat, cfg.officeLng), 0);
+  setTimeout(()=>{
+    initTransportPinMap(cfg.officeLat, cfg.officeLng);
+    seaterTiers.forEach(t=>updateRateCardFieldVisibility(t));
+    updateRateCardFieldVisibility('rt');
+  }, 0);
   return `
   <h1 class="page-title">📍 Employee Transport</h1>
   <div class="card">
@@ -5726,9 +5848,68 @@ async function transportScreen(){
       <div class="field"><label>Max Detour (km)</label><input type="number" min="0" id="tr_max_detour" value="${cfg.maxPickupDetourKm}" /></div>
       <div class="field"><label>Max Ride (minutes)</label><input type="number" min="0" id="tr_max_ride" value="${cfg.maxRideMinutes}" /></div>
     </div>
-    <h3 style="margin-top:14px;">Contracted Rate Per Seater-Type</h3>
-    <div class="grid cols-3">${rateInputs}</div>
     <button class="btn" style="margin-top:10px;" onclick="transportSaveConfig('${client.id}')">Save Settings</button>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Fleet Arrangement</h2>
+    <p class="muted" style="margin-bottom:10px;">How this client's fleet is actually run - not exclusive, a client can be more than one of these at once (e.g. fixed buses on set routes plus a flexible cab pool for overflow).</p>
+    <div class="grid cols-3">
+      <label class="card" style="cursor:pointer;background:var(--surface-2,#f7f7f5);">
+        <input type="checkbox" id="tr_fa_onDemand" ${fleetArr.onDemand?'checked':''} />
+        <b> On-Demand</b>
+        <div class="muted" style="margin-top:4px;">Cabs that vary day to day - today 10, tomorrow 100. Employees request a ride and the optimizer groups whoever's riding that day.</div>
+      </label>
+      <label class="card" style="cursor:pointer;background:var(--surface-2,#f7f7f5);">
+        <input type="checkbox" id="tr_fa_fixedPool" ${fleetArr.fixedPool?'checked':''} />
+        <b> Fixed Pool</b>
+        <div class="muted" style="margin-top:4px;">A contracted NUMBER of vehicles per seater-type, reused flexibly across whichever routes run that day.</div>
+      </label>
+      <label class="card" style="cursor:pointer;background:var(--surface-2,#f7f7f5);">
+        <input type="checkbox" id="tr_fa_fixedRoutes" ${fleetArr.fixedRoutes?'checked':''} />
+        <b> Fixed Routes</b>
+        <div class="muted" style="margin-top:4px;">Named contracted routes (mainly buses), each locked to its own vehicle(s) and schedule - set up below under Route Templates.</div>
+      </label>
+    </div>
+    <h3 style="margin-top:14px;">Contracted Fleet (used when Fixed Pool is on)</h3>
+    <p class="muted" style="margin-bottom:8px;">How many vehicles of each type this client has on contract, regardless of which routes they're deployed to on a given day.</p>
+    <div class="grid cols-3">
+      ${seaterTiers.map(t=>`<div class="field"><label>${t}-seater count</label><input type="number" min="0" id="tr_cf_count_${t}" value="${contractedFleetMap[t]||''}" placeholder="0" /></div>`).join("")}
+    </div>
+    <button class="btn" style="margin-top:10px;" onclick="transportSaveConfig('${client.id}')">Save Settings</button>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Billing &amp; Pricing</h2>
+    <p class="muted" style="margin-bottom:10px;">Every contract prices differently - pick a model per seater-type. A 5-seater cab under 15km can be a flat rate per pickup (Slab), a 40-seater bus can be a fixed monthly number, another client's 40-seater can be billed strictly per km.</p>
+    <div class="field" style="max-width:420px;"><label>Default Model (fallback if a tier below isn't set)</label>
+      <select id="tr_billing_default">
+        ${TRANSPORT_BILLING_MODELS_FE.map(([v,l])=>`<option value="${v}" ${(cfg.billingModel||'per_seat')===v?'selected':''}>${l}</option>`).join("")}
+      </select>
+    </div>
+    <div class="grid cols-2" style="margin-top:10px;">
+      ${seaterTiers.map(t=>rateCardEditorHtml(t, cfg)).join("")}
+    </div>
+    <button class="btn" style="margin-top:10px;" onclick="transportSaveConfig('${client.id}')">Save Settings</button>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Route Templates <span class="muted" style="font-weight:normal;">(contracted routes - mainly for buses)</span></h2>
+    <p class="muted" style="margin-bottom:10px;">Set these once at onboarding: a named route, its vehicle type, how many vehicles run it, and (optionally) its own price if it differs from the seater-type default above.</p>
+    <table><tr><th>Name</th><th>Direction</th><th>Type</th><th>Vehicles</th><th>Schedule</th><th>Price</th><th></th><th></th></tr>
+    ${(cfg.routeTemplates||[]).length ? cfg.routeTemplates.map(rt=>`
+      <tr style="${rt.active===false?'opacity:0.5;':''}">
+        <td>${rt.name}</td>
+        <td>${({pickup:"Pickup",drop:"Drop",both:"Both"})[rt.direction]||rt.direction}</td>
+        <td>${rt.seaterTier}-seater</td>
+        <td>${rt.vehicleCount||1}</td>
+        <td>${rt.schedule||'-'}</td>
+        <td>${rt.billing ? billingModelSummary(rt.billing) : `<span class="muted">uses ${rt.seaterTier}-seater default</span>`}</td>
+        <td><button class="btn small secondary" onclick="editRouteTemplate('${rt.id}')">Edit</button></td>
+        <td><button class="btn small secondary" onclick="deleteRouteTemplate('${client.id}','${rt.id}')">Delete</button></td>
+      </tr>`).join("") : `<tr><td colspan="8" class="muted">No contracted route templates yet.</td></tr>`}
+    </table>
+    ${routeTemplateFormHtml(client, cfg, seaterTiers)}
   </div>
 
   <div class="card">
@@ -5773,23 +5954,63 @@ async function transportScreen(){
   </div>`;
 }
 async function transportSaveConfig(clientId){
-  const seaterRates = {};
-  [5,7,8,12,22,40].forEach(t=>{
-    const el = document.getElementById('tr_rate_'+t);
-    if(el && el.value) seaterRates[t] = Number(el.value);
-  });
+  const g = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+  const contractedFleet = TRANSPORT_SEATER_TIERS_FE.map(t=>({tier:t, count:Number(g('tr_cf_count_'+t))||0})).filter(f=>f.count>0);
+  const rateCards = {};
+  TRANSPORT_SEATER_TIERS_FE.forEach(t=>{ rateCards[t] = readRateCardFromForm(t); });
   const body = {
     enabled: document.getElementById('tr_enabled').checked,
     officeLat: _transportPinLatLng ? _transportPinLatLng.lat : undefined,
     officeLng: _transportPinLatLng ? _transportPinLatLng.lng : undefined,
-    officeAddress: document.getElementById('tr_office_address').value,
-    maxPickupDetourKm: Number(document.getElementById('tr_max_detour').value) || 6,
-    maxRideMinutes: Number(document.getElementById('tr_max_ride').value) || 75,
-    seaterRates,
+    officeAddress: g('tr_office_address'),
+    maxPickupDetourKm: Number(g('tr_max_detour')) || 6,
+    maxRideMinutes: Number(g('tr_max_ride')) || 75,
+    fleetArrangement: {
+      onDemand: !!document.getElementById('tr_fa_onDemand').checked,
+      fixedPool: !!document.getElementById('tr_fa_fixedPool').checked,
+      fixedRoutes: !!document.getElementById('tr_fa_fixedRoutes').checked,
+    },
+    contractedFleet,
+    billingModel: g('tr_billing_default') || 'per_seat',
+    rateCards,
   };
   try{
     await api('/clients/'+clientId+'/transport-config', {method:'PATCH', body: JSON.stringify(body)});
     alert('Transport settings saved.');
+    await goto('transport');
+  }catch(e){ alert(e.message); }
+}
+async function saveRouteTemplate(clientId){
+  const g = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+  const name = g('tr_rt_name').trim();
+  if(!name){ alert('Route name is required.'); return; }
+  const override = document.getElementById('tr_rt_override').checked;
+  const body = {
+    name,
+    direction: g('tr_rt_direction'),
+    seaterTier: Number(g('tr_rt_tier')),
+    vehicleCount: Number(g('tr_rt_count')) || 1,
+    schedule: g('tr_rt_schedule'),
+    notes: g('tr_rt_notes'),
+    billing: override ? readRateCardFromForm('rt') : null,
+  };
+  try{
+    if(editingRouteTemplateId){
+      await api('/clients/'+clientId+'/transport-route-templates/'+editingRouteTemplateId, {method:'PATCH', body: JSON.stringify(body)});
+    }else{
+      await api('/clients/'+clientId+'/transport-route-templates', {method:'POST', body: JSON.stringify(body)});
+    }
+    editingRouteTemplateId = null;
+    await goto('transport');
+  }catch(e){ alert(e.message); }
+}
+function editRouteTemplate(templateId){ editingRouteTemplateId = templateId; goto('transport'); }
+function cancelEditRouteTemplate(){ editingRouteTemplateId = null; goto('transport'); }
+async function deleteRouteTemplate(clientId, templateId){
+  if(!confirm('Remove this route template?')) return;
+  try{
+    await api('/clients/'+clientId+'/transport-route-templates/'+templateId, {method:'DELETE'});
+    if(editingRouteTemplateId===templateId) editingRouteTemplateId = null;
     await goto('transport');
   }catch(e){ alert(e.message); }
 }

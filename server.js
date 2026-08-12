@@ -247,9 +247,17 @@ function backfillDefaults() {
         officeLat: null,
         officeLng: null,
         officeAddress: "",
-        seaterRates: {}, // { "5": 1200, "7": 1500, ... } - ₹ per route per day, filled in by Ops/Owner
+        seaterRates: {}, // legacy - { "5": 1200, "7": 1500, ... } - migrated into rateCards[t].perSeat below
         maxPickupDetourKm: 6, // how much further than a direct line a stop may add to the route before it's flagged
         maxRideMinutes: 75, // longest any one employee should be aboard, assuming ~25km/h average
+        // How this client's fleet is arranged - not mutually exclusive: a
+        // client can run contracted fixed routes AND a flexible on-demand
+        // pool at the same time (e.g. buses on set routes + surge cabs).
+        fleetArrangement: { onDemand: true, fixedPool: false, fixedRoutes: false },
+        contractedFleet: [], // [{tier, count}] - fixed number of vehicles per seater-type on contract, reused flexibly across whichever routes run that day (used when fixedPool is on)
+        billingModel: "per_seat", // client-wide default - see TRANSPORT_BILLING_MODELS
+        rateCards: {}, // { "5": {model, perSeat, perTrip, perKm, fixedMonthly, slabFlatKm, slabFlatRate, slabExtraPerKm}, ... }
+        routeTemplates: [], // contracted route definitions set at onboarding (name, seaterTier, vehicleCount, own billing override) - used when fixedRoutes is on
       };
     } else {
       if (c.transportConfig.enabled === undefined) c.transportConfig.enabled = false;
@@ -259,6 +267,37 @@ function backfillDefaults() {
       if (!c.transportConfig.seaterRates) c.transportConfig.seaterRates = {};
       if (c.transportConfig.maxPickupDetourKm === undefined) c.transportConfig.maxPickupDetourKm = 6;
       if (c.transportConfig.maxRideMinutes === undefined) c.transportConfig.maxRideMinutes = 75;
+      if (!c.transportConfig.fleetArrangement || typeof c.transportConfig.fleetArrangement !== "object") {
+        // Migrate the short-lived fleetMode field (never shipped to users) if present, else default on_demand-only.
+        const legacy = c.transportConfig.fleetMode;
+        c.transportConfig.fleetArrangement = {
+          onDemand: legacy !== "fixed_routes" && legacy !== "fixed_pool",
+          fixedPool: legacy === "fixed_pool",
+          fixedRoutes: legacy === "fixed_routes",
+        };
+      }
+      delete c.transportConfig.fleetMode;
+      if (!Array.isArray(c.transportConfig.contractedFleet)) {
+        // Migrate the short-lived requiredSeaterTiers field (never shipped) if present.
+        c.transportConfig.contractedFleet = Array.isArray(c.transportConfig.requiredSeaterTiers)
+          ? c.transportConfig.requiredSeaterTiers.map((t) => ({ tier: Number(t), count: 1 }))
+          : [];
+      }
+      delete c.transportConfig.requiredSeaterTiers;
+      if (c.transportConfig.billingModel === undefined) c.transportConfig.billingModel = "per_seat";
+      if (!c.transportConfig.rateCards || typeof c.transportConfig.rateCards !== "object") c.transportConfig.rateCards = {};
+      if (!Array.isArray(c.transportConfig.routeTemplates)) c.transportConfig.routeTemplates = [];
+      c.transportConfig.routeTemplates.forEach((rt) => {
+        if (rt.vehicleCount === undefined) rt.vehicleCount = 1;
+      });
+      // One-time migration: fold any legacy flat seaterRates into the new
+      // per-tier rate cards (as a "per_seat" model) so existing contracted
+      // prices aren't lost when this feature ships.
+      Object.keys(c.transportConfig.seaterRates || {}).forEach((t) => {
+        if (!c.transportConfig.rateCards[t]) {
+          c.transportConfig.rateCards[t] = Object.assign(defaultRateCard(), { model: "per_seat", perSeat: Number(c.transportConfig.seaterRates[t]) || 0 });
+        }
+      });
     }
   });
   // ---------- Employee Transport module ----------
@@ -695,6 +734,19 @@ function nowIso() {
 }
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
+}
+// Employee Transport advance booking window - see /api/client-employee-auth/requests.
+const TRANSPORT_ADVANCE_BOOKING_DAYS = 90;
+function addDaysStr(dateStr, days) {
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function isValidBookingDate(dateStr) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr || "")) return false;
+  const today = todayStr();
+  const maxDate = addDaysStr(today, TRANSPORT_ADVANCE_BOOKING_DAYS);
+  return dateStr >= today && dateStr <= maxDate; // ISO YYYY-MM-DD strings compare lexically = chronologically
 }
 // Every date is STORED as ISO (YYYY-MM-DD) - only used for human-readable
 // text the server generates itself (e.g. an audit-trail sentence). Never use
@@ -1380,6 +1432,46 @@ const TRANSPORT_SEATER_TIERS = [5, 7, 8, 12, 22, 40];
 const CLIENT_STAFF_ROLES = ["travel_desk_manager", "billing", "hod"];
 const TRANSPORT_AVG_SPEED_KMH = 25; // assumed average city speed - converts the client's "max ride minutes" comfort limit into a distance budget
 
+// ---------- Employee Transport billing / pricing models ----------
+// Every contract prices things differently (see conversation with owner):
+// a small cab on a short hop is usually a flat rate per pickup, a big bus
+// is usually a flat monthly number, some clients pay strictly per km
+// travelled, others per seat used or per trip run. Rather than picking one
+// model for the whole app, each client picks a default model and then each
+// vehicle-seater-tier (and optionally each individual contracted route) can
+// override it - so "5-seater cabs under 15km = flat rate" and "40-seater
+// bus = fixed monthly" can both live on the same client at once.
+const TRANSPORT_BILLING_MODELS = ["per_seat", "per_trip", "per_km", "fixed_monthly", "slab"];
+const TRANSPORT_BILLING_MODEL_LABELS = {
+  per_seat: "Per Seat (₹ per employee riding, per day)",
+  per_trip: "Per Trip (flat ₹ each time the vehicle runs)",
+  per_km: "Per KM (₹ per km travelled after pickup)",
+  fixed_monthly: "Fixed Monthly (flat ₹ per month, any usage)",
+  slab: "Slab: Flat + Extra KM (₹ flat for the first N km, then ₹/km beyond)",
+};
+function defaultRateCard() {
+  return {
+    model: "per_seat",
+    perSeat: 0, // ₹ per employee riding, per day
+    perTrip: 0, // ₹ per trip run
+    perKm: 0, // ₹ per km travelled (post-pickup)
+    fixedMonthly: 0, // ₹ flat per month
+    slabFlatKm: 15, // km included in the flat slab rate
+    slabFlatRate: 0, // ₹ flat rate covering slabFlatKm
+    slabExtraPerKm: 0, // ₹ per km beyond slabFlatKm
+  };
+}
+function cleanRateCard(input, existing) {
+  const rc = Object.assign(defaultRateCard(), existing || {});
+  if (input && typeof input === "object") {
+    if (TRANSPORT_BILLING_MODELS.includes(input.model)) rc.model = input.model;
+    ["perSeat", "perTrip", "perKm", "fixedMonthly", "slabFlatKm", "slabFlatRate", "slabExtraPerKm"].forEach((k) => {
+      if (input[k] !== undefined && input[k] !== "" && input[k] !== null) rc[k] = Number(input[k]) || 0;
+    });
+  }
+  return rc;
+}
+
 function smallestFittingTier(count) {
   return TRANSPORT_SEATER_TIERS.find((t) => t >= count) || TRANSPORT_SEATER_TIERS[TRANSPORT_SEATER_TIERS.length - 1];
 }
@@ -1478,7 +1570,7 @@ function driverDistanceMeters(driverId, point) {
 // replacing that client's existing DRAFT routes for that direction only -
 // any route already approved or dispatched is left completely alone, so
 // re-running never disrupts a route that's already live on the road.
-async function runTransportOptimizer(clientId, direction, actorUser) {
+async function runTransportOptimizer(clientId, direction, actorUser, forDate) {
   const client = db.clients.find((c) => c.id === clientId);
   if (!client) throw Object.assign(new Error("Client not found."), { status: 404 });
   if (!client.transportConfig || !client.transportConfig.enabled) {
@@ -1491,9 +1583,23 @@ async function runTransportOptimizer(clientId, direction, actorUser) {
     throw Object.assign(new Error('direction must be "pickup" or "drop".'), { status: 400 });
   }
 
+  // Requests can now be either a standing "I always need a ride" (no date)
+  // or a one-off advance booking for a specific date (up to 90 days out -
+  // see /api/client-employee-auth/requests). Running the optimizer for
+  // "today" (the normal daily case) picks up both; running it for a future
+  // date - so Ops can see how many vehicles a day needs ahead of time -
+  // only picks up bookings actually made for that date.
+  const targetDate = forDate || todayStr();
+  const isToday = targetDate === todayStr();
   const activeRequestEmployeeIds = new Set(
     transportRequests
-      .filter((r) => r.clientId === clientId && r.status === "approved" && (r.type === direction || r.type === "both"))
+      .filter(
+        (r) =>
+          r.clientId === clientId &&
+          r.status === "approved" &&
+          (r.type === direction || r.type === "both") &&
+          (r.date ? r.date === targetDate : isToday)
+      )
       .map((r) => r.employeeId)
   );
   const employees = transportEmployees.filter(
@@ -2378,7 +2484,10 @@ app.patch(
   h(async (req, res) => {
     const client = db.clients.find((c) => c.id === req.params.id);
     if (!client) return res.status(404).json({ error: "Client not found." });
-    const { enabled, officeLat, officeLng, officeAddress, seaterRates, maxPickupDetourKm, maxRideMinutes } = req.body || {};
+    const {
+      enabled, officeLat, officeLng, officeAddress, seaterRates, maxPickupDetourKm, maxRideMinutes,
+      fleetArrangement, contractedFleet, billingModel, rateCards,
+    } = req.body || {};
     if (enabled !== undefined) client.transportConfig.enabled = !!enabled;
     if (officeLat !== undefined) client.transportConfig.officeLat = officeLat === null || officeLat === "" ? null : Number(officeLat);
     if (officeLng !== undefined) client.transportConfig.officeLng = officeLng === null || officeLng === "" ? null : Number(officeLng);
@@ -2393,8 +2502,109 @@ app.patch(
     }
     if (maxPickupDetourKm !== undefined) client.transportConfig.maxPickupDetourKm = Number(maxPickupDetourKm) || 6;
     if (maxRideMinutes !== undefined) client.transportConfig.maxRideMinutes = Number(maxRideMinutes) || 75;
+    // A client isn't locked to one arrangement - buses on fixed contracted
+    // routes and a flexible on-demand cab pool can both be switched on for
+    // the same client at once (see conversation with owner).
+    if (fleetArrangement && typeof fleetArrangement === "object") {
+      client.transportConfig.fleetArrangement = {
+        onDemand: !!fleetArrangement.onDemand,
+        fixedPool: !!fleetArrangement.fixedPool,
+        fixedRoutes: !!fleetArrangement.fixedRoutes,
+      };
+    }
+    if (Array.isArray(contractedFleet)) {
+      client.transportConfig.contractedFleet = contractedFleet
+        .filter((f) => f && TRANSPORT_SEATER_TIERS.includes(Number(f.tier)))
+        .map((f) => ({ tier: Number(f.tier), count: Math.max(0, Number(f.count) || 0) }));
+    }
+    if (billingModel !== undefined) {
+      if (!TRANSPORT_BILLING_MODELS.includes(billingModel)) return res.status(400).json({ error: `billingModel must be one of: ${TRANSPORT_BILLING_MODELS.join(", ")}.` });
+      client.transportConfig.billingModel = billingModel;
+    }
+    if (rateCards && typeof rateCards === "object") {
+      TRANSPORT_SEATER_TIERS.forEach((t) => {
+        const input = rateCards[String(t)];
+        if (input) client.transportConfig.rateCards[String(t)] = cleanRateCard(input, client.transportConfig.rateCards[String(t)]);
+      });
+    }
     await audit(req.user, "update_transport_config", `${req.user.name} updated Employee Transport settings for ${client.name}`);
     res.json(client);
+  })
+);
+
+// Contracted route templates (mainly for bus clients) - set once at
+// onboarding: a named route with its own vehicle type, how many vehicles
+// run it, and (optionally) its own billing rule distinct from the client's
+// default rate card, since price can genuinely differ route to route.
+app.post(
+  "/api/clients/:id/transport-route-templates",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const { name, direction, seaterTier, vehicleCount, schedule, notes, billing } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "Route name is required." });
+    if (!["pickup", "drop", "both"].includes(direction)) return res.status(400).json({ error: "direction must be pickup, drop, or both." });
+    if (!TRANSPORT_SEATER_TIERS.includes(Number(seaterTier))) return res.status(400).json({ error: `seaterTier must be one of: ${TRANSPORT_SEATER_TIERS.join(", ")}.` });
+    const template = {
+      id: uid("trtpl"),
+      name: String(name).trim(),
+      direction,
+      seaterTier: Number(seaterTier),
+      vehicleCount: Math.max(1, Number(vehicleCount) || 1),
+      schedule: schedule || "",
+      notes: notes || "",
+      billing: billing ? cleanRateCard(billing, null) : null, // null = inherit the client's rate card for this seater tier
+      active: true,
+      createdAt: nowIso(),
+      createdBy: req.user.name,
+    };
+    client.transportConfig.routeTemplates.push(template);
+    await audit(req.user, "create_transport_route_template", `${req.user.name} added contracted route "${template.name}" for ${client.name}`);
+    res.json(template);
+  })
+);
+app.patch(
+  "/api/clients/:id/transport-route-templates/:templateId",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const template = client.transportConfig.routeTemplates.find((t) => t.id === req.params.templateId);
+    if (!template) return res.status(404).json({ error: "Route template not found." });
+    const { name, direction, seaterTier, vehicleCount, schedule, notes, billing, active } = req.body || {};
+    if (name !== undefined) template.name = String(name).trim();
+    if (direction !== undefined) {
+      if (!["pickup", "drop", "both"].includes(direction)) return res.status(400).json({ error: "direction must be pickup, drop, or both." });
+      template.direction = direction;
+    }
+    if (seaterTier !== undefined) {
+      if (!TRANSPORT_SEATER_TIERS.includes(Number(seaterTier))) return res.status(400).json({ error: `seaterTier must be one of: ${TRANSPORT_SEATER_TIERS.join(", ")}.` });
+      template.seaterTier = Number(seaterTier);
+    }
+    if (vehicleCount !== undefined) template.vehicleCount = Math.max(1, Number(vehicleCount) || 1);
+    if (schedule !== undefined) template.schedule = schedule || "";
+    if (notes !== undefined) template.notes = notes || "";
+    if (billing !== undefined) template.billing = billing ? cleanRateCard(billing, template.billing) : null;
+    if (active !== undefined) template.active = !!active;
+    await audit(req.user, "update_transport_route_template", `${req.user.name} updated contracted route "${template.name}" for ${client.name}`);
+    res.json(template);
+  })
+);
+app.delete(
+  "/api/clients/:id/transport-route-templates/:templateId",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const idx = client.transportConfig.routeTemplates.findIndex((t) => t.id === req.params.templateId);
+    if (idx === -1) return res.status(404).json({ error: "Route template not found." });
+    const [removed] = client.transportConfig.routeTemplates.splice(idx, 1);
+    await audit(req.user, "delete_transport_route_template", `${req.user.name} removed contracted route "${removed.name}" from ${client.name}`);
+    res.json({ ok: true });
   })
 );
 
@@ -2485,11 +2695,11 @@ app.post(
   requireAuth,
   requireRole(...ADMIN_ROLES),
   h(async (req, res) => {
-    const { clientId, direction } = req.body || {};
+    const { clientId, direction, date } = req.body || {};
     if (!clientId) return res.status(400).json({ error: "clientId is required." });
     try {
-      const routes = await runTransportOptimizer(clientId, direction, req.user);
-      await audit(req.user, "run_transport_optimizer", `${req.user.name} ran the ${direction} route optimizer for ${clientNameServer(clientId)} - ${routes.length} route(s) generated`);
+      const routes = await runTransportOptimizer(clientId, direction, req.user, date || undefined);
+      await audit(req.user, "run_transport_optimizer", `${req.user.name} ran the ${direction} route optimizer for ${clientNameServer(clientId)}${date ? ` (${date})` : ""} - ${routes.length} route(s) generated`);
       res.json({ routes });
     } catch (err) {
       res.status(err.status || 500).json({ error: err.message });
@@ -2959,16 +3169,30 @@ app.post(
     if (req.transportEmployee.homeLat == null) {
       return res.status(400).json({ error: "Pin your home location first - the transport team needs it to plan your route." });
     }
-    const { type } = req.body || {};
+    const { type, date } = req.body || {};
     if (!["pickup", "drop", "both"].includes(type)) return res.status(400).json({ error: "type must be pickup, drop, or both." });
-    const existing = transportRequests.find((r) => r.employeeId === req.transportEmployee.id && ["pending", "approved"].includes(r.status));
-    if (existing) return res.status(400).json({ error: "You already have an active or pending transport request." });
+    // date is optional: omit it for a standing "I always need a ride" request
+    // (today's default behaviour), or supply a specific YYYY-MM-DD - up to
+    // TRANSPORT_ADVANCE_BOOKING_DAYS out - to book just that one day, so the
+    // transport team can see attendance-driven demand coming in advance.
+    let bookingDate = null;
+    if (date !== undefined && date !== null && date !== "") {
+      if (!isValidBookingDate(date)) return res.status(400).json({ error: `date must be today or within the next ${TRANSPORT_ADVANCE_BOOKING_DAYS} days (YYYY-MM-DD).` });
+      bookingDate = date;
+    }
+    const existing = transportRequests.find(
+      (r) => r.employeeId === req.transportEmployee.id && ["pending", "approved"].includes(r.status) && (r.date || null) === bookingDate
+    );
+    if (existing) {
+      return res.status(400).json({ error: bookingDate ? `You already have a request for ${bookingDate}.` : "You already have an active or pending standing transport request." });
+    }
     const request = {
       id: uid("treq"),
       clientId: req.transportEmployee.clientId,
       employeeId: req.transportEmployee.id,
       employeeName: req.transportEmployee.name,
       type,
+      date: bookingDate, // null = standing request; otherwise a one-off advance booking for that date
       status: "pending",
       raisedAt: nowIso(),
       decidedBy: null,
@@ -2979,6 +3203,46 @@ app.post(
     transportRequests.push(request);
     await persistTransportRequest(request);
     res.json(request);
+  })
+);
+// Book several future dates at once (e.g. "I'll be in office" days picked
+// across the next 90 days) instead of one request at a time - lets an
+// employee plan ahead and gives the transport team early visibility into
+// how many vehicles a given future day will need.
+app.post(
+  "/api/client-employee-auth/requests/bulk",
+  clientEmployeeAuth,
+  h(async (req, res) => {
+    if (req.transportEmployee.homeLat == null) {
+      return res.status(400).json({ error: "Pin your home location first - the transport team needs it to plan your route." });
+    }
+    const { type, dates } = req.body || {};
+    if (!["pickup", "drop", "both"].includes(type)) return res.status(400).json({ error: "type must be pickup, drop, or both." });
+    if (!Array.isArray(dates) || !dates.length) return res.status(400).json({ error: "dates must be a non-empty array of YYYY-MM-DD values." });
+    const created = [], skipped = [];
+    dates.forEach((date) => {
+      if (!isValidBookingDate(date)) { skipped.push({ date, reason: `Outside the bookable window (today - next ${TRANSPORT_ADVANCE_BOOKING_DAYS} days).` }); return; }
+      const existing = transportRequests.find((r) => r.employeeId === req.transportEmployee.id && ["pending", "approved"].includes(r.status) && r.date === date);
+      if (existing) { skipped.push({ date, reason: "Already booked." }); return; }
+      const request = {
+        id: uid("treq"),
+        clientId: req.transportEmployee.clientId,
+        employeeId: req.transportEmployee.id,
+        employeeName: req.transportEmployee.name,
+        type,
+        date,
+        status: "pending",
+        raisedAt: nowIso(),
+        decidedBy: null,
+        decidedByName: null,
+        decidedAt: null,
+        note: "",
+      };
+      transportRequests.push(request);
+      created.push(request);
+    });
+    await Promise.all(created.map((r) => persistTransportRequest(r)));
+    res.json({ created, skipped });
   })
 );
 app.post(
@@ -2995,27 +3259,66 @@ app.post(
 );
 // The employee's currently assigned route (if any) - vehicle, driver, and
 // where in the stop order they are, for both pickup and drop.
-app.get("/api/client-employee-auth/my-route", clientEmployeeAuth, (req, res) => {
-  const routes = transportRoutes.filter(
-    (r) => ["approved", "dispatched"].includes(r.status) && r.stops.some((s) => s.employeeId === req.transportEmployee.id)
-  );
-  const result = routes.map((r) => {
-    const stop = r.stops.find((s) => s.employeeId === req.transportEmployee.id);
-    const vehicle = r.assignedVehicleId ? db.vehicles.find((v) => v.id === r.assignedVehicleId) : null;
-    const driver = r.assignedDriverId ? db.drivers.find((d) => d.id === r.assignedDriverId) : null;
-    return {
-      routeId: r.id,
-      direction: r.direction,
-      status: r.status,
-      stopSeq: stop.seq,
-      totalStops: r.stops.length,
-      vehicleReg: vehicle ? vehicle.reg : null,
-      driverName: driver ? driver.name : null,
-      driverPhone: driver ? driver.phone : null,
-    };
-  });
-  res.json({ routes: result });
-});
+// Once an employee is mapped to a dispatched vehicle, they should be able
+// to see who's driving and where that vehicle actually is right now - so
+// they can track it in and board swiftly instead of guessing when to head
+// down. Reuses the same Fleetx-backed live tracking the staff app uses
+// (resolveFleetxMatch/liveTrackingPayloadFor), just scoped to this one
+// employee's assigned vehicle. Never fails the whole response if live
+// tracking itself is unavailable (no token set, Fleetx down, vehicle not
+// GPS-linked yet) - the route/driver info still comes back either way.
+app.get(
+  "/api/client-employee-auth/my-route",
+  clientEmployeeAuth,
+  h(async (req, res) => {
+    const routes = transportRoutes.filter(
+      (r) => ["approved", "dispatched"].includes(r.status) && r.stops.some((s) => s.employeeId === req.transportEmployee.id)
+    );
+    let liveVehicles = null;
+    if (routes.some((r) => r.assignedVehicleId)) {
+      try {
+        const live = await fetchFleetxLive();
+        liveVehicles = live.vehicles || [];
+      } catch (err) {
+        liveVehicles = null; // live tracking just won't be included below
+      }
+    }
+    const result = routes.map((r) => {
+      const stop = r.stops.find((s) => s.employeeId === req.transportEmployee.id);
+      const vehicle = r.assignedVehicleId ? db.vehicles.find((v) => v.id === r.assignedVehicleId) : null;
+      const driver = r.assignedDriverId
+        ? db.drivers.find((d) => d.id === r.assignedDriverId)
+        : (vehicle && vehicle.driverId ? db.drivers.find((d) => d.id === vehicle.driverId) : null);
+      let live = null;
+      if (vehicle && liveVehicles) {
+        const match = resolveFleetxMatch(vehicle, liveVehicles);
+        if (match) {
+          const payload = liveTrackingPayloadFor(match);
+          live = {
+            status: payload.status,
+            speedKmh: payload.speedKmh,
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+            address: payload.address,
+            lastUpdatedAt: payload.lastUpdatedAt,
+          };
+        }
+      }
+      return {
+        routeId: r.id,
+        direction: r.direction,
+        status: r.status,
+        stopSeq: stop.seq,
+        totalStops: r.stops.length,
+        vehicleReg: vehicle ? vehicle.reg : null,
+        driverName: driver ? driver.name : null,
+        driverPhone: driver ? driver.phone : null,
+        live,
+      };
+    });
+    res.json({ routes: result });
+  })
+);
 
 // ---------- SITES ----------
 app.post(

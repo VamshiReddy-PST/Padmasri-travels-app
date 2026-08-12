@@ -102,6 +102,8 @@ let empTab = "home";
 let staffTab = null;
 let myRoute = { routes: [] };
 let myRequests = [];
+let _selectedBookingDates = [];
+let _bookingType = "both";
 let busy = false;
 let showThemeModal = false;
 
@@ -475,7 +477,23 @@ function empHomeHtml(){
     ${active ? `
       <p><b>${active.direction==="pickup"?"Pickup":"Drop"}</b> - stop ${active.stopSeq} of ${active.totalStops} &middot; <span class="badge ${active.status}">${active.status}</span></p>
       <p class="muted">Vehicle: ${active.vehicleReg||"Not assigned yet"} &middot; Driver: ${active.driverName||"Not assigned yet"}${active.driverPhone?" ("+active.driverPhone+")":""}</p>
+      ${liveTrackingHtml(active.live)}
     ` : pendingReq ? `<p class="muted">Your request is <b>${pendingReq.status}</b> - once routed, your vehicle and driver will show up here.</p>` : `<p class="muted">No active ride. Go to the Request tab to ask for one.</p>`}
+  </div>`;
+}
+// Once boarding is close, the employee needs to know exactly where the
+// vehicle is right now, not just who's driving - this is what lets them
+// time walking down to the pickup point instead of waiting outside.
+function liveTrackingHtml(live){
+  if(!live || live.latitude==null || live.longitude==null) return `<p class="muted" style="margin-top:6px;font-size:12.5px;">Live location isn't available for this vehicle yet.</p>`;
+  const mapsUrl = `https://www.google.com/maps?q=${live.latitude},${live.longitude}`;
+  const updated = live.lastUpdatedAt ? new Date(live.lastUpdatedAt).toLocaleTimeString() : null;
+  return `
+  <div style="margin-top:8px;padding:10px;border-radius:10px;background:var(--surface-2,#f4f6f2);">
+    <p style="margin:0;"><b>${live.status||"On the move"}</b>${live.speedKmh!=null?` &middot; ${live.speedKmh} km/h`:""}</p>
+    ${live.address?`<p class="muted" style="margin:2px 0 0;">${live.address}</p>`:""}
+    <a href="${mapsUrl}" target="_blank" rel="noopener" class="btn small secondary" style="margin-top:8px;display:inline-block;">📍 Track on Google Maps</a>
+    ${updated?`<p class="muted" style="margin:6px 0 0;font-size:11.5px;">Updated ${updated}</p>`:""}
   </div>`;
 }
 function empRideHtml(){
@@ -486,20 +504,26 @@ function empRideHtml(){
     <h2 class="section-title">${r.direction==="pickup"?"Pickup":"Drop"} route <span class="badge ${r.status}">${r.status}</span></h2>
     <div class="stop-row"><div class="stop-num">${r.stopSeq}</div><div>You board here - stop ${r.stopSeq} of ${r.totalStops}</div></div>
     <p class="muted" style="margin-top:8px;">Vehicle: ${r.vehicleReg||"Not assigned yet"}<br/>Driver: ${r.driverName||"Not assigned yet"}${r.driverPhone?" - "+r.driverPhone:""}</p>
+    ${liveTrackingHtml(r.live)}
   </div>`).join("");
 }
 function empRequestHtml(){
-  const active = myRequests.find(r=>["pending","approved"].includes(r.status));
+  const active = myRequests.find(r=>["pending","approved"].includes(r.status) && !r.date);
+  const today = new Date().toISOString().slice(0,10);
+  const maxDate = new Date(Date.now() + 90*24*60*60*1000).toISOString().slice(0,10);
+  const upcoming = myRequests.filter(r=>r.date && r.date>=today && ["pending","approved"].includes(r.status)).sort((a,b)=>a.date.localeCompare(b.date));
+  const pastBooked = myRequests.filter(r=>r.date).sort((a,b)=>b.date.localeCompare(a.date));
   return `
   <h1 class="page-title">Transport Request</h1>
   ${!employee.homeLat ? `<div class="banner">Pin your home location first (Location tab) before raising a request.</div>` : ""}
   <div class="card">
+    <h2 class="section-title">Standing Request</h2>
     ${active ? `
-      <p>Your request: <b>${active.type}</b> &middot; <span class="badge ${active.status}">${active.status}</span></p>
+      <p>Your standing request: <b>${active.type}</b> &middot; <span class="badge ${active.status}">${active.status}</span></p>
       <p class="muted">Raised ${new Date(active.raisedAt).toLocaleDateString()}</p>
       <button class="btn danger" onclick="cancelRequest('${active.id}')">Cancel Request</button>
     ` : `
-      <p class="muted" style="margin-bottom:10px;">Ask for transport - Travel Desk will review, then you'll be added to the next route the office plans.</p>
+      <p class="muted" style="margin-bottom:10px;">Ask for transport every working day - Travel Desk will review, then you'll be added to whichever route the office plans.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn" ${!employee.homeLat?"disabled":""} onclick="raiseRequest('pickup')">Request Pickup</button>
         <button class="btn" ${!employee.homeLat?"disabled":""} onclick="raiseRequest('drop')">Request Drop</button>
@@ -507,9 +531,59 @@ function empRequestHtml(){
       </div>
     `}
   </div>
-  ${myRequests.length ? `<div class="card"><h2 class="section-title">History</h2><table><tr><th>Date</th><th>Type</th><th>Status</th></tr>
-    ${myRequests.map(r=>`<tr><td>${new Date(r.raisedAt).toLocaleDateString()}</td><td>${r.type}</td><td><span class="badge ${r.status}">${r.status}</span></td></tr>`).join("")}
+
+  <div class="card">
+    <h2 class="section-title">Book in Advance</h2>
+    <p class="muted" style="margin-bottom:10px;">Only in office on certain days? Pick the exact dates - up to 90 days ahead - so the transport team knows how many vehicles to plan for, without you needing a standing request.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+      <div class="field" style="max-width:200px;"><label>Date</label><input type="date" id="empBookDate" min="${today}" max="${maxDate}" /></div>
+      <div class="field" style="max-width:160px;"><label>Type</label>
+        <select id="empBookType" onchange="_bookingType=this.value;">
+          <option value="pickup" ${_bookingType==='pickup'?'selected':''}>Pickup</option>
+          <option value="drop" ${_bookingType==='drop'?'selected':''}>Drop</option>
+          <option value="both" ${_bookingType==='both'?'selected':''}>Both</option>
+        </select>
+      </div>
+      <button class="btn secondary" ${!employee.homeLat?"disabled":""} onclick="addBookingDate()">+ Add Date</button>
+    </div>
+    ${_selectedBookingDates.length ? `
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">
+        ${_selectedBookingDates.map(d=>`<span class="badge" style="cursor:pointer;" onclick="removeBookingDate('${d}')">${new Date(d).toLocaleDateString()} &times;</span>`).join("")}
+      </div>
+      <button class="btn" style="margin-top:10px;" onclick="submitAdvanceBookings()">Book ${_selectedBookingDates.length} Selected Date${_selectedBookingDates.length===1?'':'s'}</button>
+    ` : ""}
+  </div>
+
+  ${upcoming.length ? `<div class="card"><h2 class="section-title">Upcoming Bookings</h2><table><tr><th>Date</th><th>Type</th><th>Status</th><th></th></tr>
+    ${upcoming.map(r=>`<tr><td>${new Date(r.date).toLocaleDateString()}</td><td>${r.type}</td><td><span class="badge ${r.status}">${r.status}</span></td><td><button class="btn small danger" onclick="cancelRequest('${r.id}')">Cancel</button></td></tr>`).join("")}
+  </table></div>` : ""}
+
+  ${pastBooked.length || myRequests.length ? `<div class="card"><h2 class="section-title">History</h2><table><tr><th>Date</th><th>Type</th><th>Status</th></tr>
+    ${myRequests.slice().sort((a,b)=>(b.date||b.raisedAt||"").localeCompare(a.date||a.raisedAt||"")).map(r=>`<tr><td>${r.date?new Date(r.date).toLocaleDateString()+' (booked)':new Date(r.raisedAt).toLocaleDateString()+' (standing)'}</td><td>${r.type}</td><td><span class="badge ${r.status}">${r.status}</span></td></tr>`).join("")}
   </table></div>` : ""}`;
+}
+function addBookingDate(){
+  const el = document.getElementById('empBookDate');
+  const date = el ? el.value : '';
+  if(!date){ alert('Pick a date first.'); return; }
+  if(!_selectedBookingDates.includes(date)){ _selectedBookingDates.push(date); _selectedBookingDates.sort(); }
+  render();
+}
+function removeBookingDate(date){
+  _selectedBookingDates = _selectedBookingDates.filter(d=>d!==date);
+  render();
+}
+async function submitAdvanceBookings(){
+  if(!_selectedBookingDates.length) return;
+  try{
+    const res = await empApi("/requests/bulk", {method:"POST", body: JSON.stringify({type:_bookingType, dates:_selectedBookingDates})});
+    _selectedBookingDates = [];
+    await loadMyRequests();
+    if(res.skipped && res.skipped.length){
+      alert(`Booked ${res.created.length} date(s). ${res.skipped.length} skipped: `+res.skipped.map(s=>s.date+' - '+s.reason).join(', '));
+    }
+    render();
+  }catch(e){ alert(e.message); }
 }
 function empLocationHtml(){
   return `
