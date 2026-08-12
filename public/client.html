@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Padmasri Travels - Client Transport Portal</title>
+<meta name="theme-color" content="#2B2E1F" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@1,500;1,600;1,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root{
+    --ink:#2B2E1F; --accent:#4C6A2B; --accent-dark:#3A5220; --accent-light:#E9EDA8; --green:#2E7D32;
+    --amber:#b8860b; --red:#c0392b; --grey:#6b6b5e; --bg:#FBF8E3; --card:#ffffff;
+    --border:#ECE6C8; --purple:#6C63FF; --purple-dark:#4A43C7; --purple-light:#E7E5FF;
+    --on-accent:#ffffff; --on-accent-rgb:255,255,255; --accent-text:var(--accent);
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;}
+  .accent-script{font-family:'Playfair Display',Georgia,serif;font-style:italic;font-weight:600;}
+  #app{max-width:1080px;margin:0 auto;min-height:100vh;background:var(--bg);}
+  header.topbar{background:var(--ink);color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;flex-wrap:wrap;gap:8px;}
+  header.topbar .brand{font-weight:700;font-size:17px;}
+  header.topbar .who{font-size:12.5px;opacity:.9;text-align:right;}
+  header.topbar button.gear, header.topbar button.logout{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35);color:#fff;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;margin-left:8px;}
+  main{padding:18px 20px 70px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px 18px;margin-bottom:16px;box-shadow:0 4px 14px rgba(43,46,31,.05);}
+  h1.page-title{font-size:20px;margin:4px 0 16px;color:var(--ink);}
+  h2.section-title{font-size:15px;margin:0 0 10px;color:var(--ink);border-bottom:2px solid var(--accent-light);padding-bottom:6px;}
+  h3{font-size:14px;color:var(--ink);margin:0 0 8px;}
+  .grid{display:grid;gap:14px;}
+  .grid.cols-3{grid-template-columns:repeat(3,1fr);}
+  .grid.cols-4{grid-template-columns:repeat(4,1fr);}
+  @media(max-width:900px){.grid.cols-4{grid-template-columns:repeat(2,1fr);} .grid.cols-3{grid-template-columns:repeat(2,1fr);}}
+  @media(max-width:520px){.grid.cols-4,.grid.cols-3{grid-template-columns:1fr;}}
+  .kpi{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px;}
+  .kpi .num{font-size:24px;font-weight:700;color:var(--ink);}
+  .kpi .label{font-size:12px;color:var(--grey);margin-top:2px;}
+  .kpi.good .num{color:var(--green);} .kpi.bad .num{color:var(--red);} .kpi.warn .num{color:var(--amber);}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  table th{text-align:left;background:var(--accent-light);color:var(--ink);padding:8px 10px;font-size:12px;}
+  table td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;}
+  .badge.pending{background:#FBF3D6;color:var(--amber);}
+  .badge.approved{background:#E9F3DC;color:var(--green);}
+  .badge.rejected,.badge.cancelled{background:#fbe4e1;color:var(--red);}
+  .badge.draft{background:#eee;color:var(--grey);}
+  .badge.dispatched{background:var(--purple-light);color:var(--purple-dark);}
+  .badge.flag{background:#fbe4e1;color:var(--red);}
+  .login-wrap{max-width:420px;margin:60px auto;padding:0 16px;}
+  .login-wrap .logo{text-align:center;font-size:22px;font-weight:800;color:var(--ink);margin-bottom:4px;}
+  .login-wrap .sub{text-align:center;color:var(--grey);font-size:13px;margin-bottom:22px;}
+  .field{margin-bottom:12px;}
+  .field label{display:block;font-size:12px;color:var(--grey);margin-bottom:4px;}
+  .field input,.field select,.field textarea{width:100%;padding:9px 10px;border:1px solid var(--border);border-radius:10px;font-size:14px;font-family:inherit;}
+  .btn{background:var(--accent);color:var(--on-accent);border:none;padding:9px 16px;border-radius:8px;font-size:13.5px;cursor:pointer;font-weight:600;}
+  .btn:hover{background:var(--accent-dark);}
+  .btn.secondary{background:#fff;color:var(--accent-text);border:1px solid var(--accent-text);}
+  .btn.danger{background:var(--red);color:#fff;}
+  .btn:disabled{opacity:.5;cursor:not-allowed;}
+  .btn.small{padding:5px 10px;font-size:12px;}
+  .banner{background:#FBF3D6;border:1px solid #EBDA9B;color:#7a5a00;padding:10px 14px;border-radius:10px;font-size:12.5px;margin-bottom:16px;}
+  .banner.error{background:#fbe4e1;border-color:#eab3ab;color:#7a2115;}
+  .muted{color:var(--grey);font-size:12px;}
+  .empty{text-align:center;color:var(--grey);padding:30px 10px;font-size:13px;}
+  .footer-note{font-size:11px;color:#9a9576;text-align:center;padding:20px;}
+  .portal-pick{display:grid;gap:14px;grid-template-columns:1fr 1fr;max-width:520px;margin:60px auto;padding:0 16px;}
+  @media(max-width:560px){.portal-pick{grid-template-columns:1fr;}}
+  .portal-pick .pcard{background:#fff;border:2px solid var(--border);border-radius:16px;padding:22px 16px;text-align:center;cursor:pointer;}
+  .portal-pick .pcard:hover{border-color:var(--accent);}
+  .portal-pick .pcard .picon{font-size:30px;margin-bottom:8px;}
+  .portal-pick .pcard .ptitle{font-weight:700;color:var(--ink);margin-bottom:4px;}
+  .portal-pick .pcard .pdesc{font-size:12px;color:var(--grey);}
+  .tabbar{display:flex;gap:8px;overflow-x:auto;padding:10px 20px;background:#fff;border-bottom:1px solid var(--border);position:sticky;top:56px;z-index:9;}
+  .tabbar button{flex:0 0 auto;background:#fff;border:1px solid var(--border);color:var(--grey);padding:8px 14px;border-radius:20px;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;}
+  .tabbar button.active{background:var(--accent);border-color:var(--accent);color:var(--on-accent);}
+  .stop-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);}
+  .stop-row:last-child{border-bottom:none;}
+  .stop-num{width:26px;height:26px;border-radius:50%;background:var(--accent-light);color:var(--ink);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:0 0 auto;}
+  #pinMap{height:320px;border-radius:14px;overflow:hidden;border:1px solid var(--border);margin-bottom:10px;}
+  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:100;padding:16px;}
+  .modal-box{background:var(--card);border-radius:16px;padding:20px;max-width:360px;width:100%;box-shadow:0 10px 40px rgba(0,0,0,.25);}
+  .theme-swatch{width:38px;height:38px;border-radius:50%;cursor:pointer;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="themeOverlay"></div>
+<script>
+const EMP_API = "/api/client-employee-auth";
+const STAFF_API = "/api/client-auth";
+
+let portalKind = localStorage.getItem("clientPortalKind") || null; // "employee" | "staff"
+let empToken = localStorage.getItem("clientEmpToken") || null;
+let employee = null, empClient = null;
+let staffToken = localStorage.getItem("clientStaffToken") || null;
+let staffUser = null, staffClient = null;
+let lastError = "";
+let pwChangeError = "";
+let empTab = "home";
+let staffTab = null;
+let myRoute = { routes: [] };
+let myRequests = [];
+let busy = false;
+let showThemeModal = false;
+
+// ---------- theme (fixed brand-color picker, mirrors server.js) ----------
+const THEME_PRESETS = {
+  teal:   { key:"teal",   label:"Teal",          accent:"#00A3A6", text:"#FFFFFF" },
+  lime:   { key:"lime",   label:"Lime",          accent:"#D7E600", text:"#1A1A1A" },
+  maroon: { key:"maroon", label:"Maroon",        accent:"#722F37", text:"#FFFFFF" },
+  gold:   { key:"gold",   label:"Golden Yellow", accent:"#FFC107", text:"#1A1A1A" },
+  black:  { key:"black",  label:"Black",         accent:"#000000", text:"#FFFFFF" },
+  white:  { key:"white",  label:"White",         accent:"#FFFFFF", text:"#1A1A1A" },
+};
+function hexToRgbC(hex){
+  const h = hex.replace("#","");
+  const n = h.length===3 ? h.split("").map(c=>c+c).join("") : h;
+  const int = parseInt(n,16);
+  return { r:(int>>16)&255, g:(int>>8)&255, b:int&255 };
+}
+function shadeHexC(hex, pct){
+  const {r,g,b} = hexToRgbC(hex);
+  const f = pct<0 ? 0 : 255, p = Math.abs(pct);
+  const nr = Math.round((f-r)*p)+r, ng = Math.round((f-g)*p)+g, nb = Math.round((f-b)*p)+b;
+  return "#"+[nr,ng,nb].map(x=>Math.max(0,Math.min(255,x)).toString(16).padStart(2,"0")).join("");
+}
+function applyTheme(themeKey){
+  const root = document.documentElement.style;
+  if(!themeKey || !THEME_PRESETS[themeKey]){
+    root.removeProperty("--accent"); root.removeProperty("--accent-dark"); root.removeProperty("--accent-light");
+    root.removeProperty("--on-accent"); root.removeProperty("--on-accent-rgb"); root.removeProperty("--accent-text");
+    try{ localStorage.removeItem("themeKey"); }catch(e){}
+    return;
+  }
+  const preset = THEME_PRESETS[themeKey];
+  const { r, g, b } = hexToRgbC(preset.text);
+  root.setProperty("--accent", preset.accent);
+  root.setProperty("--accent-dark", shadeHexC(preset.accent, -0.2));
+  root.setProperty("--accent-light", shadeHexC(preset.accent, 0.75));
+  root.setProperty("--on-accent", preset.text);
+  root.setProperty("--on-accent-rgb", `${r},${g},${b}`);
+  root.setProperty("--accent-text", preset.accent);
+  try{ localStorage.setItem("themeKey", themeKey); }catch(e){}
+}
+(function(){
+  try{ const saved = localStorage.getItem("themeKey"); if(saved && THEME_PRESETS[saved]) applyTheme(saved); }catch(e){}
+})();
+function toggleThemeModal(){ showThemeModal = !showThemeModal; render(); }
+async function saveTheme(key){
+  try{
+    if(portalKind==="employee"){
+      const r = await empApi("/theme", {method:"POST", body: JSON.stringify({theme:key})});
+      employee.theme = r.theme;
+    } else {
+      const r = await staffApi("/theme", {method:"POST", body: JSON.stringify({theme:key})});
+      staffUser.theme = r.theme;
+    }
+    applyTheme(key); render();
+  }catch(e){ alert(e.message||"Could not update theme."); }
+}
+async function resetTheme(){ await saveTheme(null); }
+function themeModalHtml(){
+  if(!showThemeModal) return "";
+  const current = portalKind==="employee" ? (employee && employee.theme && employee.theme.key) : (staffUser && staffUser.theme && staffUser.theme.key);
+  const swatches = Object.values(THEME_PRESETS).map(p=>{
+    const sel = p.key===current;
+    return `<button type="button" class="theme-swatch" onclick="saveTheme('${p.key}')" title="${p.label}" style="background:${p.accent};border:${sel?"3px solid var(--ink)":"1px solid var(--border)"};box-shadow:${sel?"0 0 0 2px #fff inset":"none"};"></button>`;
+  }).join("");
+  return `<div class="modal-overlay" onclick="if(event.target===this) toggleThemeModal()">
+    <div class="modal-box">
+      <h3>Theme</h3>
+      <p class="muted" style="margin-bottom:10px;">Pick an accent color for your account.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">${swatches}</div>
+      <div style="margin-top:16px;display:flex;justify-content:flex-end;gap:8px;">
+        <button type="button" class="btn secondary" onclick="resetTheme()">Reset</button>
+        <button type="button" class="btn" onclick="toggleThemeModal()">Done</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ---------- API helpers ----------
+async function empApi(path, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({"Content-Type":"application/json"}, opts.headers||{}, empToken ? {Authorization:"Bearer "+empToken} : {});
+  const res = await fetch(EMP_API+path, opts);
+  const data = await res.json().catch(()=>({}));
+  if(res.status===401){ empLogout(true); throw new Error("Session expired - please log in again."); }
+  if(!res.ok) throw new Error(data.error || "Something went wrong.");
+  return data;
+}
+async function staffApi(path, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({"Content-Type":"application/json"}, opts.headers||{}, staffToken ? {Authorization:"Bearer "+staffToken} : {});
+  const res = await fetch(STAFF_API+path, opts);
+  const data = await res.json().catch(()=>({}));
+  if(res.status===401){ staffLogout(true); throw new Error("Session expired - please log in again."); }
+  if(!res.ok) throw new Error(data.error || "Something went wrong.");
+  return data;
+}
+
+// ---------- boot ----------
+async function boot(){
+  if(portalKind==="employee" && empToken){
+    try{
+      const m = await empApi("/me");
+      employee = m.employee; empClient = m.client;
+      applyTheme(employee.theme && employee.theme.key);
+      await Promise.all([loadMyRoute(), loadMyRequests()]);
+    }catch(e){ /* handled by empApi */ }
+  } else if(portalKind==="staff" && staffToken){
+    try{
+      const m = await staffApi("/me");
+      staffUser = m.user; staffClient = m.client;
+      applyTheme(staffUser.theme && staffUser.theme.key);
+      if(staffUser.mustChangePassword){ render(); return; }
+      staffTab = defaultStaffTab(staffUser.role);
+    }catch(e){ /* handled by staffApi */ }
+  }
+  render();
+}
+function defaultStaffTab(role){
+  if(role==="travel_desk_manager") return "roster";
+  if(role==="billing") return "billing";
+  return "overview";
+}
+function chooseEmployeePortal(){ portalKind="employee"; localStorage.setItem("clientPortalKind","employee"); render(); }
+function chooseStaffPortal(){ portalKind="staff"; localStorage.setItem("clientPortalKind","staff"); render(); }
+function backToChooser(){ portalKind=null; localStorage.removeItem("clientPortalKind"); lastError=""; render(); }
+
+function empLogout(silent){
+  empToken=null; employee=null; empClient=null;
+  localStorage.removeItem("clientEmpToken");
+  if(!silent) empApi("/logout", {method:"POST"}).catch(()=>{});
+  render();
+}
+function staffLogout(silent){
+  staffToken=null; staffUser=null; staffClient=null;
+  localStorage.removeItem("clientStaffToken");
+  if(!silent) staffApi("/logout", {method:"POST"}).catch(()=>{});
+  render();
+}
+
+// ---------- employee login ----------
+async function doEmployeeLogin(){
+  if(busy) return;
+  lastError="";
+  const phone = (document.getElementById("empPhone")||{}).value || "";
+  const pin = (document.getElementById("empPin")||{}).value || "";
+  if(!phone.trim() || !pin.trim()){ lastError="Enter your mobile number and PIN."; render(); return; }
+  busy=true; render();
+  try{
+    const r = await empApi("/login", {method:"POST", body: JSON.stringify({phone:phone.trim(), pin:pin.trim()})});
+    empToken = r.token; employee = r.employee;
+    localStorage.setItem("clientEmpToken", empToken);
+    applyTheme(employee.theme && employee.theme.key);
+    await Promise.all([loadMyRoute(), loadMyRequests()]);
+    busy=false; render();
+  }catch(e){ busy=false; lastError=e.message; render(); }
+}
+// ---------- staff login ----------
+async function doStaffLogin(){
+  if(busy) return;
+  lastError="";
+  const identifier = (document.getElementById("staffIdentifier")||{}).value || "";
+  const password = (document.getElementById("staffPassword")||{}).value || "";
+  if(!identifier.trim() || !password){ lastError="Enter your email/mobile and password."; render(); return; }
+  busy=true; render();
+  try{
+    const r = await staffApi("/login", {method:"POST", body: JSON.stringify({identifier:identifier.trim(), password})});
+    staffToken = r.token; staffUser = r.user;
+    localStorage.setItem("clientStaffToken", staffToken);
+    if(!staffUser.mustChangePassword){
+      const m = await staffApi("/me");
+      staffClient = m.client;
+      applyTheme(staffUser.theme && staffUser.theme.key);
+      staffTab = defaultStaffTab(staffUser.role);
+    }
+    busy=false; render();
+  }catch(e){ busy=false; lastError=e.message; render(); }
+}
+async function submitStaffPasswordChange(){
+  pwChangeError="";
+  const currentPassword = (document.getElementById("spwCurrent")||{}).value || "";
+  const newPassword = (document.getElementById("spwNew")||{}).value || "";
+  const confirm = (document.getElementById("spwConfirm")||{}).value || "";
+  if(newPassword !== confirm){ pwChangeError="New password and confirmation don't match."; render(); return; }
+  try{
+    await staffApi("/change-password", {method:"POST", body: JSON.stringify({currentPassword, newPassword})});
+    const m = await staffApi("/me");
+    staffUser = m.user; staffClient = m.client;
+    staffTab = defaultStaffTab(staffUser.role);
+    render();
+  }catch(e){ pwChangeError = e.message; render(); }
+}
+
+// ---------- employee data loaders ----------
+async function loadMyRoute(){ try{ myRoute = await empApi("/my-route"); }catch(e){ myRoute = {routes:[]}; } }
+async function loadMyRequests(){ try{ myRequests = await empApi("/requests"); }catch(e){ myRequests = []; } }
+async function raiseRequest(type){
+  try{
+    await empApi("/requests", {method:"POST", body: JSON.stringify({type})});
+    await loadMyRequests();
+    render();
+  }catch(e){ alert(e.message); }
+}
+async function cancelRequest(id){
+  try{ await empApi("/requests/"+id+"/cancel", {method:"POST"}); await loadMyRequests(); render(); }
+  catch(e){ alert(e.message); }
+}
+
+// ---------- location pin (Leaflet) ----------
+let _pinMap = null, _pinMarker = null, _pinLatLng = employee ? null : null;
+function setEmpTab(tab){
+  empTab = tab; render();
+  if(tab==="location") setTimeout(initPinMap, 0);
+}
+function initPinMap(){
+  const el = document.getElementById("pinMap");
+  if(!el || typeof L==="undefined") return;
+  if(_pinMap){ _pinMap.remove(); _pinMap=null; }
+  const startLat = (employee && employee.homeLat) || 17.4;
+  const startLng = (employee && employee.homeLng) || 78.45;
+  const map = L.map(el).setView([startLat, startLng], employee && employee.homeLat!=null ? 15 : 11);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
+  _pinMap = map;
+  if(employee && employee.homeLat!=null){
+    _pinLatLng = {lat:employee.homeLat, lng:employee.homeLng};
+    _pinMarker = L.marker([employee.homeLat, employee.homeLng], {draggable:true}).addTo(map);
+    _pinMarker.on('dragend', ()=>{ const p = _pinMarker.getLatLng(); _pinLatLng = {lat:p.lat,lng:p.lng}; });
+  }
+  map.on('click', (ev)=>{
+    _pinLatLng = {lat:ev.latlng.lat, lng:ev.latlng.lng};
+    if(_pinMarker) _pinMarker.setLatLng(ev.latlng);
+    else { _pinMarker = L.marker(ev.latlng, {draggable:true}).addTo(map); _pinMarker.on('dragend', ()=>{ const p=_pinMarker.getLatLng(); _pinLatLng={lat:p.lat,lng:p.lng}; }); }
+  });
+  setTimeout(()=>map.invalidateSize(), 150);
+}
+function useMyGpsLocation(){
+  if(!navigator.geolocation){ alert("Your browser doesn't support GPS location."); return; }
+  navigator.geolocation.getCurrentPosition((pos)=>{
+    const lat = pos.coords.latitude, lng = pos.coords.longitude;
+    _pinLatLng = {lat,lng};
+    if(_pinMap){
+      _pinMap.setView([lat,lng], 16);
+      if(_pinMarker) _pinMarker.setLatLng([lat,lng]);
+      else { _pinMarker = L.marker([lat,lng], {draggable:true}).addTo(_pinMap); _pinMarker.on('dragend', ()=>{ const p=_pinMarker.getLatLng(); _pinLatLng={lat:p.lat,lng:p.lng}; }); }
+    }
+  }, ()=>alert("Couldn't get your location - check location permissions."), {enableHighAccuracy:true, timeout:8000});
+}
+async function saveMyLocation(){
+  if(!_pinLatLng){ alert("Tap the map (or use 'Use my current location') to drop a pin first."); return; }
+  const address = (document.getElementById("pinAddress")||{}).value || "";
+  try{
+    const r = await empApi("/location", {method:"POST", body: JSON.stringify({lat:_pinLatLng.lat, lng:_pinLatLng.lng, address})});
+    employee = r;
+    alert("Location saved.");
+    render();
+  }catch(e){ alert(e.message); }
+}
+
+function render(){
+  const app = document.getElementById("app");
+  const overlay = document.getElementById("themeOverlay");
+  overlay.innerHTML = themeModalHtml();
+  if(!portalKind){ app.innerHTML = portalChooserHtml(); return; }
+  if(portalKind==="employee"){
+    if(!empToken || !employee){ app.innerHTML = employeeLoginHtml(); return; }
+    app.innerHTML = empTopbarHtml() + empTabbarHtml() + `<main>${empBodyHtml()}</main>` + footerHtml();
+    return;
+  }
+  if(portalKind==="staff"){
+    if(!staffToken || !staffUser){ app.innerHTML = staffLoginHtml(); return; }
+    if(staffUser.mustChangePassword){ app.innerHTML = staffForcedPasswordChangeHtml(); return; }
+    app.innerHTML = staffTopbarHtml() + staffTabbarHtml() + `<main>${staffBodyHtml()}</main>` + footerHtml();
+    return;
+  }
+}
+function switchPortal(){ if(portalKind==='employee') empLogout(true); else staffLogout(true); backToChooser(); }
+function footerHtml(){ return `<div class="footer-note">Padmasri Travels &middot; Employee Transport Portal &middot; <a href="javascript:void(0)" onclick="switchPortal()" style="color:var(--grey);">Switch portal</a></div>`; }
+function errorBannerHtml(){ return lastError ? `<div class="banner error">${lastError}</div>` : ""; }
+
+function portalChooserHtml(){
+  return `
+  <div class="portal-pick">
+    <div class="pcard" onclick="chooseEmployeePortal()">
+      <div class="picon">🧑‍💼</div>
+      <div class="ptitle">I'm an Employee</div>
+      <div class="pdesc">Pin your location, request a ride, see your assigned vehicle &amp; driver.</div>
+    </div>
+    <div class="pcard" onclick="chooseStaffPortal()">
+      <div class="picon">🏢</div>
+      <div class="ptitle">Client Staff</div>
+      <div class="pdesc">Travel Desk Manager, Billing, or HOD - manage the roster, routes, and costing.</div>
+    </div>
+  </div>
+  <div class="footer-note">Padmasri Travels &middot; Employee Transport Portal</div>`;
+}
+function employeeLoginHtml(){
+  return `
+  <div class="login-wrap">
+    <div class="logo">🚌 Padmasri <span class="accent-script">Travels</span></div>
+    <div class="sub">Employee Transport - sign in with your mobile number and PIN</div>
+    ${errorBannerHtml()}
+    <div class="card">
+      <div class="field"><label>Mobile Number</label><input type="tel" id="empPhone" placeholder="10-digit mobile number" inputmode="numeric" maxlength="10" /></div>
+      <div class="field"><label>PIN</label><input type="password" id="empPin" placeholder="4-digit PIN" inputmode="numeric" maxlength="4" /></div>
+      <button class="btn" style="width:100%" onclick="doEmployeeLogin()" ${busy?"disabled":""}>${busy?"Signing in...":"Sign in"}</button>
+      <p class="muted" style="margin-top:10px;text-align:center;">Default PIN is 1234 unless your Travel Desk has changed it.</p>
+    </div>
+    <p style="text-align:center;"><a href="javascript:void(0)" onclick="backToChooser()" style="color:var(--grey);font-size:12.5px;">&larr; Back</a></p>
+  </div>`;
+}
+function staffLoginHtml(){
+  return `
+  <div class="login-wrap">
+    <div class="logo">🚌 Padmasri <span class="accent-script">Travels</span></div>
+    <div class="sub">Client Staff - Travel Desk Manager / Billing / HOD</div>
+    ${errorBannerHtml()}
+    <div class="card">
+      <div class="field"><label>Email or Mobile Number</label><input type="text" id="staffIdentifier" placeholder="you@company.com" /></div>
+      <div class="field"><label>Password</label><input type="password" id="staffPassword" placeholder="Your password" /></div>
+      <button class="btn" style="width:100%" onclick="doStaffLogin()" ${busy?"disabled":""}>${busy?"Signing in...":"Sign in"}</button>
+    </div>
+    <p style="text-align:center;"><a href="javascript:void(0)" onclick="backToChooser()" style="color:var(--grey);font-size:12.5px;">&larr; Back</a></p>
+  </div>`;
+}
+function staffForcedPasswordChangeHtml(){
+  return `
+  <div class="login-wrap">
+    <div class="logo">🚌 Padmasri <span class="accent-script">Travels</span></div>
+    <div class="sub">Set a permanent password to continue</div>
+    ${pwChangeError ? `<div class="banner error">${pwChangeError}</div>` : ""}
+    <div class="card">
+      <div class="field"><label>Current (Temporary) Password</label><input type="password" id="spwCurrent" /></div>
+      <div class="field"><label>New Password</label><input type="password" id="spwNew" /></div>
+      <div class="field"><label>Confirm New Password</label><input type="password" id="spwConfirm" /></div>
+      <p class="muted">More than 8 characters, with at least one letter, one number, and one symbol.</p>
+      <button class="btn" style="width:100%" onclick="submitStaffPasswordChange()">Set Password</button>
+    </div>
+  </div>`;
+}
+
+// ---------- employee shell ----------
+function empTopbarHtml(){
+  return `<header class="topbar">
+    <div class="brand">🚌 Padmasri <span class="accent-script">Travels</span></div>
+    <div>
+      <span class="who">${employee.name}${empClient?'<br/><span style="opacity:.8;">'+empClient.name+'</span>':''}</span>
+    </div>
+  </header>`;
+}
+function empTabbarHtml(){
+  const tabs = [["home","Home"],["ride","My Ride"],["request","Request"],["location","Location"],["settings","Settings"]];
+  return `<div class="tabbar">${tabs.map(([k,l])=>`<button class="${empTab===k?'active':''}" onclick="setEmpTab('${k}')">${l}</button>`).join("")}</div>`;
+}
+function empBodyHtml(){
+  if(empTab==="home") return empHomeHtml();
+  if(empTab==="ride") return empRideHtml();
+  if(empTab==="request") return empRequestHtml();
+  if(empTab==="location") return empLocationHtml();
+  if(empTab==="settings") return empSettingsHtml();
+  return "";
+}
+function empHomeHtml(){
+  const active = myRoute.routes && myRoute.routes[0];
+  const pendingReq = myRequests.find(r=>["pending","approved"].includes(r.status));
+  return `
+  <h1 class="page-title">Welcome, ${employee.name}</h1>
+  ${!employee.homeLat ? `<div class="banner">You haven't pinned your home location yet - go to the Location tab so we can plan your route.</div>` : ""}
+  <div class="card">
+    <h2 class="section-title">Your Ride</h2>
+    ${active ? `
+      <p><b>${active.direction==="pickup"?"Pickup":"Drop"}</b> - stop ${active.stopSeq} of ${active.totalStops} &middot; <span class="badge ${active.status}">${active.status}</span></p>
+      <p class="muted">Vehicle: ${active.vehicleReg||"Not assigned yet"} &middot; Driver: ${active.driverName||"Not assigned yet"}${active.driverPhone?" ("+active.driverPhone+")":""}</p>
+    ` : pendingReq ? `<p class="muted">Your request is <b>${pendingReq.status}</b> - once routed, your vehicle and driver will show up here.</p>` : `<p class="muted">No active ride. Go to the Request tab to ask for one.</p>`}
+  </div>`;
+}
+function empRideHtml(){
+  const routes = myRoute.routes || [];
+  if(!routes.length) return `<h1 class="page-title">My Ride</h1><div class="empty">No route assigned yet.</div>`;
+  return `<h1 class="page-title">My Ride</h1>` + routes.map(r=>`
+  <div class="card">
+    <h2 class="section-title">${r.direction==="pickup"?"Pickup":"Drop"} route <span class="badge ${r.status}">${r.status}</span></h2>
+    <div class="stop-row"><div class="stop-num">${r.stopSeq}</div><div>You board here - stop ${r.stopSeq} of ${r.totalStops}</div></div>
+    <p class="muted" style="margin-top:8px;">Vehicle: ${r.vehicleReg||"Not assigned yet"}<br/>Driver: ${r.driverName||"Not assigned yet"}${r.driverPhone?" - "+r.driverPhone:""}</p>
+  </div>`).join("");
+}
+function empRequestHtml(){
+  const active = myRequests.find(r=>["pending","approved"].includes(r.status));
+  return `
+  <h1 class="page-title">Transport Request</h1>
+  ${!employee.homeLat ? `<div class="banner">Pin your home location first (Location tab) before raising a request.</div>` : ""}
+  <div class="card">
+    ${active ? `
+      <p>Your request: <b>${active.type}</b> &middot; <span class="badge ${active.status}">${active.status}</span></p>
+      <p class="muted">Raised ${new Date(active.raisedAt).toLocaleDateString()}</p>
+      <button class="btn danger" onclick="cancelRequest('${active.id}')">Cancel Request</button>
+    ` : `
+      <p class="muted" style="margin-bottom:10px;">Ask for transport - Travel Desk will review, then you'll be added to the next route the office plans.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn" ${!employee.homeLat?"disabled":""} onclick="raiseRequest('pickup')">Request Pickup</button>
+        <button class="btn" ${!employee.homeLat?"disabled":""} onclick="raiseRequest('drop')">Request Drop</button>
+        <button class="btn" ${!employee.homeLat?"disabled":""} onclick="raiseRequest('both')">Request Both</button>
+      </div>
+    `}
+  </div>
+  ${myRequests.length ? `<div class="card"><h2 class="section-title">History</h2><table><tr><th>Date</th><th>Type</th><th>Status</th></tr>
+    ${myRequests.map(r=>`<tr><td>${new Date(r.raisedAt).toLocaleDateString()}</td><td>${r.type}</td><td><span class="badge ${r.status}">${r.status}</span></td></tr>`).join("")}
+  </table></div>` : ""}`;
+}
+function empLocationHtml(){
+  return `
+  <h1 class="page-title">Your Home Location</h1>
+  <div class="card">
+    <p class="muted" style="margin-bottom:10px;">Tap the map to drop a pin where we should pick you up/drop you off, or use your current GPS location. Drag the pin to fine-tune it.</p>
+    <div id="pinMap"></div>
+    <button class="btn secondary" style="margin-bottom:10px;" onclick="useMyGpsLocation()">📍 Use my current location</button>
+    <div class="field"><label>Address (optional, helps the driver)</label><input type="text" id="pinAddress" value="${(employee.homeAddress||"").replace(/"/g,'&quot;')}" placeholder="Flat/House no., street, landmark" /></div>
+    <button class="btn" onclick="saveMyLocation()">Save Location</button>
+    ${employee.locationPinnedAt ? `<p class="muted" style="margin-top:8px;">Last updated ${new Date(employee.locationPinnedAt).toLocaleString()}</p>` : ""}
+  </div>`;
+}
+function empSettingsHtml(){
+  return `
+  <h1 class="page-title">Settings</h1>
+  <div class="card">
+    <h2 class="section-title">Account</h2>
+    <p><b>${employee.name}</b><br/><span class="muted">${employee.phone} ${employee.department?(" &middot; "+employee.department):""}</span></p>
+    <button class="btn danger" style="margin-top:10px;" onclick="empLogout()">Log Out</button>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0;">Theme</h3>
+    <p class="muted" style="margin-bottom:10px;font-size:12.5px;">Pick an accent color for your account.</p>
+    <button class="btn secondary" onclick="toggleThemeModal()">Choose Theme</button>
+  </div>`;
+}
+
+// ---------- staff shell ----------
+function staffTopbarHtml(){
+  return `<header class="topbar">
+    <div class="brand">🚌 Padmasri <span class="accent-script">Travels</span></div>
+    <div>
+      <span class="who">${staffUser.name}<br/><span style="opacity:.8;">${roleLabel(staffUser.role)}${staffClient?" &middot; "+staffClient.name:""}</span></span>
+      <button class="gear" onclick="toggleThemeModal()">&#9881;</button>
+      <button class="logout" onclick="staffLogout()">Log out</button>
+    </div>
+  </header>`;
+}
+function roleLabel(r){ return {travel_desk_manager:"Travel Desk Manager", billing:"Billing", hod:"HOD"}[r] || r; }
+function staffTabbarHtml(){
+  let tabs = [];
+  if(staffUser.role==="travel_desk_manager") tabs = [["roster","Roster"],["requests","Requests"],["routes","Routes"],["optimize","Optimize"],["settings","Settings"]];
+  else if(staffUser.role==="billing") tabs = [["billing","Billing"],["settings","Settings"]];
+  else tabs = [["overview","Overview"],["settings","Settings"]];
+  return `<div class="tabbar">${tabs.map(([k,l])=>`<button class="${staffTab===k?'active':''}" onclick="setStaffTab('${k}')">${l}</button>`).join("")}</div>`;
+}
+function setStaffTab(tab){
+  staffTab = tab; render();
+  if(tab==="roster") loadRoster();
+  if(tab==="requests") loadRequests();
+  if(tab==="routes") loadRoutes();
+  if(tab==="billing") loadBilling();
+  if(tab==="overview") loadOverview();
+}
+function staffBodyHtml(){
+  if(staffTab==="roster") return rosterTabHtml();
+  if(staffTab==="requests") return requestsTabHtml();
+  if(staffTab==="routes") return routesTabHtml();
+  if(staffTab==="optimize") return optimizeTabHtml();
+  if(staffTab==="billing") return billingTabHtml();
+  if(staffTab==="overview") return overviewTabHtml();
+  if(staffTab==="settings") return staffSettingsHtml();
+  return "";
+}
+
+// -- Roster (Travel Desk Manager) --
+let roster = [];
+let bulkImportText = "";
+let bulkImportResult = null;
+async function loadRoster(){ try{ roster = await staffApi("/employees"); render(); }catch(e){} }
+function rosterTabHtml(){
+  return `
+  <h1 class="page-title">Employee Roster</h1>
+  <div class="card">
+    <h2 class="section-title">Add One Employee</h2>
+    <div class="grid cols-3">
+      <div class="field"><label>Name</label><input type="text" id="addEmpName" /></div>
+      <div class="field"><label>Mobile</label><input type="tel" id="addEmpPhone" maxlength="10" /></div>
+      <div class="field"><label>Department</label><input type="text" id="addEmpDept" /></div>
+    </div>
+    <button class="btn" onclick="addOneEmployee()">Add Employee</button>
+  </div>
+  <div class="card">
+    <h2 class="section-title">Bulk Import</h2>
+    <p class="muted" style="margin-bottom:8px;">One employee per line: <code>name, phone, department</code></p>
+    <textarea id="bulkImportBox" rows="6" placeholder="Ravi Kumar, 9000011111, Engineering&#10;Anita Rao, 9000022222, Finance" oninput="bulkImportText=this.value"></textarea>
+    <button class="btn" style="margin-top:8px;" onclick="doBulkImport()">Import</button>
+    ${bulkImportResult ? `<p class="muted" style="margin-top:8px;">Added ${bulkImportResult.added}, skipped ${bulkImportResult.skipped.length}.${bulkImportResult.skipped.length?" ("+bulkImportResult.skipped.map(s=>"row "+s.row+": "+s.reason).join("; ")+")":""}</p>` : ""}
+  </div>
+  <div class="card">
+    <h2 class="section-title">Roster (${roster.length})</h2>
+    ${roster.length ? `<table><tr><th>Name</th><th>Mobile</th><th>Department</th><th>Location Pinned</th><th>Status</th></tr>
+    ${roster.map(e=>`<tr><td>${e.name}</td><td>${e.phone}</td><td>${e.department||"-"}</td><td>${e.homeLat!=null?"Yes":"No"}</td><td>${e.active?"Active":"Inactive"}</td></tr>`).join("")}
+    </table>` : `<div class="empty">No employees yet - add one above or bulk import.</div>`}
+  </div>`;
+}
+async function addOneEmployee(){
+  const name = document.getElementById("addEmpName").value.trim();
+  const phone = document.getElementById("addEmpPhone").value.trim();
+  const department = document.getElementById("addEmpDept").value.trim();
+  if(!name || !phone){ alert("Name and mobile number are required."); return; }
+  try{
+    await staffApi("/employees", {method:"POST", body: JSON.stringify({name, phone, department})});
+    await loadRoster();
+  }catch(e){ alert(e.message); }
+}
+async function doBulkImport(){
+  const text = (document.getElementById("bulkImportBox")||{}).value || bulkImportText;
+  const rows = text.split("\n").map(l=>l.trim()).filter(Boolean).map(line=>{
+    const [name, phone, department] = line.split(",").map(x=>(x||"").trim());
+    return {name, phone, department};
+  });
+  if(!rows.length){ alert("Paste at least one row first."); return; }
+  try{
+    bulkImportResult = await staffApi("/employees/bulk", {method:"POST", body: JSON.stringify({rows})});
+    await loadRoster();
+  }catch(e){ alert(e.message); }
+}
+
+// -- Requests (Travel Desk Manager) --
+let requests = [];
+async function loadRequests(){ try{ requests = await staffApi("/requests"); render(); }catch(e){} }
+function requestsTabHtml(){
+  const pending = requests.filter(r=>r.status==="pending");
+  const decided = requests.filter(r=>r.status!=="pending");
+  return `
+  <h1 class="page-title">Transport Requests</h1>
+  <div class="card">
+    <h2 class="section-title">Pending (${pending.length})</h2>
+    ${pending.length ? `<table><tr><th>Employee</th><th>Type</th><th>Raised</th><th></th></tr>
+    ${pending.map(r=>`<tr><td>${r.employeeName}</td><td>${r.type}</td><td>${new Date(r.raisedAt).toLocaleDateString()}</td><td>
+      <button class="btn small" onclick="decideRequest('${r.id}','approved')">Approve</button>
+      <button class="btn small danger" onclick="decideRequest('${r.id}','rejected')">Reject</button>
+    </td></tr>`).join("")}</table>` : `<div class="empty">Nothing pending.</div>`}
+  </div>
+  <div class="card">
+    <h2 class="section-title">Decided (${decided.length})</h2>
+    ${decided.length ? `<table><tr><th>Employee</th><th>Type</th><th>Status</th></tr>
+    ${decided.map(r=>`<tr><td>${r.employeeName}</td><td>${r.type}</td><td><span class="badge ${r.status}">${r.status}</span></td></tr>`).join("")}</table>` : `<div class="empty">None yet.</div>`}
+  </div>`;
+}
+async function decideRequest(id, decision){
+  try{ await staffApi("/requests/"+id+"/decide", {method:"POST", body: JSON.stringify({decision})}); await loadRequests(); }
+  catch(e){ alert(e.message); }
+}
+
+// -- Routes (Travel Desk Manager + Billing + HOD read) --
+let routes = [];
+async function loadRoutes(){ try{ routes = await staffApi("/routes"); render(); }catch(e){} }
+function routesTabHtml(){
+  if(!routes.length) return `<h1 class="page-title">Routes</h1><div class="empty">No routes yet - run the optimizer from the Optimize tab.</div>`;
+  return `<h1 class="page-title">Routes</h1>` + routes.map(r=>`
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+      <h2 class="section-title" style="border:none;margin:0;padding:0;">${r.direction==="pickup"?"Pickup":"Drop"} &middot; ${r.seaterTier}-seater &middot; <span class="badge ${r.status}">${r.status}</span></h2>
+      ${r.status==="draft" ? `<button class="btn small" onclick="approveRoute('${r.id}')">Approve</button>` : ""}
+    </div>
+    <p class="muted">${r.totalEmployees} employees &middot; ${r.occupancyRatio}% occupancy &middot; ${r.totalDistanceKm} km${r.comfortViolations?` &middot; <span class="badge flag">${r.comfortViolations} comfort flag(s)</span>`:""}</p>
+    <p class="muted">Vehicle: ${r.assignedVehicleId||"Not assigned"} &middot; Driver: ${r.assignedDriverId||"Not assigned"}</p>
+    ${r.stops.map(s=>`<div class="stop-row"><div class="stop-num">${s.seq}</div><div>${s.name} - ${s.legKm}km leg, ${s.rideKm}km ride${s.comfortFlag?' <span class="badge flag">flagged</span>':''}</div></div>`).join("")}
+  </div>`).join("");
+}
+async function approveRoute(id){
+  try{ await staffApi("/routes/"+id+"/approve", {method:"POST"}); await loadRoutes(); }
+  catch(e){ alert(e.message); }
+}
+
+// -- Optimize (Travel Desk Manager) --
+let optimizeResult = null;
+function optimizeTabHtml(){
+  return `
+  <h1 class="page-title">Run Optimizer</h1>
+  <div class="card">
+    <p class="muted" style="margin-bottom:10px;">Groups every employee with an approved request into vehicle-sized, geography-aware routes. Re-running only replaces DRAFT routes - anything already approved/dispatched stays untouched.</p>
+    <div style="display:flex;gap:8px;">
+      <button class="btn" onclick="runOptimize('pickup')">Run Pickup Optimizer</button>
+      <button class="btn" onclick="runOptimize('drop')">Run Drop Optimizer</button>
+    </div>
+    ${optimizeResult ? `<p class="muted" style="margin-top:10px;">Generated ${optimizeResult.routes.length} route(s). <a href="javascript:void(0)" onclick="setStaffTab('routes')">View routes &rsaquo;</a></p>` : ""}
+  </div>`;
+}
+async function runOptimize(direction){
+  try{
+    optimizeResult = await staffApi("/optimize", {method:"POST", body: JSON.stringify({direction})});
+    render();
+  }catch(e){ alert(e.message); }
+}
+
+// -- Billing --
+let billingData = null;
+async function loadBilling(){ try{ billingData = await staffApi("/billing/summary"); render(); }catch(e){} }
+function billingTabHtml(){
+  if(!billingData) return `<h1 class="page-title">Billing</h1><div class="empty">Loading...</div>`;
+  const rows = billingData.byTier.filter(t=>t.routeCount>0 || t.ratePerRoute>0);
+  return `
+  <h1 class="page-title">Billing Summary</h1>
+  <div class="grid cols-3" style="margin-bottom:14px;">
+    <div class="kpi good"><div class="num">₹${billingData.totalDailyCost}</div><div class="label">Total daily cost</div></div>
+    <div class="kpi"><div class="num">${billingData.occupancy.routeCount}</div><div class="label">Active routes</div></div>
+    <div class="kpi"><div class="num">${billingData.occupancy.averageOccupancyRatio}%</div><div class="label">Average occupancy</div></div>
+  </div>
+  <div class="card">
+    <h2 class="section-title">By Seater Type</h2>
+    <table><tr><th>Tier</th><th>Routes</th><th>Rate/route</th><th>Daily cost</th></tr>
+    ${rows.map(t=>`<tr><td>${t.tier}-seater</td><td>${t.routeCount}</td><td>₹${t.ratePerRoute}</td><td>₹${t.dailyCost}</td></tr>`).join("")}
+    </table>
+  </div>`;
+}
+
+// -- HOD overview --
+let overviewData = null;
+async function loadOverview(){ try{ overviewData = await staffApi("/overview"); render(); }catch(e){} }
+function overviewTabHtml(){
+  if(!overviewData) return `<h1 class="page-title">Overview</h1><div class="empty">Loading...</div>`;
+  return `
+  <h1 class="page-title">Transport Overview</h1>
+  <div class="grid cols-4">
+    <div class="kpi"><div class="num">${overviewData.totalEmployees}</div><div class="label">Total employees</div></div>
+    <div class="kpi good"><div class="num">${overviewData.employeesWithLocation}</div><div class="label">Location pinned</div></div>
+    <div class="kpi warn"><div class="num">${overviewData.pendingRequests}</div><div class="label">Pending requests</div></div>
+    <div class="kpi"><div class="num">${overviewData.occupancy.averageOccupancyRatio}%</div><div class="label">Fleet occupancy</div></div>
+  </div>`;
+}
+
+function staffSettingsHtml(){
+  return `
+  <h1 class="page-title">Settings</h1>
+  <div class="card">
+    <h2 class="section-title">Account</h2>
+    <p><b>${staffUser.name}</b><br/><span class="muted">${roleLabel(staffUser.role)} &middot; ${staffUser.email||staffUser.phone}</span></p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0;">Theme</h3>
+    <button class="btn secondary" onclick="toggleThemeModal()">Choose Theme</button>
+  </div>`;
+}
+
+boot();
+</script>
+</body>
+</html>

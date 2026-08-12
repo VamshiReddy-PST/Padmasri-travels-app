@@ -877,6 +877,12 @@ async function renderLogin(){
             <div class="portal-desc">Sign in with your Email or Mobile Number &amp; Password to see your vehicles, trips, income earned and payments received.</div>
             <div class="portal-cta">Continue as Subvendor &rarr;</div>
           </div>
+          <div class="portal-card subvendor" onclick="window.location.href='/client.html'">
+            <div class="portal-icon">📍</div>
+            <div class="portal-title">Client Employee Transport</div>
+            <div class="portal-desc">Employees: pin your location &amp; request a ride. Travel Desk/Billing/HOD: manage the roster, routes and costing.</div>
+            <div class="portal-cta">Continue to Client Portal &rarr;</div>
+          </div>
         </div>
         <div class="portal-footnote">Padmasri Travels · Fleet Supervisor App</div>
       </div>
@@ -1135,10 +1141,10 @@ function tabsForInner(role){
   // per the Owner's explicit request, Ops Manager has no role in approving
   // odometer or fuel readings (they previously had odometer_verify; removed
   // on request).
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="admin") return [["admin_dashboard","Dashboard"],["admin_vehicles","Vehicles"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
@@ -1166,7 +1172,7 @@ const SIDEBAR_GROUP_META = {
 const TAB_GROUP_MAP = {
   my_vehicles:"fleet", onboarding:"fleet", admin_vehicles:"fleet", usage:"fleet",
   assignments:"fleet", routes:"fleet", subvendor_expenses:"fleet",
-  odometer_verify:"fleet", fuel_verify:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet",
+  odometer_verify:"fleet", fuel_verify:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
   subvendors:"fleet", hierarchy:"fleet",
   trips:"trips", my_attendance:"trips", attendance:"trips", my_expenses:"trips", queue:"trips",
   expenses:"finance", expenses_view:"finance", payroll:"finance", backup:"finance",
@@ -1268,6 +1274,7 @@ async function routeView(){
   if(tab==="odometer_verify") return odometerVerificationScreen();
   if(tab==="fuel_verify") return fuelVerificationScreen();
   if(tab==="gps_link") return gpsLinkScreen();
+  if(tab==="transport") return transportScreen();
   if(tab==="repairs") return repairRequestsScreen();
   if(tab==="workshop") return workshopScreen();
   if(tab==="smart_assistant") return smartAssistantScreen();
@@ -5206,6 +5213,191 @@ function collapsibleSection(key, title, count, bodyOrPreview, opts){
   </div>`;
 }
 
+// ---- Employee Transport (Owner/Ops Manager/Data Team) -----------------
+// The day-to-day roster/request/optimizer work happens in the client's own
+// portal (public/client.html, run by their Travel Desk Manager) - this
+// screen is for what only OUR staff can do: turn the module on for a
+// client, set the office location + contracted seater-tier rates, create
+// the client's Travel Desk Manager/Billing/HOD logins, and keep an eye on
+// occupancy/routes across every client from one place.
+let transportClientId = null;
+let transportOccupancy = null;
+let transportClientUsersList = [];
+let transportRoutesList = [];
+let _transportPinMap = null, _transportPinMarker = null, _transportPinLatLng = null;
+function setTransportClient(id){ transportClientId = id; goto('transport'); }
+async function transportScreen(){
+  const clients = meta.clients || [];
+  if(!clients.length) return `<h1 class="page-title">📍 Employee Transport</h1><div class="empty">No clients yet - add one under Overview first.</div>`;
+  if(!transportClientId || !clients.find(c=>c.id===transportClientId)) transportClientId = clients[0].id;
+  const client = clients.find(c=>c.id===transportClientId);
+  const cfg = client.transportConfig || {enabled:false, officeLat:null, officeLng:null, officeAddress:"", seaterRates:{}, maxPickupDetourKm:6, maxRideMinutes:75};
+
+  let occupancy = {routeCount:0,totalEmployees:0,totalCapacity:0,averageOccupancyRatio:0,byTier:[]};
+  let clientUsers = [], routes = [], employees = [], pendingRequests = 0;
+  try{
+    [occupancy, clientUsers, routes, employees] = await Promise.all([
+      api('/transport/occupancy?clientId='+client.id),
+      api('/clients/'+client.id+'/client-users'),
+      api('/transport/routes?clientId='+client.id),
+      api('/transport/employees?clientId='+client.id),
+    ]);
+    const reqs = await api('/transport/requests?clientId='+client.id+'&status=pending');
+    pendingRequests = reqs.length;
+  }catch(e){ /* fields keep their defaults below */ }
+  transportOccupancy = occupancy; transportClientUsersList = clientUsers; transportRoutesList = routes;
+
+  const seaterTiers = [5,7,8,12,22,40];
+  const rateInputs = seaterTiers.map(t=>`
+    <div class="field"><label>${t}-seater rate (₹/day)</label><input type="number" min="0" id="tr_rate_${t}" value="${(cfg.seaterRates||{})[t]||''}" placeholder="0" /></div>`).join("");
+
+  setTimeout(()=>initTransportPinMap(cfg.officeLat, cfg.officeLng), 0);
+  return `
+  <h1 class="page-title">📍 Employee Transport</h1>
+  <div class="card">
+    <div class="field"><label>Client</label>
+      <select onchange="setTransportClient(this.value)">
+        ${clients.map(c=>`<option value="${c.id}" ${c.id===client.id?'selected':''}>${c.name}${c.transportConfig&&c.transportConfig.enabled?' (enabled)':''}</option>`).join("")}
+      </select>
+    </div>
+  </div>
+
+  <div class="grid cols-4" style="margin-bottom:14px;">
+    <div class="kpi"><div class="num">${employees.length}</div><div class="label">Employees on roster</div></div>
+    <div class="kpi warn"><div class="num">${pendingRequests}</div><div class="label">Pending requests</div></div>
+    <div class="kpi"><div class="num">${occupancy.routeCount}</div><div class="label">Active routes</div></div>
+    <div class="kpi good"><div class="num">${occupancy.averageOccupancyRatio}%</div><div class="label">Occupancy</div></div>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Transport Settings</h2>
+    <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+      <input type="checkbox" id="tr_enabled" ${cfg.enabled?'checked':''} /> Enabled for this client
+    </label>
+    <div id="transportPinMap" style="height:280px;border-radius:12px;overflow:hidden;border:1px solid var(--border);margin-bottom:10px;"></div>
+    <p class="muted" style="margin-bottom:10px;">Tap the map to set the client's office location (used as the hub the optimizer routes everyone to/from).</p>
+    <div class="grid cols-3">
+      <div class="field"><label>Office Address (optional)</label><input type="text" id="tr_office_address" value="${(cfg.officeAddress||'').replace(/"/g,'&quot;')}" /></div>
+      <div class="field"><label>Max Detour (km)</label><input type="number" min="0" id="tr_max_detour" value="${cfg.maxPickupDetourKm}" /></div>
+      <div class="field"><label>Max Ride (minutes)</label><input type="number" min="0" id="tr_max_ride" value="${cfg.maxRideMinutes}" /></div>
+    </div>
+    <h3 style="margin-top:14px;">Contracted Rate Per Seater-Type</h3>
+    <div class="grid cols-3">${rateInputs}</div>
+    <button class="btn" style="margin-top:10px;" onclick="transportSaveConfig('${client.id}')">Save Settings</button>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Client Portal Logins</h2>
+    <table><tr><th>Name</th><th>Role</th><th>Email/Mobile</th><th>Status</th></tr>
+    ${clientUsers.length ? clientUsers.map(u=>`<tr><td>${u.name}</td><td>${({travel_desk_manager:"Travel Desk Manager",billing:"Billing",hod:"HOD"})[u.role]||u.role}</td><td>${u.email||u.phone}</td><td>${u.active?"Active":"Inactive"}</td></tr>`).join("") : `<tr><td colspan="4" class="muted">No portal logins yet.</td></tr>`}
+    </table>
+    <h3 style="margin-top:14px;">Add a Login</h3>
+    <div class="grid cols-4">
+      <div class="field"><label>Name</label><input type="text" id="tr_cu_name" /></div>
+      <div class="field"><label>Role</label>
+        <select id="tr_cu_role">
+          <option value="travel_desk_manager">Travel Desk Manager</option>
+          <option value="billing">Billing</option>
+          <option value="hod">HOD</option>
+        </select>
+      </div>
+      <div class="field"><label>Email or Mobile</label><input type="text" id="tr_cu_identifier" /></div>
+      <div class="field"><label>Temporary Password</label><input type="text" id="tr_cu_password" placeholder="Temp@1234" /></div>
+    </div>
+    <button class="btn" onclick="transportCreateClientUser('${client.id}')">Create Login</button>
+  </div>
+
+  <div class="card">
+    <h2 class="section-title">Routes</h2>
+    ${routes.length ? routes.map(r=>`
+      <div style="border-bottom:1px solid var(--border);padding:10px 0;">
+        <div class="flex-between">
+          <b>${r.direction==="pickup"?"Pickup":"Drop"} &middot; ${r.seaterTier}-seater &middot; ${r.totalEmployees} employees &middot; ${r.occupancyRatio}% occupancy${r.comfortViolations?` &middot; ${r.comfortViolations} flagged`:''}</b>
+          <span class="muted">${r.status}</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap;">
+          <select id="tr_route_vehicle_${r.id}">
+            <option value="">— No vehicle —</option>
+            ${vehicles.filter(v=>v.seatingCapacity>=r.totalEmployees).map(v=>`<option value="${v.id}" ${r.assignedVehicleId===v.id?'selected':''}>${v.reg} (${v.seatingCapacity}-seater)</option>`).join("")}
+          </select>
+          <button class="btn small secondary" onclick="transportAssignVehicle('${r.id}')">Assign Vehicle</button>
+          ${r.status==="draft"?`<button class="btn small" onclick="transportApproveRoute('${r.id}')">Approve</button>`:''}
+          ${r.status==="approved"?`<button class="btn small" onclick="transportDispatchRoute('${r.id}')">Dispatch</button>`:''}
+        </div>
+      </div>`).join("") : `<div class="muted">No routes yet - the client's Travel Desk Manager runs the optimizer from their portal.</div>`}
+  </div>`;
+}
+async function transportSaveConfig(clientId){
+  const seaterRates = {};
+  [5,7,8,12,22,40].forEach(t=>{
+    const el = document.getElementById('tr_rate_'+t);
+    if(el && el.value) seaterRates[t] = Number(el.value);
+  });
+  const body = {
+    enabled: document.getElementById('tr_enabled').checked,
+    officeLat: _transportPinLatLng ? _transportPinLatLng.lat : undefined,
+    officeLng: _transportPinLatLng ? _transportPinLatLng.lng : undefined,
+    officeAddress: document.getElementById('tr_office_address').value,
+    maxPickupDetourKm: Number(document.getElementById('tr_max_detour').value) || 6,
+    maxRideMinutes: Number(document.getElementById('tr_max_ride').value) || 75,
+    seaterRates,
+  };
+  try{
+    await api('/clients/'+clientId+'/transport-config', {method:'PATCH', body: JSON.stringify(body)});
+    alert('Transport settings saved.');
+    await goto('transport');
+  }catch(e){ alert(e.message); }
+}
+async function transportCreateClientUser(clientId){
+  const name = document.getElementById('tr_cu_name').value.trim();
+  const role = document.getElementById('tr_cu_role').value;
+  const identifier = document.getElementById('tr_cu_identifier').value.trim();
+  const password = document.getElementById('tr_cu_password').value;
+  if(!name || !identifier || !password){ alert('Name, email/mobile, and a temporary password are required.'); return; }
+  const isEmail = identifier.includes('@');
+  try{
+    await api('/clients/'+clientId+'/client-users', {method:'POST', body: JSON.stringify({name, role, email: isEmail?identifier:undefined, phone: isEmail?undefined:identifier, password})});
+    alert('Login created. Share the temporary password with them - they will be asked to set a new one on first login.');
+    await goto('transport');
+  }catch(e){ alert(e.message); }
+}
+async function transportAssignVehicle(routeId){
+  const sel = document.getElementById('tr_route_vehicle_'+routeId);
+  const vehicleId = sel ? sel.value : '';
+  try{
+    await api('/transport/routes/'+routeId+'/assign-vehicle', {method:'POST', body: JSON.stringify({vehicleId: vehicleId || null})});
+    await goto('transport');
+  }catch(e){ alert(e.message); }
+}
+async function transportApproveRoute(routeId){
+  try{ await api('/transport/routes/'+routeId+'/approve', {method:'POST'}); await goto('transport'); }
+  catch(e){ alert(e.message); }
+}
+async function transportDispatchRoute(routeId){
+  try{ await api('/transport/routes/'+routeId+'/dispatch', {method:'POST'}); await goto('transport'); }
+  catch(e){ alert(e.message); }
+}
+function initTransportPinMap(officeLat, officeLng){
+  const el = document.getElementById('transportPinMap');
+  if(!el || typeof L==="undefined") return;
+  if(_transportPinMap){ _transportPinMap.remove(); _transportPinMap = null; }
+  const startLat = officeLat!=null ? officeLat : 17.4, startLng = officeLng!=null ? officeLng : 78.45;
+  const map = L.map(el, {scrollWheelZoom:false, touchZoom:true, tap:true}).setView([startLat, startLng], officeLat!=null?15:11);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
+  _transportPinMap = map;
+  if(officeLat!=null){
+    _transportPinLatLng = {lat:officeLat, lng:officeLng};
+    _transportPinMarker = L.marker([officeLat, officeLng], {draggable:true}).addTo(map);
+    _transportPinMarker.on('dragend', ()=>{ const p=_transportPinMarker.getLatLng(); _transportPinLatLng={lat:p.lat,lng:p.lng}; });
+  }
+  map.on('click', (ev)=>{
+    _transportPinLatLng = {lat:ev.latlng.lat, lng:ev.latlng.lng};
+    if(_transportPinMarker) _transportPinMarker.setLatLng(ev.latlng);
+    else { _transportPinMarker = L.marker(ev.latlng, {draggable:true}).addTo(map); _transportPinMarker.on('dragend', ()=>{ const p=_transportPinMarker.getLatLng(); _transportPinLatLng={lat:p.lat,lng:p.lng}; }); }
+  });
+  setTimeout(()=>map.invalidateSize(), 150);
+}
+
 async function ownerDashboardScreen(){
   // Always land on the dashboard with the Live Fleet Map showing every
   // vehicle - any Running/Idle/Parked filter picked on a previous visit
@@ -5282,6 +5474,27 @@ async function ownerDashboardScreen(){
   if(fleetLive.vehicles && fleetLive.vehicles.length) setTimeout(()=>renderFleetMapMarkers(fleetLive.vehicles), 0);
   const fleetMapCard = fleetMapCardHtml(fleetLive);
 
+  // Employee Transport occupancy - fleet-wide, across every client with the
+  // module enabled. Only shown once there's at least one active route, so
+  // the dashboard doesn't show an empty card to Owners who haven't turned
+  // this on for any client yet.
+  let transportOccupancyCard = "";
+  try{
+    const occ = await api('/transport/occupancy');
+    if(occ.routeCount > 0){
+      transportOccupancyCard = `
+      <div class="card">
+        <div class="flex-between"><h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">📍 Employee Transport Occupancy</h2><a href="javascript:void(0)" onclick="goto('transport')" class="muted">Manage &rsaquo;</a></div>
+        <div class="grid cols-4" style="margin-top:12px;">
+          <div class="kpi"><div class="num">${occ.routeCount}</div><div class="label">Active routes</div></div>
+          <div class="kpi"><div class="num">${occ.totalEmployees}</div><div class="label">Employees riding</div></div>
+          <div class="kpi"><div class="num">${occ.totalCapacity}</div><div class="label">Total seats deployed</div></div>
+          <div class="kpi ${occ.averageOccupancyRatio>=70?'good':occ.averageOccupancyRatio>=40?'warn':'bad'}"><div class="num">${occ.averageOccupancyRatio}%</div><div class="label">Average occupancy</div></div>
+        </div>
+      </div>`;
+    }
+  }catch(e){ /* module not in use anywhere yet - card just stays empty */ }
+
   return `
   <div class="cmd-hero">
     <div class="cmd-hero-top">
@@ -5303,6 +5516,7 @@ async function ownerDashboardScreen(){
   </div>
 
   ${fleetMapCard}
+  ${transportOccupancyCard}
 
   ${reminderBanners.length ? collapsibleSection('reminders', '⏰ Reminders', reminderBanners.length, reminderBanners.join(""), {defaultOpen:true}) : ''}
 
@@ -6697,6 +6911,7 @@ async function payrollScreen(){
 Object.assign(window, {
   choosePortal,
   doLogin, doLogout, switchTab, goto, toggleSidebar, toggleSidebarGroup, playTripReplay, setFleetMapFilter, openFleetMapFullscreen, closeFleetMapFullscreen, setGpsLinkSearch, saveGpsLink, draftSet, updateBreathalyzer, startPhotoCapture,
+  setTransportClient, transportSaveConfig, transportCreateClientUser, transportAssignVehicle, transportApproveRoute, transportDispatchRoute,
   submitForcedPasswordChange, submitVoluntaryPasswordChange, saveTheme, resetTheme,
   updateDoc, updateDocCopy, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, renameClient, editSite, addDriver, addPerson, correctOdometer, captureBillPhoto, submitExpense, decideExpense,
