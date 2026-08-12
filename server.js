@@ -272,6 +272,10 @@ function backfillDefaults() {
   // touched. See loadTransportData()/saveTransportData() further down,
   // which follow the same "large data lives outside the main blob" pattern
   // already used for photos/backups/location history.
+  // Fuel-theft alerts are rare, low-volume events (see checkFuelTheftForVehicle()
+  // near the location-history poller above), so - like db.clientUsers - they're
+  // fine to keep inside the main db blob rather than needing their own store.
+  if (!Array.isArray(db.fuelTheftAlerts)) db.fuelTheftAlerts = [];
   if (!Array.isArray(db.clientUsers)) db.clientUsers = [];
   (db.clientUsers || []).forEach((cu) => {
     if (cu.theme === undefined) cu.theme = null;
@@ -984,7 +988,130 @@ async function pollLocationHistory() {
     } catch (err) {
       console.error(`Location history: failed to log a point for vehicle ${vehicle.id}:`, err.message);
     }
+    try {
+      await checkFuelTheftForVehicle(vehicle, liveTrackingPayloadFor(match));
+    } catch (err) {
+      console.error(`Fuel theft check: failed for vehicle ${vehicle.id}:`, err.message);
+    }
   }
+}
+
+// ---------- FUEL THEFT DETECTION ----------
+// Runs on every location-poll tick (LOCATION_POLL_MS, ~10s), piggybacking on
+// the Fleetx snapshot already fetched for GPS breadcrumbs above - no extra
+// API calls. The idea: fuel should only drop while a vehicle is actually
+// RUNNING (driving, or genuinely idling with the engine on - which still
+// burns a little fuel). A drop that happens while the vehicle's status is
+// anything else (PARKED, STANDBY, NO_POWER, DISCONNECTED, ...) - i.e. the
+// engine should be fully off - has no legitimate explanation other than
+// someone draining the tank, so it's flagged immediately. A drop while IDLE
+// gets a small explainable allowance for normal idle burn before it's
+// flagged, so a driver leaving the AC running at a stop doesn't trip a false
+// alarm.
+//
+// Deliberately does NOT try to be a perfect forensic tool - Fleetx's fuel
+// sensor has its own noise/rounding, and this can't distinguish "topped up
+// then immediately drained" from "sensor glitch". It's a first-pass alarm
+// for the owner/data team to go verify, not an automatic accusation.
+const FUEL_THEFT_MIN_DROP_LITRES = 5; // ignore anything smaller - sensor noise/rounding, not worth an alarm
+const FUEL_THEFT_IDLE_ALLOWANCE_LPH = 1.5; // litres/hour a genuinely-idling engine can plausibly burn
+const FUEL_THEFT_MAX_GAP_HOURS = 2; // a bigger gap than this (server was down, Fleetx was unreachable, etc.) isn't a reliable comparison - skip it rather than guess
+const _lastFuelCheck = {}; // vehicleId -> {fuelLitres, status, ts} - in-memory tick-to-tick baseline, same pattern as _lastLoggedPoint above
+function isVehicleStationaryStatus(status) {
+  return !!status && status !== "RUNNING";
+}
+// How much fuel drop is explainable (not theft) for a stationary vehicle in
+// this status over this many hours. IDLE gets a small allowance for a
+// genuinely running-but-not-moving engine; anything else (PARKED, STANDBY,
+// NO_POWER, DISCONNECTED, REMOVED, UNREACHABLE, INSHOP) should have the
+// engine fully off, so zero drop is explainable.
+function allowedFuelDropLitres(status, hoursElapsed) {
+  if (status === "IDLE") return FUEL_THEFT_IDLE_ALLOWANCE_LPH * hoursElapsed;
+  return 0;
+}
+// Opens or extends an "active" fuel-theft incident for this vehicle. Small,
+// low-frequency data (real incidents should be rare) - safe to keep inside
+// the main `db` blob and go through the normal save() path, same as
+// `db.clientUsers` etc.
+async function recordFuelTheftEvent(vehicle, litersLost, prevReading, currReading, nowIsoStr) {
+  if (!Array.isArray(db.fuelTheftAlerts)) db.fuelTheftAlerts = [];
+  let incident = db.fuelTheftAlerts.find((a) => a.vehicleId === vehicle.id && a.status === "active");
+  if (incident) {
+    incident.litersLost = Math.round((incident.litersLost + litersLost) * 10) / 10;
+    incident.endFuelLitres = currReading.fuelLitres;
+    incident.lastDetectedAt = nowIsoStr;
+  } else {
+    incident = {
+      id: uid("fuelalert"),
+      vehicleId: vehicle.id,
+      vehicleReg: vehicle.reg,
+      startedAt: nowIsoStr,
+      lastDetectedAt: nowIsoStr,
+      startFuelLitres: prevReading.fuelLitres,
+      endFuelLitres: currReading.fuelLitres,
+      litersLost: Math.round(litersLost * 10) / 10,
+      status: "active", // active -> resolved (auto, vehicle moved again / refuelled) or acknowledged (staff dismissed)
+      acknowledgedBy: null,
+      acknowledgedByName: null,
+      acknowledgedAt: null,
+      resolvedAt: null,
+      resolvedReason: null,
+      note: "",
+    };
+    db.fuelTheftAlerts.push(incident);
+    await audit(
+      { id: "system", name: "Fuel Theft Monitor" },
+      "fuel_theft_alert",
+      `Suspected fuel theft on ${vehicle.reg}: ~${incident.litersLost} L lost while the vehicle was ${currReading.status || "not running"}.`
+    );
+    return;
+  }
+  await save();
+}
+async function resolveActiveFuelTheftIncident(vehicleId, reason, nowIsoStr) {
+  if (!Array.isArray(db.fuelTheftAlerts)) return;
+  const incident = db.fuelTheftAlerts.find((a) => a.vehicleId === vehicleId && a.status === "active");
+  if (!incident) return;
+  incident.status = "resolved";
+  incident.resolvedAt = nowIsoStr;
+  incident.resolvedReason = reason;
+  await save();
+}
+// Called once per vehicle per poll tick from pollLocationHistory() above,
+// with the same standardized live payload the live-tracking endpoints use
+// (see liveTrackingPayloadFor()).
+async function checkFuelTheftForVehicle(vehicle, payload) {
+  if (!db || payload.fuelLitres == null) return;
+  const nowTs = Date.now();
+  const nowIsoStr = new Date(nowTs).toISOString();
+  const prev = _lastFuelCheck[vehicle.id];
+  _lastFuelCheck[vehicle.id] = { fuelLitres: payload.fuelLitres, status: payload.status, ts: nowTs };
+
+  // The vehicle is genuinely moving/running again, or fuel went up (a
+  // refuel) - either way, whatever was happening before is over. Close out
+  // any open incident so a later drop starts a fresh one instead of quietly
+  // padding an old total.
+  if (payload.status === "RUNNING") {
+    await resolveActiveFuelTheftIncident(vehicle.id, "Vehicle started moving again.", nowIsoStr);
+    return;
+  }
+  if (!prev) return; // first reading ever for this vehicle - nothing to compare yet
+  if (payload.fuelLitres > prev.fuelLitres) {
+    await resolveActiveFuelTheftIncident(vehicle.id, "Fuel level went up (refuelled).", nowIsoStr);
+    return;
+  }
+
+  const hoursElapsed = (nowTs - prev.ts) / 3600000;
+  if (hoursElapsed <= 0 || hoursElapsed > FUEL_THEFT_MAX_GAP_HOURS) return; // too long a gap to trust the comparison
+  if (!isVehicleStationaryStatus(prev.status) || !isVehicleStationaryStatus(payload.status)) return; // was moving at some point in this window - normal consumption
+
+  const drop = prev.fuelLitres - payload.fuelLitres;
+  if (drop <= 0) return;
+  const allowance = allowedFuelDropLitres(payload.status, hoursElapsed);
+  const suspiciousDrop = Math.round((drop - allowance) * 10) / 10;
+  if (suspiciousDrop < FUEL_THEFT_MIN_DROP_LITRES) return;
+
+  await recordFuelTheftEvent(vehicle, suspiciousDrop, prev, payload, nowIsoStr);
 }
 // Every logged point for one vehicle between two ISO timestamps, oldest to
 // newest - this is what Trip Replay draws/animates.
@@ -7644,6 +7771,48 @@ app.patch(
         : `${req.user.name} cleared the manual Fleetx link on vehicle ${vehicle.reg}${before ? ` (was "${before}")` : ""}`
     );
     res.json(vehicle);
+  })
+);
+
+// Fuel theft alerts - see checkFuelTheftForVehicle() near the location
+// history poller above for how these get created. Same visibility as other
+// fleet-wide alerts/reports (Owner/Ops Manager/Data Team); Site/Area
+// Supervisors see only alerts for vehicles at their own site(s), same
+// scoping used elsewhere for their vehicle-facing views.
+const FUEL_THEFT_ALERT_ROLES = ["owner", "ops_manager", "data_team", "site_supervisor", "area_supervisor"];
+function fuelTheftAlertsVisibleTo(user) {
+  let list = db.fuelTheftAlerts || [];
+  if (user.role === "site_supervisor" || user.role === "area_supervisor") {
+    const myVehicleIds = new Set((db.vehicles || []).filter((v) => v.siteId === user.siteId || (user.supervises || []).includes(v.siteId)).map((v) => v.id));
+    list = list.filter((a) => myVehicleIds.has(a.vehicleId));
+  }
+  return list.slice().sort((a, b) => (b.lastDetectedAt || "").localeCompare(a.lastDetectedAt || ""));
+}
+app.get(
+  "/api/fuel-theft-alerts",
+  requireAuth,
+  requireRole(...FUEL_THEFT_ALERT_ROLES),
+  (req, res) => {
+    const { status } = req.query;
+    let list = fuelTheftAlertsVisibleTo(req.user);
+    if (status) list = list.filter((a) => a.status === status);
+    res.json(list);
+  }
+);
+app.post(
+  "/api/fuel-theft-alerts/:id/acknowledge",
+  requireAuth,
+  requireRole(...FUEL_THEFT_ALERT_ROLES),
+  h(async (req, res) => {
+    const alert = (db.fuelTheftAlerts || []).find((a) => a.id === req.params.id);
+    if (!alert) return res.status(404).json({ error: "Alert not found." });
+    alert.status = "acknowledged";
+    alert.acknowledgedBy = req.user.id;
+    alert.acknowledgedByName = req.user.name;
+    alert.acknowledgedAt = nowIso();
+    alert.note = (req.body && req.body.note) || "";
+    await audit(req.user, "acknowledge_fuel_theft_alert", `${req.user.name} acknowledged a fuel theft alert for ${alert.vehicleReg} (${alert.litersLost} L)`);
+    res.json(alert);
   })
 );
 

@@ -5377,6 +5377,11 @@ async function transportDispatchRoute(routeId){
   try{ await api('/transport/routes/'+routeId+'/dispatch', {method:'POST'}); await goto('transport'); }
   catch(e){ alert(e.message); }
 }
+async function acknowledgeFuelTheftAlert(id){
+  if(!confirm('Mark this fuel theft alert as acknowledged? This just clears it from the dashboard - it stays on record.')) return;
+  try{ await api('/fuel-theft-alerts/'+id+'/acknowledge', {method:'POST'}); await goto('dashboard'); }
+  catch(e){ alert(e.message); }
+}
 function initTransportPinMap(officeLat, officeLng){
   const el = document.getElementById('transportPinMap');
   if(!el || typeof L==="undefined") return;
@@ -5495,6 +5500,29 @@ async function ownerDashboardScreen(){
     }
   }catch(e){ /* module not in use anywhere yet - card just stays empty */ }
 
+  // Fuel theft alerts - see checkFuelTheftForVehicle() on the backend. Only
+  // active (un-acknowledged) alerts show here; acknowledging one clears it
+  // from this card without deleting the record (still visible via the API
+  // with status=acknowledged if ever needed).
+  let fuelTheftAlertsCard = "";
+  try{
+    const alerts = await api('/fuel-theft-alerts?status=active');
+    if(alerts.length){
+      fuelTheftAlertsCard = `
+      <div class="card" style="border:1px solid #eab3ab;background:#fff8f7;">
+        <div class="flex-between"><h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;color:#7a2115;">⛽🚨 Suspected Fuel Theft</h2><span class="muted">${alerts.length} active alert${alerts.length===1?'':'s'}</span></div>
+        ${alerts.map(a=>`
+          <div style="border-bottom:1px solid #f0d5d1;padding:10px 0;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+            <div>
+              <b>${a.vehicleReg}</b> &middot; <span style="color:#7a2115;font-weight:600;">~${a.litersLost} L lost</span>
+              <div class="muted" style="font-size:12px;">Started ${fmtDMY(a.startedAt)} ${new Date(a.startedAt).toLocaleTimeString()} &middot; last detected ${new Date(a.lastDetectedAt).toLocaleTimeString()}</div>
+            </div>
+            <button class="btn small secondary" onclick="acknowledgeFuelTheftAlert('${a.id}')">Acknowledge</button>
+          </div>`).join("")}
+      </div>`;
+    }
+  }catch(e){ /* role doesn't see fuel-theft alerts, or there aren't any yet */ }
+
   return `
   <div class="cmd-hero">
     <div class="cmd-hero-top">
@@ -5516,6 +5544,7 @@ async function ownerDashboardScreen(){
   </div>
 
   ${fleetMapCard}
+  ${fuelTheftAlertsCard}
   ${transportOccupancyCard}
 
   ${reminderBanners.length ? collapsibleSection('reminders', '⏰ Reminders', reminderBanners.length, reminderBanners.join(""), {defaultOpen:true}) : ''}
@@ -6911,7 +6940,7 @@ async function payrollScreen(){
 Object.assign(window, {
   choosePortal,
   doLogin, doLogout, switchTab, goto, toggleSidebar, toggleSidebarGroup, playTripReplay, setFleetMapFilter, openFleetMapFullscreen, closeFleetMapFullscreen, setGpsLinkSearch, saveGpsLink, draftSet, updateBreathalyzer, startPhotoCapture,
-  setTransportClient, transportSaveConfig, transportCreateClientUser, transportAssignVehicle, transportApproveRoute, transportDispatchRoute,
+  setTransportClient, transportSaveConfig, transportCreateClientUser, transportAssignVehicle, transportApproveRoute, transportDispatchRoute, acknowledgeFuelTheftAlert,
   submitForcedPasswordChange, submitVoluntaryPasswordChange, saveTheme, resetTheme,
   updateDoc, updateDocCopy, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, renameClient, editSite, addDriver, addPerson, correctOdometer, captureBillPhoto, submitExpense, decideExpense,
