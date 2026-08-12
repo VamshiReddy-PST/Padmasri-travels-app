@@ -1428,7 +1428,7 @@ const GEOFENCE_METERS = 400; // configurable "close enough to site" radius
 // true VRP solver - it needs no external routing API or paid geocoding
 // (employees supply their own coordinates by dropping a pin in-app), and
 // runs instantly even for a client with 1000+ employees.
-const TRANSPORT_SEATER_TIERS = [5, 7, 8, 12, 22, 40];
+const TRANSPORT_SEATER_TIERS = [5, 7, 8, 12, 14, 17, 20, 22, 28, 32, 35, 36, 37, 39, 40, 41, 42, 50, 55];
 const CLIENT_STAFF_ROLES = ["travel_desk_manager", "billing", "hod"];
 const TRANSPORT_AVG_SPEED_KMH = 25; // assumed average city speed - converts the client's "max ride minutes" comfort limit into a distance budget
 
