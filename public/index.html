@@ -4850,6 +4850,7 @@ async function liveTrackingCardHtml(vehicleId){
     const seatingCapacity = vMeta ? vMeta.seatingCapacity : null;
     setTimeout(()=>{
       renderVehicleMiniMap(mapContainerId, d.latitude, d.longitude, d.status, seatingCapacity);
+      refreshVehicleTripPath(vehicleId);
       startLiveTrackingPolling(vehicleId);
     }, 0);
   }
@@ -4883,7 +4884,20 @@ function startLiveTrackingPolling(vehicleId){
       const vMeta = vehicles.find(v=>v.id===vehicleId);
       renderVehicleMiniMap(`vehicleMiniMap_${vehicleId}`, d.latitude, d.longitude, d.status, vMeta ? vMeta.seatingCapacity : null);
     }
+    refreshVehicleTripPath(vehicleId);
   }, 10000);
+}
+// Fetches the "since it last started moving" breadcrumb trail (see
+// GET /api/vehicles/:id/current-trip-path on the backend) and draws/extends
+// the path polyline + start marker on this vehicle's mini map. Called once
+// on initial load and again every poll tick so the trace keeps growing for
+// as long as the trip continues.
+async function refreshVehicleTripPath(vehicleId){
+  const mapContainerId = `vehicleMiniMap_${vehicleId}`;
+  if(!document.getElementById(mapContainerId)) return;
+  let data;
+  try{ data = await api(`/vehicles/${vehicleId}/current-trip-path`); }catch(e){ return; } // non-essential - the marker/stats still work without the trace
+  updateVehicleTripPath(mapContainerId, data.points || []);
 }
 
 // ---- Trip Replay ---------------------------------------------------------
@@ -5001,17 +5015,41 @@ function busDivIcon(status, seatingCapacity){
   </svg>`;
   return L.divIcon({ html: svg, className: "bus-marker-icon", iconSize:[size,size], iconAnchor:[size/2, size/2] });
 }
-const _miniMapInstances = {}; // containerId -> {map, marker}
+// Glides a marker from wherever it currently is to a new position over
+// durationMs, instead of snapping there instantly - makes a 10-second poll
+// tick look like the vehicle actually drove to its new spot rather than
+// teleporting. Skipped for a no-op (nothing moved) or an implausibly large
+// jump (a long gap in GPS signal, or the very first fix) - those snap
+// instantly instead of visibly "teleporting" the bus across the map over a
+// full second, which would look like a glitch rather than movement.
+const _markerAnimations = new WeakMap(); // marker -> animation frame id, so a marker mid-animation from the previous tick doesn't fight a new one
+function animateMarkerTo(marker, newLatLng, durationMs){
+  const existingFrame = _markerAnimations.get(marker);
+  if(existingFrame) cancelAnimationFrame(existingFrame);
+  const start = marker.getLatLng();
+  const end = L.latLng(newLatLng);
+  const distanceMeters = start.distanceTo(end);
+  if(distanceMeters < 1 || distanceMeters > 3000){ marker.setLatLng(end); return; }
+  const startTime = performance.now();
+  function step(now){
+    const t = Math.min(1, (now - startTime) / durationMs);
+    marker.setLatLng([start.lat + (end.lat-start.lat)*t, start.lng + (end.lng-start.lng)*t]);
+    if(t < 1) _markerAnimations.set(marker, requestAnimationFrame(step));
+    else _markerAnimations.delete(marker);
+  }
+  _markerAnimations.set(marker, requestAnimationFrame(step));
+}
+const _miniMapInstances = {}; // containerId -> {map, marker, pathLine, startMarker}
 function renderVehicleMiniMap(containerId, lat, lng, status, seatingCapacity){
   const el = document.getElementById(containerId);
   if(!el || typeof L==="undefined" || lat==null || lng==null) return;
   const existing = _miniMapInstances[containerId];
   if(existing){
-    // Same map, same marker - just move it (and refresh its icon in case
-    // status changed) so the bus actually glides to its new position on
-    // every 10-second poll instead of the whole map flashing and
-    // re-centering, and so whatever zoom/pan the person left it at stays put.
-    existing.marker.setLatLng([lat,lng]);
+    // Same map, same marker - just glide it to the new spot (and refresh
+    // its icon in case status changed) so the bus actually moves on every
+    // 10-second poll instead of the whole map flashing and re-centering,
+    // and so whatever zoom/pan the person left it at stays put.
+    animateMarkerTo(existing.marker, [lat,lng], 900);
     existing.marker.setIcon(busDivIcon(status, seatingCapacity));
     return;
   }
@@ -5022,7 +5060,32 @@ function renderVehicleMiniMap(containerId, lat, lng, status, seatingCapacity){
   const map = L.map(el, {scrollWheelZoom:false, zoomControl:false, touchZoom:true, tap:true, bounceAtZoomLimits:false}).setView([lat,lng], 15);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
   const marker = L.marker([lat,lng], {icon: busDivIcon(status, seatingCapacity)}).addTo(map);
-  _miniMapInstances[containerId] = {map, marker};
+  _miniMapInstances[containerId] = {map, marker, pathLine: null, startMarker: null};
+}
+// Draws (or updates) the polyline tracing where this vehicle has been since
+// it last started moving - see GET /api/vehicles/:id/current-trip-path on
+// the backend for how "last started" is determined. A small green dot marks
+// the starting point with a tooltip showing when/where that was, so
+// "where did this vehicle start from" is answered at a glance without
+// digging into full Trip Replay. Called on the same 10-second cadence as
+// the marker/stat refresh, so the trace grows as the trip continues.
+function updateVehicleTripPath(containerId, points){
+  const inst = _miniMapInstances[containerId];
+  if(!inst || !points || points.length < 2) return;
+  const latlngs = points.filter(p=>p.lat!=null && p.lng!=null).map(p=>[p.lat, p.lng]);
+  if(latlngs.length < 2) return;
+  if(inst.pathLine){
+    inst.pathLine.setLatLngs(latlngs);
+  } else {
+    inst.pathLine = L.polyline(latlngs, {color:'#4C6A2B', weight:4, opacity:.75}).addTo(inst.map);
+  }
+  const startPoint = points[0];
+  if(inst.startMarker){
+    inst.startMarker.setLatLng([startPoint.lat, startPoint.lng]);
+  } else {
+    inst.startMarker = L.circleMarker([startPoint.lat, startPoint.lng], {radius:6, color:'#2E7D32', weight:2, fillColor:'#2E7D32', fillOpacity:1}).addTo(inst.map);
+  }
+  inst.startMarker.bindTooltip(`Started ${timeAgoLabel(startPoint.ts)}${startPoint.address? ' near '+startPoint.address : ''}`);
 }
 // ---- Live Fleet Map (dashboard-wide) -----------------------------------
 // The KPI tiles above the map double as filters (click "Running" to show
@@ -5162,7 +5225,7 @@ function updateFleetMapMarkerPositions(list){
     if(_fleetMapMarkers[v.vehicleId]){
       const marker = _fleetMapMarkers[v.vehicleId];
       const vMeta = vehicles.find(x=>x.id===v.vehicleId);
-      marker.setLatLng([v.latitude, v.longitude]);
+      animateMarkerTo(marker, [v.latitude, v.longitude], 900);
       marker.setIcon(busDivIcon(v.status, vMeta ? vMeta.seatingCapacity : null));
       bindFleetMarkerPopup(marker, v); // refresh popup content in case speed/fuel/status changed since the last poll
     } else {

@@ -8056,6 +8056,38 @@ app.get(
   })
 );
 
+// Finds the most recent point where this vehicle's status switched from
+// stationary (PARKED/IDLE/STANDBY/etc.) to RUNNING - i.e. "the last time it
+// started moving" - and returns every recorded breadcrumb from there up to
+// now, so the live tracking map can trace the path travelled since then.
+// Powers the polyline drawn on the Today's Status live map; refetched on
+// every 10-second poll tick so the trace grows as the vehicle keeps moving.
+// Falls back to the earliest point in the lookback window if no such
+// transition shows up in it (either it's been running the whole window, or
+// recorded history simply doesn't go back far enough yet).
+app.get(
+  "/api/vehicles/:id/current-trip-path",
+  requireAuth,
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+    const lookbackHours = Math.min(48, Math.max(1, Number(req.query.lookbackHours) || 24));
+    const toIso = nowIso();
+    const fromIso = new Date(Date.now() - lookbackHours * 3600000).toISOString();
+    const points = await getLocationHistory(vehicle.id, fromIso, toIso);
+    if (!points.length) return res.json({ points: [], tripStartAt: null });
+    let startIdx = 0;
+    for (let i = points.length - 1; i > 0; i--) {
+      if (isVehicleStationaryStatus(points[i - 1].status) && points[i].status === "RUNNING") {
+        startIdx = i;
+        break;
+      }
+    }
+    const path = points.slice(startIdx);
+    res.json({ points: path, tripStartAt: path[0] ? path[0].ts : null });
+  })
+);
+
 // Per-vehicle fill-to-fill average mileage for a custom date/time range -
 // see computeTankToTankMileage() near getLocationHistory() above. Powers
 // the average-mileage card on the Fuel Pattern screen, sharing the same
