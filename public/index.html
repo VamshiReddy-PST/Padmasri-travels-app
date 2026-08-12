@@ -803,7 +803,22 @@ async function boot(){
       renderForcedPasswordChange();
       return;
     }
-    view.tab = defaultTab(currentUser.role);
+    // Land back on whatever screen this same user last had open (e.g. a
+    // reload/browser refresh, or the Render free-tier cold-start after the
+    // GPS poller wakes it back up) instead of always bouncing to the
+    // default tab. Only trusted for the same role, in case someone else
+    // logs into a shared browser/computer - a stale screen from a
+    // different role would likely just 404 into "Nothing here" anyway, but
+    // no reason to risk it.
+    let restoredView = false;
+    try{
+      const saved = JSON.parse(localStorage.getItem("fleetLastView") || "null");
+      if(saved && saved.role === currentUser.role && saved.view && saved.view.tab){
+        view = saved.view;
+        restoredView = true;
+      }
+    }catch(e){}
+    if(!restoredView) view.tab = defaultTab(currentUser.role);
     await loadCoreData();
     render();
   }catch(e){
@@ -828,6 +843,7 @@ async function loadCoreData(){
 function doLogout(silent){
   authToken = null; currentUser = null; ownerAssignUnlocked = false;
   localStorage.removeItem("fleetAuthToken");
+  localStorage.removeItem("fleetLastView"); // don't hand the next person to log in (maybe a different user, same shared computer) whatever screen this session was looking at
   if(!silent) api("/logout", {method:"POST"}).catch(()=>{});
   view = {tab:null, name:"home"};
   loginPortal = null;
@@ -1262,6 +1278,13 @@ async function renderMain(){
   const main = document.getElementById("main");
   try{
     main.innerHTML = await routeView();
+    // Remember this screen so a page refresh (or the app reopening after
+    // being closed) comes back here instead of the default tab. Saved only
+    // after a successful render, so a broken/stale view never gets baked
+    // in as "the" screen to keep restoring.
+    if(currentUser){
+      try{ localStorage.setItem("fleetLastView", JSON.stringify({role: currentUser.role, view})); }catch(e){}
+    }
   }catch(e){
     main.innerHTML = `<div class="banner error">${e.message}</div>`;
   }
