@@ -987,6 +987,7 @@ async function pollLocationHistory() {
       speed: typeof match.speed === "number" ? Math.round(match.speed) : null,
       status: match.currentStatus || null,
       fuel: livePayload.fuelLitres,
+      odometer: livePayload.odometerKm,
     };
     _lastLoggedPoint[vehicle.id] = { lat: point.lat, lng: point.lng, status: point.status, ts: point.ts };
     try {
@@ -1046,7 +1047,17 @@ async function recordFuelTheftEvent(vehicle, litersLost, prevReading, currReadin
     incident.litersLost = Math.round((incident.litersLost + litersLost) * 10) / 10;
     incident.endFuelLitres = currReading.fuelLitres;
     incident.lastDetectedAt = nowIsoStr;
+    // Refresh location too (the vehicle should be stationary through an
+    // active incident, but this keeps it accurate if GPS drifts a little).
+    if (currReading.latitude != null) incident.latitude = currReading.latitude;
+    if (currReading.longitude != null) incident.longitude = currReading.longitude;
+    if (currReading.address) incident.address = currReading.address;
   } else {
+    const locationLabel = currReading.address
+      ? currReading.address
+      : currReading.latitude != null
+      ? `${currReading.latitude}, ${currReading.longitude}`
+      : "an unknown location (no GPS fix)";
     incident = {
       id: uid("fuelalert"),
       vehicleId: vehicle.id,
@@ -1056,6 +1067,9 @@ async function recordFuelTheftEvent(vehicle, litersLost, prevReading, currReadin
       startFuelLitres: prevReading.fuelLitres,
       endFuelLitres: currReading.fuelLitres,
       litersLost: Math.round(litersLost * 10) / 10,
+      latitude: currReading.latitude != null ? currReading.latitude : null,
+      longitude: currReading.longitude != null ? currReading.longitude : null,
+      address: currReading.address || null,
       status: "active", // active -> resolved (auto, vehicle moved again / refuelled) or acknowledged (staff dismissed)
       acknowledgedBy: null,
       acknowledgedByName: null,
@@ -1068,7 +1082,7 @@ async function recordFuelTheftEvent(vehicle, litersLost, prevReading, currReadin
     await audit(
       { id: "system", name: "Fuel Theft Monitor" },
       "fuel_theft_alert",
-      `Suspected fuel theft on ${vehicle.reg}: ~${incident.litersLost} L lost while the vehicle was ${currReading.status || "not running"}.`
+      `Suspected fuel theft on ${vehicle.reg}: ~${incident.litersLost} L lost while the vehicle was ${currReading.status || "not running"} near ${locationLabel}, detected at ${nowIsoStr}.`
     );
     return;
   }

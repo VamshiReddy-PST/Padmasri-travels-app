@@ -9,6 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@1,500;1,600;1,700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.32.0/plotly.min.js"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
@@ -5175,11 +5176,14 @@ async function vehicleTodayStatusScreen(vehicleId){
   `;
 }
 
-// ---------- Fuel Pattern graph (per vehicle, date-range) ----------
+// ---------- Fuel Pattern graph (per vehicle, date+time range) ----------
 // Reuses the same server-recorded breadcrumb trail Trip Replay draws from
-// (GET /api/vehicles/:id/trip-history) - each point already carries a `fuel`
-// reading whenever Fleetx had one at that moment (see the location-history
-// poller on the backend), so no new endpoint or storage was needed here.
+// (GET /api/vehicles/:id/trip-history) - each point already carries `fuel`
+// and `odometer` readings whenever Fleetx had them at that moment (see the
+// location-history poller on the backend), so no new endpoint or storage
+// was needed here.
+let _fuelGraphPoints = []; // last-loaded points, kept around so the show/hide
+                            // toggles below can redraw without refetching
 async function fuelGraphScreen(vehicleId){
   const v = vehicles.find(x=>x.id===vehicleId);
   if(!v){
@@ -5190,77 +5194,147 @@ async function fuelGraphScreen(vehicleId){
   const weekAgo = new Date(Date.now()-7*86400000).toISOString().slice(0,10);
   const from = view.from || weekAgo;
   const to = view.to || today;
+  const fromTime = view.fromTime || "00:00";
+  const toTime = view.toTime || "23:59";
+  const showFuel = view.showFuel !== false; // default on
+  const showOdo = view.showOdo !== false; // default on
 
   let points = [], loadError = "";
   try{
-    const data = await api(`/vehicles/${vehicleId}/trip-history?from=${from}T00:00:00.000Z&to=${to}T23:59:59.999Z`);
-    points = (data.points||[]).filter(p=>p.fuel!=null).sort((a,b)=> a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0);
+    const data = await api(`/vehicles/${vehicleId}/trip-history?from=${from}T${fromTime}:00.000Z&to=${to}T${toTime}:59.999Z`);
+    points = (data.points||[]).filter(p=>p.fuel!=null || p.odometer!=null).sort((a,b)=> a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0);
   }catch(e){ loadError = e.message; }
+  _fuelGraphPoints = points;
 
+  const fuelPoints = points.filter(p=>p.fuel!=null);
+  const odoPoints = points.filter(p=>p.odometer!=null);
   let summary = null;
-  if(points.length){
-    const vals = points.map(p=>p.fuel);
+  if(fuelPoints.length || odoPoints.length){
     let totalDrop = 0;
-    for(let i=1;i<points.length;i++){ const d = points[i-1].fuel - points[i].fuel; if(d>0) totalDrop += d; }
-    summary = { min: Math.min(...vals), max: Math.max(...vals), totalDrop: Math.round(totalDrop*10)/10 };
+    for(let i=1;i<fuelPoints.length;i++){ const d = fuelPoints[i-1].fuel - fuelPoints[i].fuel; if(d>0) totalDrop += d; }
+    const kmRun = odoPoints.length>=2 ? Math.round((odoPoints[odoPoints.length-1].odometer - odoPoints[0].odometer)*10)/10 : null;
+    summary = {
+      min: fuelPoints.length ? Math.min(...fuelPoints.map(p=>p.fuel)) : null,
+      max: fuelPoints.length ? Math.max(...fuelPoints.map(p=>p.fuel)) : null,
+      totalDrop: Math.round(totalDrop*10)/10,
+      kmRun,
+    };
   }
 
-  setTimeout(()=>drawFuelChart(points), 0);
+  const spatialPoints = points.filter(p=>p.lat!=null && p.lng!=null && p.fuel!=null);
+
+  setTimeout(()=>{ drawFuelChart(points, {showFuel, showOdo}); drawFuel3D(spatialPoints); }, 0);
 
   return `
   <button class="btn secondary small" onclick="goto('vehicle_status',{vehicleId:'${v.id}'})">&larr; Back to ${v.reg}</button>
   <h1 class="page-title">⛽ ${v.reg} - Fuel Pattern</h1>
   <div class="card">
-    <div class="grid cols-3">
-      <div class="field"><label>From</label><input type="date" id="fg_from" value="${from}" max="${today}" /></div>
-      <div class="field"><label>To</label><input type="date" id="fg_to" value="${to}" max="${today}" /></div>
-      <div class="field" style="display:flex;align-items:flex-end;"><button class="btn" onclick="loadFuelGraph('${v.id}')">Load</button></div>
+    <div class="grid cols-4">
+      <div class="field"><label>From date</label><input type="date" id="fg_from" value="${from}" max="${today}" /></div>
+      <div class="field"><label>From time</label><input type="time" id="fg_from_time" value="${fromTime}" /></div>
+      <div class="field"><label>To date</label><input type="date" id="fg_to" value="${to}" max="${today}" /></div>
+      <div class="field"><label>To time</label><input type="time" id="fg_to_time" value="${toTime}" /></div>
     </div>
+    <button class="btn" style="margin-top:8px;" onclick="loadFuelGraph('${v.id}')">Load</button>
   </div>
   ${loadError ? `<div class="banner error">${loadError}</div>` : ""}
   <div class="card">
-    <h2 class="section-title">Fuel level over time</h2>
-    ${points.length ? `<canvas id="fuelGraphCanvas" height="90"></canvas>` :
-      `<div class="empty">No fuel readings recorded for this vehicle in this date range yet. Fuel history only starts building up once this vehicle is linked to GPS/fuel-sensor tracking (Fleetx) - see GPS Device Linking.</div>`}
+    <div class="flex-between">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Fuel &amp; distance over time</h2>
+      <div style="display:flex;gap:14px;font-size:13px;">
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="fg_show_fuel" ${showFuel?'checked':''} onchange="fuelGraphToggle('${v.id}')" /> Fuel (L)</label>
+        <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="fg_show_odo" ${showOdo?'checked':''} onchange="fuelGraphToggle('${v.id}')" /> Odometer (km)</label>
+      </div>
+    </div>
+    ${points.length ? `<canvas id="fuelGraphCanvas" height="90" style="margin-top:10px;"></canvas>` :
+      `<div class="empty">No fuel or odometer readings recorded for this vehicle in this window yet. History only starts building up once this vehicle is linked to GPS/fuel-sensor tracking (Fleetx) - see GPS Device Linking.</div>`}
   </div>
   ${summary ? `
-  <div class="grid cols-3">
-    <div class="kpi"><div class="num">${summary.min} L</div><div class="label">Lowest reading</div></div>
-    <div class="kpi"><div class="num">${summary.max} L</div><div class="label">Highest reading</div></div>
+  <div class="grid cols-4">
+    <div class="kpi"><div class="num">${summary.min!=null?summary.min:'-'} L</div><div class="label">Lowest fuel reading</div></div>
+    <div class="kpi"><div class="num">${summary.max!=null?summary.max:'-'} L</div><div class="label">Highest fuel reading</div></div>
     <div class="kpi ${summary.totalDrop>15?'warn':''}"><div class="num">${summary.totalDrop} L</div><div class="label">Total fuel drop (all dips combined)</div></div>
+    <div class="kpi"><div class="num">${summary.kmRun!=null?summary.kmRun:'-'}</div><div class="label">Kilometers run in this window</div></div>
+  </div>` : ""}
+  ${spatialPoints.length>1 ? `
+  <div class="card">
+    <h2 class="section-title">3D view: location &times; fuel level &times; odometer</h2>
+    <p class="muted" style="margin-bottom:10px;">Drag to rotate. Each point is a GPS fix - height is the fuel level at that spot; hover a point to see the exact odometer reading and time.</p>
+    <div id="fuelGraph3d" style="height:420px;"></div>
   </div>` : ""}
   `;
 }
 function loadFuelGraph(vehicleId){
   const from = document.getElementById('fg_from').value;
   const to = document.getElementById('fg_to').value;
-  if(from > to){ alert('The "From" date must be before the "To" date.'); return; }
-  goto('fuel_graph', {vehicleId, from, to});
+  const fromTime = document.getElementById('fg_from_time').value || '00:00';
+  const toTime = document.getElementById('fg_to_time').value || '23:59';
+  if(from > to || (from===to && fromTime > toTime)){ alert('The "From" date/time must be before the "To" date/time.'); return; }
+  goto('fuel_graph', {vehicleId, from, to, fromTime, toTime});
+}
+function fuelGraphToggle(vehicleId){
+  const showFuel = document.getElementById('fg_show_fuel').checked;
+  const showOdo = document.getElementById('fg_show_odo').checked;
+  drawFuelChart(_fuelGraphPoints, {showFuel, showOdo});
+  // Remember the choice for the next Load/navigation without a full re-fetch.
+  view.showFuel = showFuel; view.showOdo = showOdo;
 }
 let _fuelChart = null;
-function drawFuelChart(points){
+function drawFuelChart(points, opts){
   const el = document.getElementById('fuelGraphCanvas');
   if(!el) return;
   if(_fuelChart){ _fuelChart.destroy(); _fuelChart = null; }
+  const showFuel = opts ? opts.showFuel !== false : true;
+  const showOdo = opts ? opts.showOdo !== false : true;
+  const labels = points.map(p=>new Date(p.ts).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}));
+  const datasets = [];
+  if(showFuel){
+    datasets.push({
+      label: 'Fuel (L)', yAxisID: 'yFuel',
+      data: points.map(p=>p.fuel),
+      borderColor: '#00A3A6', backgroundColor: 'rgba(0,163,166,0.12)',
+      fill: true, tension: 0.15, pointRadius: points.length>150 ? 0 : 1.5, spanGaps: true,
+    });
+  }
+  if(showOdo){
+    datasets.push({
+      label: 'Odometer (km)', yAxisID: 'yOdo',
+      data: points.map(p=>p.odometer),
+      borderColor: '#b8860b', backgroundColor: 'rgba(184,134,11,0.08)',
+      fill: false, tension: 0.1, pointRadius: points.length>150 ? 0 : 1.5, borderDash: [4,3], spanGaps: true,
+    });
+  }
   _fuelChart = new Chart(el, {
     type: 'line',
-    data: {
-      labels: points.map(p=>new Date(p.ts).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})),
-      datasets: [{
-        label: 'Fuel (L)',
-        data: points.map(p=>p.fuel),
-        borderColor: '#00A3A6',
-        backgroundColor: 'rgba(0,163,166,0.12)',
-        fill: true,
-        tension: 0.15,
-        pointRadius: points.length>150 ? 0 : 1.5,
-      }]
-    },
+    data: { labels, datasets },
     options: {
-      scales: { y: { beginAtZero: true, title: { display:true, text:'Litres' } }, x: { ticks: { maxTicksLimit: 10 } } },
-      plugins: { legend: { display:false } },
+      scales: {
+        yFuel: { beginAtZero: true, position: 'left', title: { display:true, text:'Fuel (L)' }, display: showFuel },
+        yOdo: { beginAtZero: false, position: 'right', title: { display:true, text:'Odometer (km)' }, display: showOdo, grid: { drawOnChartArea: false } },
+        x: { ticks: { maxTicksLimit: 10 } },
+      },
+      plugins: { legend: { display: showFuel && showOdo } },
     }
   });
+}
+// 3D scatter (Plotly) - x/y are the actual GPS coordinates, z is fuel level,
+// so a dip in the surface is a literal "the tank got lower right here".
+// Odometer and the exact timestamp are shown on hover since a 3D plot only
+// has 3 spatial axes to work with.
+function drawFuel3D(points){
+  const el = document.getElementById('fuelGraph3d');
+  if(!el || typeof Plotly==='undefined') return;
+  Plotly.newPlot(el, [{
+    type: 'scatter3d', mode: 'lines+markers',
+    x: points.map(p=>p.lng), y: points.map(p=>p.lat), z: points.map(p=>p.fuel),
+    text: points.map(p=>`${new Date(p.ts).toLocaleString('en-IN')}<br>Fuel: ${p.fuel} L<br>Odometer: ${p.odometer!=null?p.odometer+' km':'-'}`),
+    hoverinfo: 'text',
+    marker: { size: 3, color: points.map(p=>p.fuel), colorscale: 'YlOrRd', reversescale: true },
+    line: { color: '#4C6A2B', width: 3 },
+  }], {
+    margin: { l:0, r:0, b:0, t:10 },
+    scene: { xaxis: { title: 'Longitude' }, yaxis: { title: 'Latitude' }, zaxis: { title: 'Fuel (L)' } },
+  }, { displayModeBar: false, responsive: true });
 }
 
 // ---------- Collapsible dashboard sections (Owner + Admin dashboards) ----------
@@ -5601,14 +5675,19 @@ async function ownerDashboardScreen(){
       fuelTheftAlertsCard = `
       <div class="card" style="border:1px solid #eab3ab;background:#fff8f7;">
         <div class="flex-between"><h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;color:#7a2115;">⛽🚨 Suspected Fuel Theft</h2><span class="muted">${alerts.length} active alert${alerts.length===1?'':'s'}</span></div>
-        ${alerts.map(a=>`
+        ${alerts.map(a=>{
+          const mapLink = (a.latitude!=null && a.longitude!=null) ? `https://www.google.com/maps?q=${a.latitude},${a.longitude}` : null;
+          const locationHtml = a.address ? a.address : (mapLink ? `${a.latitude}, ${a.longitude}` : "Location unavailable (no GPS fix)");
+          return `
           <div style="border-bottom:1px solid #f0d5d1;padding:10px 0;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
             <div>
               <b>${a.vehicleReg}</b> &middot; <span style="color:#7a2115;font-weight:600;">~${a.litersLost} L lost</span>
-              <div class="muted" style="font-size:12px;">Started ${fmtDMY(a.startedAt)} ${new Date(a.startedAt).toLocaleTimeString()} &middot; last detected ${new Date(a.lastDetectedAt).toLocaleTimeString()}</div>
+              <div class="muted" style="font-size:12px;">Started ${fmtDMY(a.startedAt)} ${new Date(a.startedAt).toLocaleTimeString()} &middot; last detected ${fmtDMY(a.lastDetectedAt)} ${new Date(a.lastDetectedAt).toLocaleTimeString()}</div>
+              <div class="muted" style="font-size:12px;">📍 ${locationHtml}${mapLink?` &middot; <a href="${mapLink}" target="_blank" rel="noopener">Open in Google Maps &rsaquo;</a>`:''}</div>
             </div>
             <button class="btn small secondary" onclick="acknowledgeFuelTheftAlert('${a.id}')">Acknowledge</button>
-          </div>`).join("")}
+          </div>`;
+        }).join("")}
       </div>`;
     }
   }catch(e){ /* role doesn't see fuel-theft alerts, or there aren't any yet */ }
@@ -7030,7 +7109,7 @@ async function payrollScreen(){
 Object.assign(window, {
   choosePortal,
   doLogin, doLogout, switchTab, goto, toggleSidebar, toggleSidebarGroup, playTripReplay, setFleetMapFilter, openFleetMapFullscreen, closeFleetMapFullscreen, setGpsLinkSearch, saveGpsLink, draftSet, updateBreathalyzer, startPhotoCapture,
-  setTransportClient, transportSaveConfig, transportCreateClientUser, transportAssignVehicle, transportApproveRoute, transportDispatchRoute, acknowledgeFuelTheftAlert, loadFuelGraph,
+  setTransportClient, transportSaveConfig, transportCreateClientUser, transportAssignVehicle, transportApproveRoute, transportDispatchRoute, acknowledgeFuelTheftAlert, loadFuelGraph, fuelGraphToggle,
   submitForcedPasswordChange, submitVoluntaryPasswordChange, saveTheme, resetTheme,
   updateDoc, updateDocCopy, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, renameClient, editSite, addDriver, addPerson, correctOdometer, captureBillPhoto, submitExpense, decideExpense,
