@@ -2562,13 +2562,14 @@ async function adminVehiclesScreen(){
       <td>${v.vehicleType||'-'} / ${v.fuelType||'-'}</td>
       <td>${v.siteId ? siteName(v.siteId) : '<span class="muted">Unassigned</span>'}</td>
       <td><button class="btn small secondary" onclick="toggleVehicleDetails('${v.id}')">${editingVehicleId===v.id?'Close':'Manage Documents'}</button></td>
+      <td><button class="btn small secondary" onclick="goto('fuel_graph',{vehicleId:'${v.id}'})">⛽ Fuel Pattern</button></td>
     </tr>`).join("");
   return `
   <h1 class="page-title">Vehicles</h1>
   <div class="banner">Add new vehicles and manage every vehicle's documents (RC, Permit, Insurance, Fitness, Tax, PUC, Temporary Permit, Border Tax) here - numbers, expiry dates, and a photo or PDF copy of each.</div>
   <div class="card">
     <h2 class="section-title">Vehicles (${vehicles.length})</h2>
-    <table><tr><th>Vehicle</th><th>Make/Model</th><th>Type / Fuel</th><th>Area</th><th></th></tr>${rows || "<tr><td colspan='5' class='empty'>No vehicles yet.</td></tr>"}</table>
+    <table><tr><th>Vehicle</th><th>Make/Model</th><th>Type / Fuel</th><th>Area</th><th></th><th></th></tr>${rows || "<tr><td colspan='6' class='empty'>No vehicles yet.</td></tr>"}</table>
     <div class="banner">Every field below is required - a vehicle cannot be added without its complete onboarding data.</div>
     <form class="inline-form" onsubmit="return addVehicle(event)">
       <div class="f"><label>New registration number *</label><input type="text" id="newVehicleReg" placeholder="TS 09 XX 1234" required /></div>
@@ -5086,6 +5087,7 @@ async function gpsLinkScreen(){
         <select id="gpsLinkSelect_${v.id}" style="max-width:320px;">${gpsDeviceOptionsHtml(devices, v.fleetxVehicleNumber||"")}</select>
       </td>
       <td><button class="btn small" onclick="saveGpsLink('${v.id}')">Save</button></td>
+      <td><button class="btn small secondary" onclick="goto('fuel_graph',{vehicleId:'${v.id}'})">⛽ Fuel Pattern</button></td>
     </tr>`;
   }).join("");
   return `
@@ -5093,7 +5095,7 @@ async function gpsLinkScreen(){
   <div class="banner">Auto-matching pairs a vehicle to a Fleetx device by registration number. If a device is labeled with a chassis number, engine number, or manufacturer name instead, link it manually here - once saved, the manual link always wins and stays until you change it.</div>
   <div class="card">
     <input type="text" placeholder="Search by registration, make, model, chassis or engine no..." value="${gpsLinkSearch}" oninput="setGpsLinkSearch(this.value)" style="width:100%;margin-bottom:12px;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;" />
-    <table><tr><th>Vehicle</th><th>Link Status</th><th>Fleetx Device</th><th></th></tr>${rows || `<tr><td colspan="4" class="empty">No vehicles match your search.</td></tr>`}</table>
+    <table><tr><th>Vehicle</th><th>Link Status</th><th>Fleetx Device</th><th></th><th></th></tr>${rows || `<tr><td colspan="5" class="empty">No vehicles match your search.</td></tr>`}</table>
   </div>
   <div class="card"><div class="muted">${devices.length} Fleetx device${devices.length===1?'':'s'} seen in the last live fetch.</div></div>
   `;
