@@ -5223,7 +5223,7 @@ async function fuelGraphScreen(vehicleId){
     };
   }
 
-  const spatialPoints = points.filter(p=>p.lat!=null && p.lng!=null && p.fuel!=null);
+  const spatialPoints = points.filter(p=>p.fuel!=null && p.odometer!=null);
 
   setTimeout(()=>{ drawFuelChart(points, {showFuel, showOdo}); drawFuel3D(spatialPoints); }, 0);
 
@@ -5260,8 +5260,8 @@ async function fuelGraphScreen(vehicleId){
   </div>` : ""}
   ${spatialPoints.length>1 ? `
   <div class="card">
-    <h2 class="section-title">3D view: location &times; fuel level &times; odometer</h2>
-    <p class="muted" style="margin-bottom:10px;">Drag to rotate. Each point is a GPS fix - height is the fuel level at that spot; hover a point to see the exact odometer reading and time.</p>
+    <h2 class="section-title">3D view: fuel &times; odometer &times; time</h2>
+    <p class="muted" style="margin-bottom:10px;">Drag to rotate. Each point is a reading - height is the fuel level, depth is the odometer reading, and the line runs forward through time; hover a point for the exact values.</p>
     <div id="fuelGraph3d" style="height:420px;"></div>
   </div>` : ""}
   `;
@@ -5319,23 +5319,28 @@ function drawFuelChart(points, opts){
     }
   });
 }
-// 3D scatter (Plotly) - x/y are the actual GPS coordinates, z is fuel level,
-// so a dip in the surface is a literal "the tank got lower right here".
-// Odometer and the exact timestamp are shown on hover since a 3D plot only
-// has 3 spatial axes to work with.
+// 3D scatter (Plotly) - x is time, y is odometer, z is fuel level, so the
+// line traces how fuel behaves against distance travelled as the trip
+// progresses. A flat/rising wall while the odometer keeps climbing is
+// normal consumption; a sudden vertical drop with the odometer barely
+// moving is exactly the pattern a theft or a stop-and-siphon leaves behind.
 function drawFuel3D(points){
   const el = document.getElementById('fuelGraph3d');
   if(!el || typeof Plotly==='undefined') return;
   Plotly.newPlot(el, [{
     type: 'scatter3d', mode: 'lines+markers',
-    x: points.map(p=>p.lng), y: points.map(p=>p.lat), z: points.map(p=>p.fuel),
-    text: points.map(p=>`${new Date(p.ts).toLocaleString('en-IN')}<br>Fuel: ${p.fuel} L<br>Odometer: ${p.odometer!=null?p.odometer+' km':'-'}`),
+    x: points.map(p=>p.ts), y: points.map(p=>p.odometer), z: points.map(p=>p.fuel),
+    text: points.map(p=>`${new Date(p.ts).toLocaleString('en-IN')}<br>Fuel: ${p.fuel} L<br>Odometer: ${p.odometer} km`),
     hoverinfo: 'text',
     marker: { size: 3, color: points.map(p=>p.fuel), colorscale: 'YlOrRd', reversescale: true },
     line: { color: '#4C6A2B', width: 3 },
   }], {
     margin: { l:0, r:0, b:0, t:10 },
-    scene: { xaxis: { title: 'Longitude' }, yaxis: { title: 'Latitude' }, zaxis: { title: 'Fuel (L)' } },
+    scene: {
+      xaxis: { title: 'Time', type: 'date' },
+      yaxis: { title: 'Odometer (km)' },
+      zaxis: { title: 'Fuel (L)' },
+    },
   }, { displayModeBar: false, responsive: true });
 }
 
