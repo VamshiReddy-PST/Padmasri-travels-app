@@ -975,12 +975,18 @@ async function pollLocationHistory() {
     const tooLongSinceLast = last && Date.now() - new Date(last.ts).getTime() > LOCATION_MAX_GAP_MS;
     const isNew = !last || statusChanged || tooLongSinceLast || (movedMeters != null && movedMeters >= LOCATION_MIN_GAP_METERS);
     if (!isNew) continue;
+    // Computed once and reused for both the breadcrumb point below (so the
+    // Fuel Pattern graph has a reading to plot at this same timestamp - see
+    // GET /api/vehicles/:id/trip-history, which already returns these
+    // points) and the fuel-theft check right after.
+    const livePayload = liveTrackingPayloadFor(match);
     const point = {
       ts: nowIso(),
       lat: match.latitude,
       lng: match.longitude,
       speed: typeof match.speed === "number" ? Math.round(match.speed) : null,
       status: match.currentStatus || null,
+      fuel: livePayload.fuelLitres,
     };
     _lastLoggedPoint[vehicle.id] = { lat: point.lat, lng: point.lng, status: point.status, ts: point.ts };
     try {
@@ -989,7 +995,7 @@ async function pollLocationHistory() {
       console.error(`Location history: failed to log a point for vehicle ${vehicle.id}:`, err.message);
     }
     try {
-      await checkFuelTheftForVehicle(vehicle, liveTrackingPayloadFor(match));
+      await checkFuelTheftForVehicle(vehicle, livePayload);
     } catch (err) {
       console.error(`Fuel theft check: failed for vehicle ${vehicle.id}:`, err.message);
     }

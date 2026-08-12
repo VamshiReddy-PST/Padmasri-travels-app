@@ -1270,6 +1270,7 @@ async function routeView(){
   const role = currentUser.role;
   const tab = view.tab;
   if(view.name==="change_password") return changePasswordScreen();
+  if(view.name==="fuel_graph") return fuelGraphScreen(view.vehicleId);
   if(tab==="payroll") return payrollScreen();
   if(tab==="odometer_verify") return odometerVerificationScreen();
   if(tab==="fuel_verify") return fuelVerificationScreen();
@@ -5144,6 +5145,7 @@ async function vehicleTodayStatusScreen(vehicleId){
   return `
   <button class="btn secondary small" onclick="goto('home')">&larr; Back to Dashboard</button>
   <h1 class="page-title">${v.reg} - Today's Status</h1>
+  <button class="btn secondary small" style="margin-bottom:12px;" onclick="goto('fuel_graph',{vehicleId:'${v.id}'})">⛽ View Fuel Pattern &rsaquo;</button>
   ${liveCard}
   <div class="card">
     <table>
@@ -5171,6 +5173,94 @@ async function vehicleTodayStatusScreen(vehicleId){
   </div>
   <button class="btn secondary" onclick="goto('vehicle_detail',{tab:'reports',vehicleId:'${v.id}'})">View full expenditure &amp; maintenance history &rsaquo;</button>
   `;
+}
+
+// ---------- Fuel Pattern graph (per vehicle, date-range) ----------
+// Reuses the same server-recorded breadcrumb trail Trip Replay draws from
+// (GET /api/vehicles/:id/trip-history) - each point already carries a `fuel`
+// reading whenever Fleetx had one at that moment (see the location-history
+// poller on the backend), so no new endpoint or storage was needed here.
+async function fuelGraphScreen(vehicleId){
+  const v = vehicles.find(x=>x.id===vehicleId);
+  if(!v){
+    return `<button class="btn secondary small" onclick="goto('home')">&larr; Back</button>
+    <div class="banner error" style="margin-top:12px;">That vehicle could not be found.</div>`;
+  }
+  const today = todayStr();
+  const weekAgo = new Date(Date.now()-7*86400000).toISOString().slice(0,10);
+  const from = view.from || weekAgo;
+  const to = view.to || today;
+
+  let points = [], loadError = "";
+  try{
+    const data = await api(`/vehicles/${vehicleId}/trip-history?from=${from}T00:00:00.000Z&to=${to}T23:59:59.999Z`);
+    points = (data.points||[]).filter(p=>p.fuel!=null).sort((a,b)=> a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0);
+  }catch(e){ loadError = e.message; }
+
+  let summary = null;
+  if(points.length){
+    const vals = points.map(p=>p.fuel);
+    let totalDrop = 0;
+    for(let i=1;i<points.length;i++){ const d = points[i-1].fuel - points[i].fuel; if(d>0) totalDrop += d; }
+    summary = { min: Math.min(...vals), max: Math.max(...vals), totalDrop: Math.round(totalDrop*10)/10 };
+  }
+
+  setTimeout(()=>drawFuelChart(points), 0);
+
+  return `
+  <button class="btn secondary small" onclick="goto('vehicle_status',{vehicleId:'${v.id}'})">&larr; Back to ${v.reg}</button>
+  <h1 class="page-title">⛽ ${v.reg} - Fuel Pattern</h1>
+  <div class="card">
+    <div class="grid cols-3">
+      <div class="field"><label>From</label><input type="date" id="fg_from" value="${from}" max="${today}" /></div>
+      <div class="field"><label>To</label><input type="date" id="fg_to" value="${to}" max="${today}" /></div>
+      <div class="field" style="display:flex;align-items:flex-end;"><button class="btn" onclick="loadFuelGraph('${v.id}')">Load</button></div>
+    </div>
+  </div>
+  ${loadError ? `<div class="banner error">${loadError}</div>` : ""}
+  <div class="card">
+    <h2 class="section-title">Fuel level over time</h2>
+    ${points.length ? `<canvas id="fuelGraphCanvas" height="90"></canvas>` :
+      `<div class="empty">No fuel readings recorded for this vehicle in this date range yet. Fuel history only starts building up once this vehicle is linked to GPS/fuel-sensor tracking (Fleetx) - see GPS Device Linking.</div>`}
+  </div>
+  ${summary ? `
+  <div class="grid cols-3">
+    <div class="kpi"><div class="num">${summary.min} L</div><div class="label">Lowest reading</div></div>
+    <div class="kpi"><div class="num">${summary.max} L</div><div class="label">Highest reading</div></div>
+    <div class="kpi ${summary.totalDrop>15?'warn':''}"><div class="num">${summary.totalDrop} L</div><div class="label">Total fuel drop (all dips combined)</div></div>
+  </div>` : ""}
+  `;
+}
+function loadFuelGraph(vehicleId){
+  const from = document.getElementById('fg_from').value;
+  const to = document.getElementById('fg_to').value;
+  if(from > to){ alert('The "From" date must be before the "To" date.'); return; }
+  goto('fuel_graph', {vehicleId, from, to});
+}
+let _fuelChart = null;
+function drawFuelChart(points){
+  const el = document.getElementById('fuelGraphCanvas');
+  if(!el) return;
+  if(_fuelChart){ _fuelChart.destroy(); _fuelChart = null; }
+  _fuelChart = new Chart(el, {
+    type: 'line',
+    data: {
+      labels: points.map(p=>new Date(p.ts).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})),
+      datasets: [{
+        label: 'Fuel (L)',
+        data: points.map(p=>p.fuel),
+        borderColor: '#00A3A6',
+        backgroundColor: 'rgba(0,163,166,0.12)',
+        fill: true,
+        tension: 0.15,
+        pointRadius: points.length>150 ? 0 : 1.5,
+      }]
+    },
+    options: {
+      scales: { y: { beginAtZero: true, title: { display:true, text:'Litres' } }, x: { ticks: { maxTicksLimit: 10 } } },
+      plugins: { legend: { display:false } },
+    }
+  });
 }
 
 // ---------- Collapsible dashboard sections (Owner + Admin dashboards) ----------
@@ -6940,7 +7030,7 @@ async function payrollScreen(){
 Object.assign(window, {
   choosePortal,
   doLogin, doLogout, switchTab, goto, toggleSidebar, toggleSidebarGroup, playTripReplay, setFleetMapFilter, openFleetMapFullscreen, closeFleetMapFullscreen, setGpsLinkSearch, saveGpsLink, draftSet, updateBreathalyzer, startPhotoCapture,
-  setTransportClient, transportSaveConfig, transportCreateClientUser, transportAssignVehicle, transportApproveRoute, transportDispatchRoute, acknowledgeFuelTheftAlert,
+  setTransportClient, transportSaveConfig, transportCreateClientUser, transportAssignVehicle, transportApproveRoute, transportDispatchRoute, acknowledgeFuelTheftAlert, loadFuelGraph,
   submitForcedPasswordChange, submitVoluntaryPasswordChange, saveTheme, resetTheme,
   updateDoc, updateDocCopy, submitVehicle, doClock, verify, setLeave, submitLeave, assignField, addVehicle, addClient,
   addSite, renameClient, editSite, addDriver, addPerson, correctOdometer, captureBillPhoto, submitExpense, decideExpense,
