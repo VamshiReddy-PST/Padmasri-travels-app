@@ -1264,6 +1264,21 @@ app.use(express.json({ limit: "25mb" }));
 if (!USE_MONGO) app.use("/uploads", express.static(UPLOADS_DIR));
 app.use(express.static(path.join(__dirname, "public")));
 
+// Public, unauthenticated diagnostic endpoint - lets anyone with the URL
+// (the app owner, or a keep-alive/uptime pinger) check at a glance whether
+// this deployment is actually persisting data in MongoDB or just holding it
+// in local memory/disk, which on Render's free tier gets wiped every time
+// the service spins down from inactivity and cold-starts again. No secrets
+// or app data are exposed here - just enough to tell the two states apart.
+app.get("/api/health", (req, res) => {
+  res.json({
+    ok: true,
+    storage: USE_MONGO ? "mongodb" : "local file (NOT durable on Render free tier - data resets on every restart/redeploy unless MONGODB_URI is set)",
+    uptimeSeconds: Math.round(process.uptime()),
+    serverTime: new Date().toISOString(),
+  });
+});
+
 app.get("/api/photo/:id", async (req, res) => {
   if (!USE_MONGO) return res.status(404).end();
   try {
@@ -1310,9 +1325,64 @@ function themeFromBody(body) {
   return { value: { key }, error: null };
 }
 
-// ---------- auth ----------
-const sessions = new Map(); // token -> userId
+// ---------- SESSION TOKENS ----------
+// Every login system in this file (staff, client-portal staff, client
+// employees, subvendors, drivers, workshop staff) issues a stateless,
+// HMAC-signed token instead of a random string tracked in an in-memory
+// map. This is deliberate: Render's free tier spins the whole process
+// down after ~15 minutes with no traffic and cold-starts it on the next
+// request - that used to wipe every in-memory session map at once and
+// silently log everyone out of every portal ("Session expired") even
+// though nothing was actually wrong with their login. A signed token
+// needs no server-side state to verify, so it survives restarts/redeploys
+// for as long as its embedded expiry allows.
+//
+// Set SESSION_SECRET in the environment in production (Render -> your
+// service -> Environment) so tokens also survive across deploys of new
+// code; if it's not set, a fallback baked into this file is used so local
+// testing still works, but every login system shares the same scheme.
+const SESSION_SECRET = process.env.SESSION_SECRET || "padmasri-fleet-app-fallback-session-secret-change-me";
+const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days - long enough that nobody gets bounced mid-week
+function signSessionToken(payload) {
+  const body = Buffer.from(JSON.stringify({ ...payload, exp: Date.now() + SESSION_TTL_MS })).toString("base64url");
+  const sig = crypto.createHmac("sha256", SESSION_SECRET).update(body).digest("base64url");
+  return `${body}.${sig}`;
+}
+function verifySessionToken(token) {
+  if (!token || typeof token !== "string") return null;
+  const dot = token.lastIndexOf(".");
+  if (dot < 0) return null;
+  const body = token.slice(0, dot);
+  const sig = token.slice(dot + 1);
+  let expected;
+  try {
+    expected = crypto.createHmac("sha256", SESSION_SECRET).update(body).digest("base64url");
+  } catch (err) {
+    return null;
+  }
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  let payload;
+  try {
+    payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+  } catch (err) {
+    return null;
+  }
+  if (!payload.exp || Date.now() > payload.exp) return null;
+  return payload;
+}
+// Explicit logouts add the token here so it can't be reused before its
+// natural expiry - best-effort only (this set is also wiped on a
+// restart, same as the old per-system session maps used to always be),
+// which is an acceptable trade-off since a restart no longer force-logs
+// everyone out the way it used to.
+const revokedSessionTokens = new Set();
+function isSessionRevoked(token) {
+  return revokedSessionTokens.has(token);
+}
 
+// ---------- auth ----------
 function publicUser(u) {
   if (!u) return null;
   const { passwordHash, passwordHistory, ...rest } = u;
@@ -1335,8 +1405,8 @@ const ALLOWED_DURING_FORCED_PASSWORD_CHANGE = ["/api/meta", "/api/change-passwor
 function requireAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  const userId = token && sessions.get(token);
-  const user = userId && db.users.find((u) => u.id === userId && u.active !== false);
+  const payload = token && !isSessionRevoked(token) && verifySessionToken(token);
+  const user = payload && payload.type === "staff" && db.users.find((u) => u.id === payload.id && u.active !== false);
   if (!user) return res.status(401).json({ error: "Not signed in. Please log in again." });
   if (user.mustChangePassword && !ALLOWED_DURING_FORCED_PASSWORD_CHANGE.includes(req.path)) {
     return res.status(403).json({ error: "You must set a new password before continuing.", mustChangePassword: true });
@@ -1392,8 +1462,7 @@ app.post(
     if (!user || !verifyPassword(password, user.passwordHash)) {
       return res.status(401).json({ error: "Incorrect email/mobile number or password." });
     }
-    const token = crypto.randomBytes(24).toString("hex");
-    sessions.set(token, user.id);
+    const token = signSessionToken({ type: "staff", id: user.id });
     await audit(user, "login", `${user.name} (${user.role}) logged in`);
     res.json({ token, user: publicUser(user) });
   })
@@ -1405,7 +1474,7 @@ app.post(
   h(async (req, res) => {
     const header = req.headers.authorization || "";
     const token = header.slice(7);
-    sessions.delete(token);
+    revokedSessionTokens.add(token);
     await audit(req.user, "logout", `${req.user.name} logged out`);
     res.json({ ok: true });
   })
@@ -2163,12 +2232,11 @@ app.get(
 // -------- Client Portal auth (Travel Desk Manager / Billing / HOD) --------
 // Same "staff-style" email/mobile + password pattern as subvendor-auth -
 // there are only ever a handful of these per client.
-const clientAuthSessions = new Map(); // token -> clientUserId
 function clientAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  const cuId = token && clientAuthSessions.get(token);
-  const cu = cuId && db.clientUsers.find((u) => u.id === cuId && u.active !== false);
+  const payload = token && !isSessionRevoked(token) && verifySessionToken(token);
+  const cu = payload && payload.type === "clientUser" && db.clientUsers.find((u) => u.id === payload.id && u.active !== false);
   if (!cu) return res.status(401).json({ error: "Not signed in. Please log in again." });
   if (cu.mustChangePassword && !["/api/client-auth/me", "/api/client-auth/change-password", "/api/client-auth/logout"].includes(req.path)) {
     return res.status(403).json({ error: "You must set a new password before continuing.", mustChangePassword: true });
@@ -2197,8 +2265,7 @@ app.post(
     if (!cu || !verifyPassword(password, cu.passwordHash)) {
       return res.status(401).json({ error: "Incorrect email/mobile or password." });
     }
-    const token = uid("ctok");
-    clientAuthSessions.set(token, cu.id);
+    const token = signSessionToken({ type: "clientUser", id: cu.id });
     await audit(cu, "client_user_login", `${cu.name} (${cu.role}) logged in to the client portal`);
     res.json({ token, user: publicClientUser(cu) });
   })
@@ -2245,7 +2312,7 @@ app.post(
   "/api/client-auth/logout",
   clientAuth,
   h(async (req, res) => {
-    clientAuthSessions.delete(req.clientUserToken);
+    revokedSessionTokens.add(req.clientUserToken);
     await audit(req.clientUser, "client_user_logout", `${req.clientUser.name} logged out`);
     res.json({ ok: true });
   })
@@ -2470,12 +2537,11 @@ app.get(
 );
 
 // -------- Employee self-service (mirrors driver-auth: mobile + PIN) --------
-const clientEmployeeSessions = new Map(); // token -> employeeId
 function clientEmployeeAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  const empId = token && clientEmployeeSessions.get(token);
-  const emp = empId && transportEmployees.find((e) => e.id === empId && e.active !== false);
+  const payload = token && !isSessionRevoked(token) && verifySessionToken(token);
+  const emp = payload && payload.type === "transportEmployee" && transportEmployees.find((e) => e.id === payload.id && e.active !== false);
   if (!emp) return res.status(401).json({ error: "Not signed in. Please log in again." });
   req.transportEmployee = emp;
   req.transportEmployeeToken = token;
@@ -2491,8 +2557,7 @@ app.post(
     if (!emp || String(emp.pin || "1234") !== String(pin).trim()) {
       return res.status(401).json({ error: "Incorrect mobile number or PIN." });
     }
-    const token = uid("etok");
-    clientEmployeeSessions.set(token, emp.id);
+    const token = signSessionToken({ type: "transportEmployee", id: emp.id });
     res.json({ token, employee: publicTransportEmployee(emp) });
   })
 );
@@ -2537,7 +2602,7 @@ app.post(
   })
 );
 app.post("/api/client-employee-auth/logout", clientEmployeeAuth, (req, res) => {
-  clientEmployeeSessions.delete(req.transportEmployeeToken);
+  revokedSessionTokens.add(req.transportEmployeeToken);
   res.json({ ok: true });
 });
 app.get("/api/client-employee-auth/requests", clientEmployeeAuth, (req, res) => {
@@ -5422,13 +5487,12 @@ app.patch(
 // change on first login) but is entirely its own session map/table -
 // Subvendors are not staff `db.users` and never appear in People/Staff
 // management, payroll, or the audit-triggered user list.
-const subvendorSessions = new Map(); // token -> subvendorId
 const SUBVENDOR_ALLOWED_DURING_FORCED_PASSWORD_CHANGE = ["/api/subvendor-auth/me", "/api/subvendor-auth/change-password", "/api/subvendor-auth/logout"];
 function subvendorAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  const subvendorId = token && subvendorSessions.get(token);
-  const sv = subvendorId && db.subvendors.find((s) => s.id === subvendorId && s.active !== false);
+  const payload = token && !isSessionRevoked(token) && verifySessionToken(token);
+  const sv = payload && payload.type === "subvendor" && db.subvendors.find((s) => s.id === payload.id && s.active !== false);
   if (!sv) return res.status(401).json({ error: "Not signed in. Please log in again." });
   if (sv.mustChangePassword && !SUBVENDOR_ALLOWED_DURING_FORCED_PASSWORD_CHANGE.includes(req.path)) {
     return res.status(403).json({ error: "You must set a new password before continuing.", mustChangePassword: true });
@@ -5449,8 +5513,7 @@ app.post(
     if (!sv || !verifyPassword(password, sv.passwordHash)) {
       return res.status(401).json({ error: "Incorrect email/mobile number or password." });
     }
-    const token = crypto.randomBytes(24).toString("hex");
-    subvendorSessions.set(token, sv.id);
+    const token = signSessionToken({ type: "subvendor", id: sv.id });
     await audit({ id: sv.id, name: sv.name }, "subvendor_login", `Subvendor ${sv.name} logged in`);
     res.json({ token, subvendor: publicSubvendor(sv) });
   })
@@ -5496,7 +5559,7 @@ app.post(
   "/api/subvendor-auth/logout",
   subvendorAuth,
   h(async (req, res) => {
-    subvendorSessions.delete(req.subvendorToken);
+    revokedSessionTokens.add(req.subvendorToken);
     await audit(req.subvendor, "subvendor_logout", `${req.subvendor.name} logged out`);
     res.json({ ok: true });
   })
@@ -5516,7 +5579,6 @@ app.get(
 // backfillDefaults for why). This never touches the staff `sessions` map
 // or `db.users` at all; drivers get their own session map and their own
 // req.driver, parallel to (but independent from) requireAuth/req.user.
-const driverSessions = new Map(); // token -> driverId
 const DRIVER_ODOMETER_WINDOW_MS = 10 * 60 * 1000; // 10 minutes to enter the opening odometer reading or the shift auto-closes
 const MANUAL_ENTRY_PIN_WINDOW_MS = 10 * 60 * 1000; // 10 minutes to hand the code to a Supervisor before it expires
 const MISSED_ODOMETER_ENTRY_PENALTY = 100; // ₹, charged to the driver each time a Supervisor has to manually enter a reading for them
@@ -5555,8 +5617,8 @@ function expireStaleShift(shift) {
 function driverAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  const driverId = token && driverSessions.get(token);
-  const driver = driverId && db.drivers.find((d) => d.id === driverId && d.active !== false);
+  const payload = token && !isSessionRevoked(token) && verifySessionToken(token);
+  const driver = payload && payload.type === "driver" && db.drivers.find((d) => d.id === payload.id && d.active !== false);
   if (!driver) return res.status(401).json({ error: "Not signed in. Please log in again." });
   req.driver = driver;
   req.driverToken = token;
@@ -5612,8 +5674,7 @@ app.post(
       };
       db.driverShifts.push(shift);
     }
-    const token = uid("dtok");
-    driverSessions.set(token, driver.id);
+    const token = signSessionToken({ type: "driver", id: driver.id });
     await audit({ id: driver.id, name: driver.name }, "driver_login", `Driver ${driver.name} logged in via the driver app`);
     res.json({ token, driver: publicDriverAuth(driver), shift });
   })
@@ -5819,7 +5880,7 @@ app.post(
     shift.logoutAt = nowIso();
     shift.logoutLat = typeof lat === "number" ? lat : null;
     shift.logoutLng = typeof lng === "number" ? lng : null;
-    driverSessions.delete(req.driverToken);
+    revokedSessionTokens.add(req.driverToken);
     await audit({ id: req.driver.id, name: req.driver.name }, "driver_logout", `Driver ${req.driver.name} logged out of the driver app`);
     res.json({ ok: true });
   })
@@ -6579,13 +6640,13 @@ app.post(
 // Mechanics, Helpers, Electricians, and the Workshop Manager/Supervisor don't
 // have email addresses and aren't trained to handle the full staff app - so,
 // same as drivers, they log in with mobile number + a 4-digit PIN (default
-// 1234) from the same combined mobile portal (driver.html). This is a
-// completely separate session map from both the staff `sessions` map and
-// `driverSessions` - a Workshop-staff account is still a `db.users` row
+// 1234) from the same combined mobile portal (driver.html). This issues its
+// own signed session token (type "workshop", verified by verifySessionToken)
+// separate from a driver's or staff member's - a Workshop-staff account is
+// still a `db.users` row
 // (so Owner/HR keep managing it from the Staff tab, and it can also still
 // log into the full desktop app with email/password if it has one), but the
 // mobile-portal login never touches passwordHash at all.
-const workshopSessions = new Map(); // token -> userId
 function publicWorkshopUser(u) {
   if (!u) return null;
   const { pin, passwordHash, passwordHistory, ...rest } = u;
@@ -6594,8 +6655,8 @@ function publicWorkshopUser(u) {
 function workshopAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  const userId = token && workshopSessions.get(token);
-  const user = userId && db.users.find((u) => u.id === userId && WORKSHOP_STAFF_ROLES.includes(u.role) && u.active !== false);
+  const payload = token && !isSessionRevoked(token) && verifySessionToken(token);
+  const user = payload && payload.type === "workshop" && db.users.find((u) => u.id === payload.id && WORKSHOP_STAFF_ROLES.includes(u.role) && u.active !== false);
   if (!user) return res.status(401).json({ error: "Not signed in. Please log in again." });
   req.workshopUser = user;
   req.workshopToken = token;
@@ -6615,8 +6676,7 @@ app.post(
     if (!user || String(user.pin || "1234") !== String(pin).trim()) {
       return res.status(401).json({ error: "Incorrect mobile number or PIN." });
     }
-    const token = uid("wtok");
-    workshopSessions.set(token, user.id);
+    const token = signSessionToken({ type: "workshop", id: user.id });
     await audit(user, "workshop_login", `${user.name} (${user.role}) logged in via the Workshop mobile portal`);
     res.json({ token, user: publicWorkshopUser(user) });
   })
@@ -6646,7 +6706,7 @@ app.post(
   "/api/workshop-auth/logout",
   workshopAuth,
   h(async (req, res) => {
-    workshopSessions.delete(req.workshopToken);
+    revokedSessionTokens.add(req.workshopToken);
     res.json({ ok: true });
   })
 );
