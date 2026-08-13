@@ -23,6 +23,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { MongoClient } = require("mongodb");
+const webpush = require("web-push");
 const XLSX = require("xlsx");
 const PDFDocument = require("pdfkit");
 
@@ -136,9 +137,11 @@ async function initStorage() {
       console.log("Storage: connected to MongoDB, loaded existing data. Data will survive redeploys/restarts.");
     } else {
       db = JSON.parse(fs.readFileSync(SEED_FILE, "utf8"));
+      backfillDefaults();
       await persistNow();
       console.log("Storage: connected to MongoDB, no existing data found - seeded with demo data.");
     }
+    webpush.setVapidDetails("mailto:ops@padmasritravels.in", db.vapidKeys.publicKey, db.vapidKeys.privateKey);
     await loadTransportData();
     await runBackup("startup");
     setInterval(() => runBackup("daily"), BACKUP_INTERVAL_MS);
@@ -153,6 +156,7 @@ async function initStorage() {
     if (!fs.existsSync(DATA_FILE)) fs.copyFileSync(SEED_FILE, DATA_FILE);
     db = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
     backfillDefaults();
+    webpush.setVapidDetails("mailto:ops@padmasritravels.in", db.vapidKeys.publicKey, db.vapidKeys.privateKey);
     await loadTransportData();
     console.warn(
       "Storage: MONGODB_URI not set - using local file storage. This is fine for local testing, but on Render's " +
@@ -177,6 +181,15 @@ function backfillDefaults() {
   if (!Array.isArray(db.attendanceBackupDownloads)) db.attendanceBackupDownloads = [];
   if (!db.payrollProfiles) db.payrollProfiles = {};
   if (!Array.isArray(db.payrollAdhocEntries)) db.payrollAdhocEntries = [];
+  // Web Push VAPID keypair - generated once and persisted (same durability
+  // as everything else in `db`), so driver push subscriptions taken out
+  // against this key stay valid across restarts. See sendPushToDriver().
+  if (!db.vapidKeys || !db.vapidKeys.publicKey || !db.vapidKeys.privateKey) {
+    db.vapidKeys = webpush.generateVAPIDKeys();
+  }
+  (db.drivers || []).forEach((d) => {
+    if (!Array.isArray(d.pushSubscriptions)) d.pushSubscriptions = [];
+  });
   (db.vehicles || []).forEach((v) => {
     if (v.driverAssignedDate === undefined) v.driverAssignedDate = null;
     if (!Array.isArray(v.driverAssignmentHistory)) {
@@ -570,6 +583,21 @@ function backfillTransportEmployee(e) {
   if (e.shiftEnd === undefined) e.shiftEnd = "18:00";
   return e;
 }
+// Defensive backfill for routes created before the driver-workflow fields
+// (accept/arrive/board/no-show) existed - see runTransportOptimizer() for
+// where new routes already set these directly.
+function backfillTransportRoute(r) {
+  if (r.driverTripStatus === undefined) r.driverTripStatus = r.status === "dispatched" ? "assigned" : null;
+  if (r.driverAcceptedAt === undefined) r.driverAcceptedAt = null;
+  if (r.driverCompletedAt === undefined) r.driverCompletedAt = null;
+  (r.stops || []).forEach((s) => {
+    if (s.arrivedAt === undefined) s.arrivedAt = null;
+    if (s.boardStatus === undefined) s.boardStatus = "pending";
+    if (s.boardedAt === undefined) s.boardedAt = null;
+    if (s.noShowAt === undefined) s.noShowAt = null;
+  });
+  return r;
+}
 
 async function loadTransportData() {
   if (USE_MONGO) {
@@ -580,7 +608,7 @@ async function loadTransportData() {
     ]);
     transportEmployees = emps.map((e) => { delete e._id; return backfillTransportEmployee(e); });
     transportRequests = reqs.map((r) => { delete r._id; return r; });
-    transportRoutes = routes.map((r) => { delete r._id; return r; });
+    transportRoutes = routes.map((r) => { delete r._id; return backfillTransportRoute(r); });
   } else {
     if (!fs.existsSync(TRANSPORT_DIR)) fs.mkdirSync(TRANSPORT_DIR, { recursive: true });
     const readJson = (file) => {
@@ -589,7 +617,7 @@ async function loadTransportData() {
     };
     transportEmployees = readJson(TRANSPORT_EMPLOYEES_FILE).map(backfillTransportEmployee);
     transportRequests = readJson(TRANSPORT_REQUESTS_FILE);
-    transportRoutes = readJson(TRANSPORT_ROUTES_FILE);
+    transportRoutes = readJson(TRANSPORT_ROUTES_FILE).map(backfillTransportRoute);
   }
 }
 // IMPORTANT: a naive "rewrite the whole array to disk/collection on every
@@ -1658,6 +1686,11 @@ async function runTransportOptimizer(clientId, direction, actorUser, forDate) {
         legKm: Math.round(legs[i] * 10) / 10,
         rideKm: Math.round(rideKm * 10) / 10,
         comfortFlag: rideKm > maxRideKm || legs[i] > maxDetourKm,
+        // Per-employee driver workflow state - see the /api/driver-auth/transport-routes/:id/stops/:seq/* endpoints.
+        arrivedAt: null, // when the driver marks "I've arrived" at this stop - starts the no-show grace period
+        boardStatus: "pending", // "pending" | "boarded" | "no_show"
+        boardedAt: null,
+        noShowAt: null,
       };
     });
 
@@ -1699,6 +1732,11 @@ async function runTransportOptimizer(clientId, direction, actorUser, forDate) {
       approvedByName: null,
       approvedAt: null,
       dispatchedAt: null,
+      // Driver-side workflow (see dispatch endpoint + /api/driver-auth/transport-routes/*):
+      // null until dispatched, then "assigned" -> "accepted" -> "completed".
+      driverTripStatus: null,
+      driverAcceptedAt: null,
+      driverCompletedAt: null,
     };
     transportRoutes.push(route);
     newRoutes.push(route);
@@ -2768,8 +2806,25 @@ app.post(
     if (!route.assignedVehicleId) return res.status(400).json({ error: "Assign a vehicle before dispatching." });
     route.status = "dispatched";
     route.dispatchedAt = nowIso();
+    // This is the moment the driver needs to find out - flips their copy of
+    // the trip into "assigned" (shows up in Upcoming Trips, awaiting Accept)
+    // and fires a push notification if they've subscribed on their device.
+    route.driverTripStatus = "assigned";
+    route.driverAcceptedAt = null;
+    route.driverCompletedAt = null;
     await persistTransportRoute(route);
     await audit(req.user, "dispatch_transport_route", `${req.user.name} dispatched a ${route.direction} route for ${clientNameServer(route.clientId)}`);
+    if (route.assignedDriverId) {
+      const driver = db.drivers.find((d) => d.id === route.assignedDriverId);
+      const vehicle = db.vehicles.find((v) => v.id === route.assignedVehicleId);
+      if (driver) {
+        sendPushToDriver(driver, {
+          title: "New pickup trip assigned",
+          body: `${route.direction === "pickup" ? "Pickup" : "Drop"} route for ${clientNameServer(route.clientId)} - ${route.totalEmployees} employee(s)${vehicle ? " - " + vehicle.reg : ""}`,
+          url: "/driver.html",
+        }).catch((err) => console.error("Push notify (dispatch) failed:", err.message));
+      }
+    }
     res.json(route);
   })
 );
@@ -6261,6 +6316,38 @@ function expireStaleShift(shift) {
   }
   return false;
 }
+// Sends a real browser push notification (works even if driver.html isn't
+// open) to every device a driver has subscribed from - see
+// /api/driver-auth/push-subscribe. Used to alert a driver the moment a
+// route is dispatched to them, since polling alone can't wake up a closed
+// tab/screen-locked phone. Never throws - a push failure should never break
+// whatever staff action triggered it (e.g. dispatching a route). A
+// subscription that the push service reports as gone (404/410 - the
+// browser unsubscribed, uninstalled, etc.) is quietly dropped instead of
+// retried forever.
+async function sendPushToDriver(driver, { title, body, url }) {
+  if (!driver || !Array.isArray(driver.pushSubscriptions) || !driver.pushSubscriptions.length) return;
+  const payload = JSON.stringify({ title, body, url: url || "/driver.html" });
+  const stillValid = [];
+  let changed = false;
+  for (const sub of driver.pushSubscriptions) {
+    try {
+      await webpush.sendNotification(sub, payload);
+      stillValid.push(sub);
+    } catch (err) {
+      if (err && (err.statusCode === 404 || err.statusCode === 410)) {
+        changed = true; // expired/revoked on the browser's end - drop it
+      } else {
+        console.error("Push send failed for driver", driver.id, err && err.message);
+        stillValid.push(sub); // transient error (network blip, push service hiccup) - keep it
+      }
+    }
+  }
+  if (changed) {
+    driver.pushSubscriptions = stillValid;
+    await save().catch((err) => console.error("Failed to persist pruned push subscriptions:", err.message));
+  }
+}
 function driverAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
@@ -6457,6 +6544,190 @@ app.post(
     trip.updatedAt = nowIso();
     await audit({ id: req.driver.id, name: req.driver.name }, "driver_trip_status", `Driver ${req.driver.name} marked trip ${trip.id} as ${status}`);
     res.json(trip);
+  })
+);
+
+// ---------- Web Push (driver notifications) ----------
+// Public VAPID key the driver app needs to call pushManager.subscribe() -
+// not sensitive, but kept behind driverAuth anyway since only the driver
+// app ever needs it.
+app.get("/api/driver-auth/vapid-public-key", driverAuth, (req, res) => {
+  res.json({ publicKey: db.vapidKeys.publicKey });
+});
+app.post(
+  "/api/driver-auth/push-subscribe",
+  driverAuth,
+  h(async (req, res) => {
+    const sub = req.body || {};
+    if (!sub.endpoint || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) {
+      return res.status(400).json({ error: "A valid push subscription object is required." });
+    }
+    if (!Array.isArray(req.driver.pushSubscriptions)) req.driver.pushSubscriptions = [];
+    // Same device re-subscribing (e.g. after clearing site data) replaces
+    // its old entry instead of piling up duplicates keyed by endpoint.
+    req.driver.pushSubscriptions = req.driver.pushSubscriptions.filter((s) => s.endpoint !== sub.endpoint);
+    req.driver.pushSubscriptions.push({ endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } });
+    await save();
+    res.json({ ok: true });
+  })
+);
+app.post(
+  "/api/driver-auth/push-unsubscribe",
+  driverAuth,
+  h(async (req, res) => {
+    const { endpoint } = req.body || {};
+    if (Array.isArray(req.driver.pushSubscriptions) && endpoint) {
+      req.driver.pushSubscriptions = req.driver.pushSubscriptions.filter((s) => s.endpoint !== endpoint);
+      await save();
+    }
+    res.json({ ok: true });
+  })
+);
+
+// ---------- Employee Transport - driver side ----------
+// Once staff dispatches a route (see /api/transport/routes/:id/dispatch),
+// the assigned driver needs to: see it show up (Upcoming Trips + push),
+// accept it, work through each stop marking every employee boarded or a
+// no-show (with a 5-minute grace period after arriving so the driver isn't
+// stuck waiting indefinitely for one person), then close out the trip.
+const NO_SHOW_GRACE_MS = 5 * 60 * 1000;
+function mapsLinkFor(lat, lng) {
+  return lat != null && lng != null ? `https://www.google.com/maps?q=${lat},${lng}` : null;
+}
+function publicTransportRouteForDriver(r) {
+  const vehicle = r.assignedVehicleId ? db.vehicles.find((v) => v.id === r.assignedVehicleId) : null;
+  return {
+    id: r.id,
+    direction: r.direction,
+    clientName: clientNameServer(r.clientId),
+    vehicleReg: vehicle ? vehicle.reg : null,
+    totalEmployees: r.totalEmployees,
+    totalDistanceKm: r.totalDistanceKm,
+    status: r.status,
+    driverTripStatus: r.driverTripStatus,
+    dispatchedAt: r.dispatchedAt,
+    driverAcceptedAt: r.driverAcceptedAt,
+    driverCompletedAt: r.driverCompletedAt,
+    stops: r.stops.map((s) => ({
+      seq: s.seq,
+      employeeId: s.employeeId,
+      name: s.name,
+      lat: s.lat,
+      lng: s.lng,
+      mapsUrl: mapsLinkFor(s.lat, s.lng),
+      arrivedAt: s.arrivedAt,
+      boardStatus: s.boardStatus,
+      boardedAt: s.boardedAt,
+      noShowAt: s.noShowAt,
+      // How many more ms until "Mark No Show" is allowed - 0 once eligible, null if not yet arrived.
+      noShowEligibleInMs: s.arrivedAt ? Math.max(0, NO_SHOW_GRACE_MS - (Date.now() - new Date(s.arrivedAt).getTime())) : null,
+    })),
+  };
+}
+app.get("/api/driver-auth/transport-routes", driverAuth, (req, res) => {
+  const mine = transportRoutes.filter((r) => r.assignedDriverId === req.driver.id && r.status === "dispatched");
+  const upcoming = mine.filter((r) => r.driverTripStatus === "assigned").sort((a, b) => (a.dispatchedAt || "").localeCompare(b.dispatchedAt || ""));
+  const current = mine.filter((r) => r.driverTripStatus === "accepted").sort((a, b) => (a.driverAcceptedAt || "").localeCompare(b.driverAcceptedAt || ""));
+  const completed = mine
+    .filter((r) => r.driverTripStatus === "completed")
+    .sort((a, b) => (b.driverCompletedAt || "").localeCompare(a.driverCompletedAt || ""))
+    .slice(0, 20);
+  res.json({
+    upcoming: upcoming.map(publicTransportRouteForDriver),
+    current: current.map(publicTransportRouteForDriver),
+    completed: completed.map(publicTransportRouteForDriver),
+  });
+});
+function findDriverTransportRoute(req, res) {
+  const route = transportRoutes.find((r) => r.id === req.params.id && r.assignedDriverId === req.driver.id);
+  if (!route) { res.status(404).json({ error: "Trip not found." }); return null; }
+  return route;
+}
+app.post(
+  "/api/driver-auth/transport-routes/:id/accept",
+  driverAuth,
+  h(async (req, res) => {
+    const route = findDriverTransportRoute(req, res);
+    if (!route) return;
+    if (route.driverTripStatus !== "assigned") return res.status(400).json({ error: "This trip has already been accepted or completed." });
+    route.driverTripStatus = "accepted";
+    route.driverAcceptedAt = nowIso();
+    await persistTransportRoute(route);
+    await audit({ id: req.driver.id, name: req.driver.name }, "driver_accept_transport_route", `Driver ${req.driver.name} accepted a ${route.direction} pickup trip for ${clientNameServer(route.clientId)}`);
+    res.json(publicTransportRouteForDriver(route));
+  })
+);
+app.post(
+  "/api/driver-auth/transport-routes/:id/stops/:seq/arrive",
+  driverAuth,
+  h(async (req, res) => {
+    const route = findDriverTransportRoute(req, res);
+    if (!route) return;
+    if (route.driverTripStatus !== "accepted") return res.status(400).json({ error: "Accept the trip before marking arrival." });
+    const stop = route.stops.find((s) => s.seq === Number(req.params.seq));
+    if (!stop) return res.status(404).json({ error: "Stop not found." });
+    if (stop.boardStatus !== "pending") return res.status(400).json({ error: "This stop has already been resolved." });
+    if (!stop.arrivedAt) stop.arrivedAt = nowIso(); // idempotent - re-tapping doesn't restart the grace timer
+    await persistTransportRoute(route);
+    res.json(publicTransportRouteForDriver(route));
+  })
+);
+app.post(
+  "/api/driver-auth/transport-routes/:id/stops/:seq/board",
+  driverAuth,
+  h(async (req, res) => {
+    const route = findDriverTransportRoute(req, res);
+    if (!route) return;
+    if (route.driverTripStatus !== "accepted") return res.status(400).json({ error: "Accept the trip first." });
+    const stop = route.stops.find((s) => s.seq === Number(req.params.seq));
+    if (!stop) return res.status(404).json({ error: "Stop not found." });
+    if (stop.boardStatus !== "pending") return res.status(400).json({ error: "This stop has already been resolved." });
+    if (!stop.arrivedAt) return res.status(400).json({ error: "Mark yourself arrived at this stop first." });
+    stop.boardStatus = "boarded";
+    stop.boardedAt = nowIso();
+    await persistTransportRoute(route);
+    res.json(publicTransportRouteForDriver(route));
+  })
+);
+app.post(
+  "/api/driver-auth/transport-routes/:id/stops/:seq/no-show",
+  driverAuth,
+  h(async (req, res) => {
+    const route = findDriverTransportRoute(req, res);
+    if (!route) return;
+    if (route.driverTripStatus !== "accepted") return res.status(400).json({ error: "Accept the trip first." });
+    const stop = route.stops.find((s) => s.seq === Number(req.params.seq));
+    if (!stop) return res.status(404).json({ error: "Stop not found." });
+    if (stop.boardStatus !== "pending") return res.status(400).json({ error: "This stop has already been resolved." });
+    if (!stop.arrivedAt) return res.status(400).json({ error: "Mark yourself arrived at this stop first." });
+    const elapsedMs = Date.now() - new Date(stop.arrivedAt).getTime();
+    if (elapsedMs < NO_SHOW_GRACE_MS) {
+      const remainingSec = Math.ceil((NO_SHOW_GRACE_MS - elapsedMs) / 1000);
+      return res.status(400).json({ error: `Give it ${remainingSec}s more - no-show can only be marked 5 minutes after arriving.` });
+    }
+    stop.boardStatus = "no_show";
+    stop.noShowAt = nowIso();
+    await persistTransportRoute(route);
+    await audit({ id: req.driver.id, name: req.driver.name }, "driver_mark_no_show", `Driver ${req.driver.name} marked ${stop.name} as a no-show on a ${route.direction} trip for ${clientNameServer(route.clientId)}`);
+    res.json(publicTransportRouteForDriver(route));
+  })
+);
+app.post(
+  "/api/driver-auth/transport-routes/:id/complete",
+  driverAuth,
+  h(async (req, res) => {
+    const route = findDriverTransportRoute(req, res);
+    if (!route) return;
+    if (route.driverTripStatus !== "accepted") return res.status(400).json({ error: "This trip isn't in progress." });
+    const unresolved = route.stops.filter((s) => s.boardStatus === "pending");
+    if (unresolved.length) {
+      return res.status(400).json({ error: `Resolve every stop first - ${unresolved.length} employee(s) still pending (board or mark no-show).` });
+    }
+    route.driverTripStatus = "completed";
+    route.driverCompletedAt = nowIso();
+    await persistTransportRoute(route);
+    await audit({ id: req.driver.id, name: req.driver.name }, "driver_complete_transport_route", `Driver ${req.driver.name} completed a ${route.direction} pickup trip for ${clientNameServer(route.clientId)}`);
+    res.json(publicTransportRouteForDriver(route));
   })
 );
 

@@ -79,6 +79,7 @@
   .badge.pending{background:#FBF3D6;color:var(--amber);}
   .badge.approved{background:#E9F3DC;color:var(--green);}
   .badge.rejected{background:#fbe4e1;color:var(--red);}
+  .badge.cancelled{background:#fbe4e1;color:var(--red);}
   .driver-tabbar{display:flex;gap:6px;overflow-x:auto;margin-bottom:14px;-webkit-overflow-scrolling:touch;padding-bottom:2px;}
   .driver-tabbar button{flex:0 0 auto;background:#fff;border:1px solid var(--border);color:var(--grey);padding:9px 14px;border-radius:20px;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;}
   .driver-tabbar button.active{background:var(--accent-light);color:var(--ink);border-color:var(--accent-light);font-weight:700;}
@@ -269,6 +270,10 @@ let driverTab = "current";
 let currentTrip = null;
 let tripsMonth = new Date().toISOString().slice(0,7);
 let monthTrips = { upcoming: [], completed: [] };
+// Employee Transport pickup/drop routes dispatched to this driver - a
+// separate concept from the regular `trips` above (multi-stop, per-
+// employee board/no-show). See /api/driver-auth/transport-routes*.
+let transportTrips = { upcoming: [], current: [], completed: [] };
 let myLeaveRequests = [];
 let attendanceMonth = new Date().toISOString().slice(0,7);
 let attendanceRows = [];
@@ -302,6 +307,38 @@ async function api(path, opts={}){
   const data = await res.json().catch(()=>({}));
   if(!res.ok) throw new Error(data.error || ("Request failed ("+res.status+")"));
   return data;
+}
+
+// ---------- push notifications (dispatched trips) ----------
+// Best-effort: silently gives up on browsers/contexts that don't support
+// it (no service worker, HTTP instead of HTTPS, permission denied) - the
+// 15s poll on Upcoming Trips still shows a newly-dispatched trip either
+// way, this just means the driver also gets it as a native notification
+// even with the app closed / phone locked.
+function urlBase64ToUint8Array(base64String){
+  const padding = "=".repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g,"+").replace(/_/g,"/");
+  const rawData = atob(base64);
+  const arr = new Uint8Array(rawData.length);
+  for(let i=0;i<rawData.length;i++) arr[i] = rawData.charCodeAt(i);
+  return arr;
+}
+async function subscribeToPush(){
+  try{
+    if(!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    if(typeof Notification==="undefined" || Notification.permission==="denied") return;
+    const reg = await navigator.serviceWorker.register("/driver-sw.js");
+    let permission = Notification.permission;
+    if(permission==="default") permission = await Notification.requestPermission();
+    if(permission!=="granted") return;
+    let sub = await reg.pushManager.getSubscription();
+    if(!sub){
+      const { publicKey } = await api("/driver-auth/vapid-public-key");
+      if(!publicKey) return;
+      sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+    }
+    await api("/driver-auth/push-subscribe", {method:"POST", body: JSON.stringify(sub.toJSON())});
+  }catch(e){ console.warn("Push subscribe skipped:", e.message); }
 }
 
 function resetSession(){
@@ -418,10 +455,10 @@ async function refreshMe(){
 // both when switching tabs and by the 15s poll, so whichever tab is open
 // always has fresh data without re-fetching every tab on every poll.
 async function loadActiveTabData(){
-  if(driverTab==="upcoming") await Promise.all([fetchMonthTrips(), fetchMyLeaveRequests()]);
+  if(driverTab==="upcoming") await Promise.all([fetchMonthTrips(), fetchMyLeaveRequests(), fetchTransportTrips()]);
   else if(driverTab==="profile") await Promise.all([fetchPayslip(), fetchAttendance(), fetchHierarchy()]);
   else if(driverTab==="documents") await fetchDocuments();
-  else await Promise.all([fetchCurrentTrip(), fetchMyRepairRequests()]); // "current" tab, and the default
+  else await Promise.all([fetchCurrentTrip(), fetchMyRepairRequests(), fetchTransportTrips()]); // "current" tab, and the default
 }
 async function setDriverTab(tab){
   driverTab = tab;
@@ -434,6 +471,9 @@ async function fetchCurrentTrip(){
 }
 async function fetchMonthTrips(){
   try{ monthTrips = await api(`/driver-auth/trips?month=${tripsMonth}`); }catch(e){ monthTrips = {upcoming:[],completed:[]}; }
+}
+async function fetchTransportTrips(){
+  try{ transportTrips = await api("/driver-auth/transport-routes"); }catch(e){ transportTrips = {upcoming:[],current:[],completed:[]}; }
 }
 async function fetchMyLeaveRequests(){
   try{ myLeaveRequests = await api("/driver-auth/leave-requests"); }catch(e){ myLeaveRequests = []; }
@@ -565,6 +605,7 @@ async function boot(){
     const m = await api("/driver-auth/me");
     driver = m.driver; shift = m.shift;
     applyTheme(driver.theme && driver.theme.key);
+    subscribeToPush();
     if(shift && shift.status!=="closed"){
       // Land straight on the tab bar (Current Trip active) no matter which
       // stage the shift is in - awaiting_odometer no longer blocks access
@@ -671,6 +712,7 @@ async function doPortalLogin(){
     localStorage.setItem("driverAuthToken", driverToken);
     localStorage.setItem("portalType", "driver");
     startLocationPings(); startPolling();
+    subscribeToPush();
     driverTab = "current";
     await fetchCurrentTrip();
     busy = false; render();
@@ -890,6 +932,91 @@ function driverTabContentHtml(){
   return currentTripTabHtml();
 }
 
+// ---------- Employee Transport - accepted trip, per-stop board/no-show ----------
+// A stop starts "pending" -> driver taps "Arrived Here" when they reach it
+// (starts the 5-minute no-show grace period) -> then either "Mark Boarded"
+// (any time after arriving) or "Mark No Show" (only once the 5 minutes
+// have actually passed, enforced both here and server-side) - so the
+// driver is never stuck waiting indefinitely for one employee to show up.
+function transportStopRowHtml(routeId, s){
+  const badge = s.boardStatus==="boarded" ? `<span class="badge completed">Boarded</span>`
+    : s.boardStatus==="no_show" ? `<span class="badge cancelled">No Show</span>`
+    : `<span class="badge upcoming">Pending</span>`;
+  let actions = "";
+  if(s.boardStatus==="pending"){
+    if(!s.arrivedAt){
+      actions = `<button ${busy?"disabled":""} onclick="markStopArrived('${routeId}',${s.seq})">${busy?'<span class="spinner"></span>':"Arrived Here"}</button>`;
+    } else {
+      const remainMs = Math.max(0, new Date(s.arrivedAt).getTime() + 5*60*1000 - Date.now());
+      actions = `
+        <button ${busy?"disabled":""} onclick="markStopBoarded('${routeId}',${s.seq})">${busy?'<span class="spinner"></span>':"Mark Boarded"}</button>
+        <button id="noShowBtn_${routeId}_${s.seq}" data-arrived="${s.arrivedAt}" ${(busy||remainMs>0)?"disabled":""} onclick="markStopNoShow('${routeId}',${s.seq})">
+          <span id="noShowLabel_${routeId}_${s.seq}">${remainMs>0 ? "No Show in "+Math.ceil(remainMs/1000)+"s" : "Mark No Show"}</span>
+        </button>`;
+    }
+  }
+  return `
+  <div class="trip-item">
+    <div class="date">Stop ${s.seq} &middot; ${s.name}</div>
+    <div class="desc">${badge}${s.mapsUrl ? ` &middot; <a href="${s.mapsUrl}" target="_blank" rel="noopener">Open in Maps</a>` : ""}</div>
+    <div class="trip-actions">${actions}</div>
+  </div>`;
+}
+function transportCurrentCardHtml(){
+  const list = transportTrips.current || [];
+  if(!list.length) return "";
+  return list.map(r=>{
+    const allResolved = r.stops.every(s=>s.boardStatus!=="pending");
+    return `
+    <div class="card">
+      <h2 class="section-title">🚌 ${r.direction==="pickup"?"Pickup":"Drop"} Trip &middot; ${r.clientName}</h2>
+      <p class="muted">${r.vehicleReg||""}${r.totalDistanceKm!=null?" &middot; "+r.totalDistanceKm+" km":""} &middot; ${r.totalEmployees} employee${r.totalEmployees===1?"":"s"}</p>
+      ${r.stops.map(s=>transportStopRowHtml(r.id, s)).join("")}
+      <button class="big-btn" style="margin-top:14px;" ${(busy||!allResolved)?"disabled":""} onclick="completeTransportRoute('${r.id}')">
+        ${busy?'<span class="spinner"></span>Saving...' : allResolved ? "Complete Trip" : "Resolve every stop to complete"}
+      </button>
+    </div>`;
+  }).join("");
+}
+async function acceptTransportRoute(id){
+  if(busy) return;
+  busy = true; render();
+  try{
+    await api(`/driver-auth/transport-routes/${id}/accept`, {method:"POST"});
+    await fetchTransportTrips();
+    driverTab = "current";
+  }catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+async function markStopArrived(routeId, seq){
+  if(busy) return;
+  busy = true; render();
+  try{ await api(`/driver-auth/transport-routes/${routeId}/stops/${seq}/arrive`, {method:"POST"}); await fetchTransportTrips(); }
+  catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+async function markStopBoarded(routeId, seq){
+  if(busy) return;
+  busy = true; render();
+  try{ await api(`/driver-auth/transport-routes/${routeId}/stops/${seq}/board`, {method:"POST"}); await fetchTransportTrips(); }
+  catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+async function markStopNoShow(routeId, seq){
+  if(busy) return;
+  busy = true; render();
+  try{ await api(`/driver-auth/transport-routes/${routeId}/stops/${seq}/no-show`, {method:"POST"}); await fetchTransportTrips(); }
+  catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+async function completeTransportRoute(id){
+  if(busy) return;
+  busy = true; render();
+  try{ await api(`/driver-auth/transport-routes/${id}/complete`, {method:"POST"}); await fetchTransportTrips(); }
+  catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+
 // ---------- Current Trip tab ----------
 // This is the landing tab right after login. While the shift is still
 // awaiting_odometer, it's where the opening-odometer gate (with its
@@ -897,7 +1024,7 @@ function driverTabContentHtml(){
 // so the driver can check Documents/Profile/Upcoming Trips while that
 // countdown is still running if they want to.
 function currentTripTabHtml(){
-  if(shift.status==="awaiting_odometer") return odometerOpenCardHtml() + repairRequestCardHtml() + vehicleHistoryCardHtml();
+  if(shift.status==="awaiting_odometer") return transportCurrentCardHtml() + odometerOpenCardHtml() + repairRequestCardHtml() + vehicleHistoryCardHtml();
   let tripHtml;
   if(!currentTrip){
     tripHtml = `<div class="card"><h2 class="section-title">Current Trip</h2><div class="empty">No trip currently running. Start one from the Upcoming Trips tab.</div></div>`;
@@ -932,7 +1059,7 @@ function currentTripTabHtml(){
     </div>`;
   }
   const shiftHtml = shift.status==="ready_to_logout" ? logoutCardHtml() : closingOdometerCardHtml();
-  return tripHtml + shiftHtml + repairRequestCardHtml() + vehicleHistoryCardHtml();
+  return transportCurrentCardHtml() + tripHtml + shiftHtml + repairRequestCardHtml() + vehicleHistoryCardHtml();
 }
 // Report a vehicle problem straight to Workshop - lands with the Workshop
 // Manager, who assigns it to a Mechanic/Electrician/Helper. Available any
@@ -1070,6 +1197,26 @@ async function generateManualEntryCode(){
 }
 
 // ---------- Upcoming Trips tab ----------
+// Employee Transport pickup/drop trip dispatched to this driver, not yet
+// accepted - this is effectively the "notification": it shows up here the
+// moment staff dispatches it (next 15s poll, or immediately via push if
+// the driver subscribed), and stays here until Accept is tapped.
+function transportUpcomingCardHtml(){
+  const list = transportTrips.upcoming || [];
+  if(!list.length) return "";
+  return `
+  <div class="card">
+    <h2 class="section-title">🚌 New Pickup/Drop Trips</h2>
+    ${list.map(r=>`
+    <div class="trip-item">
+      <div class="date">${r.direction==="pickup"?"Pickup":"Drop"} &middot; ${r.clientName}</div>
+      <div class="desc">${r.totalEmployees} employee${r.totalEmployees===1?"":"s"}${r.vehicleReg? " &middot; "+r.vehicleReg : ""}${r.totalDistanceKm!=null? " &middot; "+r.totalDistanceKm+" km" : ""}</div>
+      <div class="trip-actions">
+        <button ${busy?"disabled":""} onclick="acceptTransportRoute('${r.id}')">${busy?'<span class="spinner"></span>':"Accept Trip"}</button>
+      </div>
+    </div>`).join("")}
+  </div>`;
+}
 function upcomingTripsTabHtml(){
   const up = monthTrips.upcoming || [];
   const done = monthTrips.completed || [];
@@ -1090,7 +1237,7 @@ function upcomingTripsTabHtml(){
       <div class="desc">${l.reason || "Leave requested"}</div>
       <span class="badge ${l.status}">${l.status.toUpperCase()}</span>
     </div>`;
-  return `
+  return transportUpcomingCardHtml() + `
   <div class="card">
     <h2 class="section-title">Upcoming Trips</h2>
     <div class="month-picker"><input type="month" value="${tripsMonth}" onchange="setTripsMonth(this.value)" /></div>
@@ -1611,6 +1758,21 @@ setInterval(()=>{
     odoExpiryHandled = true;
     refreshMe(); // picks up the server's auto-close and switches screens
   }
+}, 1000);
+
+// Same no-full-render approach for each pending stop's "No Show" grace
+// countdown - ticks every "Mark No Show" button on screen once a second,
+// flipping it enabled the moment 5 minutes have passed since arrival,
+// without touching anything else on the page.
+setInterval(()=>{
+  document.querySelectorAll('[id^="noShowBtn_"]').forEach(btn=>{
+    const arrivedAt = btn.getAttribute("data-arrived");
+    if(!arrivedAt) return;
+    const remainMs = Math.max(0, new Date(arrivedAt).getTime() + 5*60*1000 - Date.now());
+    const label = document.getElementById(btn.id.replace("noShowBtn_","noShowLabel_"));
+    if(label) label.textContent = remainMs>0 ? "No Show in "+Math.ceil(remainMs/1000)+"s" : "Mark No Show";
+    btn.disabled = remainMs>0 || busy;
+  });
 }, 1000);
 </script>
 </body>
