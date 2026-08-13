@@ -199,7 +199,7 @@ async function staffApi(path, opts){
   const res = await fetch(STAFF_API+path, opts);
   const data = await res.json().catch(()=>({}));
   if(res.status===401){ staffLogout(true); throw new Error("Session expired - please log in again."); }
-  if(!res.ok) throw new Error(data.error || "Something went wrong.");
+  if(!res.ok){ const err = new Error(data.error || "Something went wrong."); err.data = data; throw err; }
   return data;
 }
 
@@ -675,6 +675,21 @@ function rosterTabHtml(){
     ${bulkImportResult ? `<p class="muted" style="margin-top:8px;">Added ${bulkImportResult.added}, skipped ${bulkImportResult.skipped.length}.${bulkImportResult.skipped.length?" ("+bulkImportResult.skipped.map(s=>"row "+s.row+": "+s.reason).join("; ")+")":""}</p>` : ""}
   </div>
   <div class="card">
+    <h2 class="section-title">Upload from Excel</h2>
+    <p class="muted" style="margin-bottom:8px;">Download the sample format, fill it in, and upload it back. Columns: Name, Mobile Number, Employee Code, Department, Email, Shift Start (HH:MM), Shift End (HH:MM).</p>
+    <button class="btn secondary" onclick="downloadEmployeeTemplate()">Download Sample Format</button>
+    <div style="margin-top:12px;">
+      <input type="file" id="excelUploadInput" accept=".xlsx,.xls" onchange="handleExcelUpload(this)" />
+    </div>
+    ${excelUploadBusy ? `<p class="muted" style="margin-top:8px;">Checking file...</p>` : ""}
+    ${excelUploadError ? `<div class="card" style="margin-top:8px;border:1px solid var(--red);">
+      <p style="color:var(--red);font-weight:600;">${excelUploadError.error}</p>
+      ${excelUploadError.errors && excelUploadError.errors.length ? `<table style="margin-top:8px;"><tr><th>Row</th><th>Column</th><th>Issue</th></tr>
+      ${excelUploadError.errors.map(e=>`<tr><td>${e.row}</td><td>${e.column}</td><td>${e.message}</td></tr>`).join("")}</table>` : ""}
+    </div>` : ""}
+    ${excelUploadSuccess ? `<p class="muted" style="margin-top:8px;color:var(--green,#0a7a3d);">Uploaded successfully - ${excelUploadSuccess.added} employee(s) added.</p>` : ""}
+  </div>
+  <div class="card">
     <h2 class="section-title">Roster (${roster.length})</h2>
     ${roster.length ? `<table><tr><th>Name</th><th>Mobile</th><th>Department</th><th>Location Pinned</th><th>Status</th></tr>
     ${roster.map(e=>`<tr><td>${e.name}</td><td>${e.phone}</td><td>${e.department||"-"}</td><td>${e.homeLat!=null?"Yes":"No"}</td><td>${e.active?"Active":"Inactive"}</td></tr>`).join("")}
@@ -702,6 +717,48 @@ async function doBulkImport(){
     bulkImportResult = await staffApi("/employees/bulk", {method:"POST", body: JSON.stringify({rows})});
     await loadRoster();
   }catch(e){ alert(e.message); }
+}
+
+// -- Excel roster upload --
+let excelUploadBusy = false;
+let excelUploadError = null;
+let excelUploadSuccess = null;
+async function downloadEmployeeTemplate(){
+  try{
+    const res = await fetch(STAFF_API+"/employees/template", {headers: staffToken ? {Authorization:"Bearer "+staffToken} : {}});
+    if(!res.ok){ const d = await res.json().catch(()=>({})); throw new Error(d.error || "Couldn't download the template."); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "employee-roster-template.xlsx";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){ alert(e.message); }
+}
+function readFileAsBase64(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=>resolve(reader.result);
+    reader.onerror = ()=>reject(new Error("Couldn't read that file."));
+    reader.readAsDataURL(file);
+  });
+}
+async function handleExcelUpload(input){
+  const file = input.files && input.files[0];
+  if(!file) return;
+  excelUploadBusy = true; excelUploadError = null; excelUploadSuccess = null; render();
+  try{
+    const fileBase64 = await readFileAsBase64(file);
+    const result = await staffApi("/employees/upload-excel", {method:"POST", body: JSON.stringify({fileBase64})});
+    excelUploadSuccess = result;
+    await loadRoster();
+  }catch(e){
+    excelUploadError = e.data && e.data.errors ? e.data : {error: e.message};
+  }finally{
+    excelUploadBusy = false;
+    input.value = "";
+    render();
+  }
 }
 
 // -- Requests (Travel Desk Manager) --

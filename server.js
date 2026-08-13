@@ -3007,6 +3007,187 @@ app.post(
     res.json({ added: added.length, skipped });
   })
 );
+
+// ---------- Employee roster - Excel template + validated upload ----------
+// The realistic path for a client onboarding hundreds/thousands of
+// employees: download the sample format, fill it in Excel, upload it back.
+// Column headers are matched loosely (case/spacing-insensitive, a couple of
+// common aliases) so a client that renames "Mobile Number" to "Mobile" or
+// "Phone" doesn't get rejected over wording - but the DATA in every row is
+// validated strictly, and this is all-or-nothing: if anything in the file
+// is wrong, nothing is imported and the client gets back an exact list of
+// which row and column to fix, rather than a silent partial import.
+const TRANSPORT_EMPLOYEE_TEMPLATE_COLUMNS = [
+  { label: "Name", key: "name" },
+  { label: "Mobile Number", key: "phone" },
+  { label: "Employee Code", key: "empCode" },
+  { label: "Department", key: "department" },
+  { label: "Email", key: "email" },
+  { label: "Shift Start (HH:MM)", key: "shiftStart" },
+  { label: "Shift End (HH:MM)", key: "shiftEnd" },
+];
+const TRANSPORT_UPLOAD_FIELD_ALIASES = {
+  name: "name",
+  employeename: "name",
+  fullname: "name",
+  mobilenumber: "phone",
+  mobile: "phone",
+  phone: "phone",
+  phonenumber: "phone",
+  contactnumber: "phone",
+  employeecode: "empCode",
+  empcode: "empCode",
+  code: "empCode",
+  department: "department",
+  dept: "department",
+  email: "email",
+  emailaddress: "email",
+  shiftstarthhmm: "shiftStart",
+  shiftstart: "shiftStart",
+  shiftstarttime: "shiftStart",
+  shiftendhhmm: "shiftEnd",
+  shiftend: "shiftEnd",
+  shiftendtime: "shiftEnd",
+};
+function normalizeUploadHeader(h) {
+  return String(h || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+app.get(
+  "/api/client-auth/employees/template",
+  clientAuth,
+  requireClientRole("travel_desk_manager"),
+  (req, res) => {
+    const sample = [{
+      name: "Ravi Kumar",
+      phone: "9876543210",
+      empCode: "EMP1001",
+      department: "Engineering",
+      email: "ravi.kumar@example.com",
+      shiftStart: "09:00",
+      shiftEnd: "18:00",
+    }];
+    const buf = toXlsxBuffer(sample, TRANSPORT_EMPLOYEE_TEMPLATE_COLUMNS, "Employees");
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", 'attachment; filename="employee-roster-template.xlsx"');
+    res.send(buf);
+  }
+);
+app.post(
+  "/api/client-auth/employees/upload-excel",
+  clientAuth,
+  requireClientRole("travel_desk_manager"),
+  h(async (req, res) => {
+    const { fileBase64 } = req.body || {};
+    if (!fileBase64 || typeof fileBase64 !== "string") return res.status(400).json({ error: "No file was uploaded." });
+    const base64Data = fileBase64.includes(",") ? fileBase64.split(",").pop() : fileBase64;
+    let buffer;
+    try {
+      buffer = Buffer.from(base64Data, "base64");
+    } catch (e) {
+      return res.status(400).json({ error: "That file couldn't be read - please upload the .xlsx file as-is." });
+    }
+    let workbook;
+    try {
+      workbook = XLSX.read(buffer, { type: "buffer" });
+    } catch (e) {
+      return res.status(400).json({ error: "That doesn't look like a valid Excel file. Download the sample template and use it as your starting point." });
+    }
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    if (!sheet) return res.status(400).json({ error: "The Excel file has no sheets." });
+    const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+    if (!raw.length) return res.status(400).json({ error: "The uploaded file is empty." });
+
+    const headerRow = raw[0].map((h) => String(h == null ? "" : h).trim());
+    const colIndex = {};
+    headerRow.forEach((h, idx) => {
+      const canon = TRANSPORT_UPLOAD_FIELD_ALIASES[normalizeUploadHeader(h)];
+      if (canon && colIndex[canon] === undefined) colIndex[canon] = idx;
+    });
+    const missing = ["name", "phone"].filter((f) => colIndex[f] === undefined);
+    if (missing.length) {
+      return res.status(400).json({
+        error: `Upload not accepted - the file is missing required column(s): ${missing.map((f) => (f === "phone" ? "Mobile Number" : "Name")).join(", ")}. Download the sample template and use its exact column headers.`,
+      });
+    }
+
+    const dataRows = raw.slice(1);
+    if (!dataRows.every((cells) => cells.every((c) => String(c == null ? "" : c).trim() === ""))) {
+      // has at least one non-blank row - fine, continue
+    } else {
+      return res.status(400).json({ error: "The uploaded file has no employee rows below the header." });
+    }
+
+    const PHONE_RE = /^\d{10}$/;
+    const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+    const existingPhones = new Set(transportEmployees.filter((e) => e.clientId === req.clientUser.clientId).map((e) => e.phone));
+    const seenInFile = new Set();
+    const errors = [];
+    const toCreate = [];
+    dataRows.forEach((cells, i) => {
+      const sheetRow = i + 2; // row 1 is the header
+      const isBlank = cells.every((c) => String(c == null ? "" : c).trim() === "");
+      if (isBlank) return; // trailing blank rows are common in real spreadsheets - skip silently
+      const get = (field) => (colIndex[field] !== undefined ? String(cells[colIndex[field]] == null ? "" : cells[colIndex[field]]).trim() : "");
+      const name = get("name");
+      const phone = get("phone").replace(/[\s-]/g, "");
+      const empCode = get("empCode");
+      const department = get("department");
+      const email = get("email");
+      const shiftStart = get("shiftStart") || "09:00";
+      const shiftEnd = get("shiftEnd") || "18:00";
+      let phoneOk = true;
+      if (!name) errors.push({ row: sheetRow, column: "Name", message: "Name is required." });
+      if (!phone) {
+        errors.push({ row: sheetRow, column: "Mobile Number", message: "Mobile number is required." });
+        phoneOk = false;
+      } else if (!PHONE_RE.test(phone)) {
+        errors.push({ row: sheetRow, column: "Mobile Number", message: `"${phone}" must be exactly 10 digits.` });
+        phoneOk = false;
+      } else if (existingPhones.has(phone)) {
+        errors.push({ row: sheetRow, column: "Mobile Number", message: `"${phone}" is already on the roster.` });
+        phoneOk = false;
+      } else if (seenInFile.has(phone)) {
+        errors.push({ row: sheetRow, column: "Mobile Number", message: `"${phone}" appears more than once in this file.` });
+        phoneOk = false;
+      }
+      if (email && !EMAIL_RE.test(email)) errors.push({ row: sheetRow, column: "Email", message: `"${email}" isn't a valid email address.` });
+      if (shiftStart && !TIME_RE.test(shiftStart)) errors.push({ row: sheetRow, column: "Shift Start (HH:MM)", message: `"${shiftStart}" must be 24-hour HH:MM, e.g. 09:00.` });
+      if (shiftEnd && !TIME_RE.test(shiftEnd)) errors.push({ row: sheetRow, column: "Shift End (HH:MM)", message: `"${shiftEnd}" must be 24-hour HH:MM, e.g. 18:00.` });
+      if (name && phoneOk) {
+        seenInFile.add(phone);
+        toCreate.push({ name, phone, empCode, department, email, shiftStart, shiftEnd });
+      }
+    });
+
+    if (errors.length) {
+      return res.status(400).json({
+        error: `Upload not accepted - ${errors.length} error${errors.length === 1 ? "" : "s"} found. Fix these in the file and upload again.`,
+        errors,
+      });
+    }
+    if (!toCreate.length) return res.status(400).json({ error: "No valid employee rows were found in the file." });
+
+    const added = toCreate.map((row) =>
+      backfillTransportEmployee({
+        id: uid("temp"),
+        clientId: req.clientUser.clientId,
+        name: row.name,
+        phone: row.phone,
+        empCode: row.empCode,
+        department: row.department,
+        email: row.email,
+        shiftStart: row.shiftStart,
+        shiftEnd: row.shiftEnd,
+        createdAt: nowIso(),
+      })
+    );
+    added.forEach((e) => transportEmployees.push(e));
+    await persistTransportEmployeesBulk(added);
+    await audit(req.clientUser, "bulk_add_transport_employees", `${req.clientUser.name} uploaded an Excel roster - ${added.length} employee(s) added`);
+    res.json({ success: true, added: added.length });
+  })
+);
 app.patch(
   "/api/client-auth/employees/:id",
   clientAuth,
