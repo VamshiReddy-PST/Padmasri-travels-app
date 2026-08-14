@@ -581,6 +581,7 @@ function backfillTransportEmployee(e) {
   if (e.empCode === undefined) e.empCode = "";
   if (e.shiftStart === undefined) e.shiftStart = "09:00";
   if (e.shiftEnd === undefined) e.shiftEnd = "18:00";
+  if (!Array.isArray(e.pushSubscriptions)) e.pushSubscriptions = [];
   return e;
 }
 // Defensive backfill for routes created before the driver-workflow fields
@@ -595,6 +596,11 @@ function backfillTransportRoute(r) {
     if (s.boardStatus === undefined) s.boardStatus = "pending";
     if (s.boardedAt === undefined) s.boardedAt = null;
     if (s.noShowAt === undefined) s.noShowAt = null;
+    // Spoken-code pickup verification + the "driver has arrived" push - see
+    // randomBoardingCode() (set at dispatch time) and checkTransportProximity()
+    // (auto-fills arrivedAt from the driver's own GPS pings) below.
+    if (s.boardingCode === undefined) s.boardingCode = null;
+    if (s.arrivalNotifiedAt === undefined) s.arrivalNotifiedAt = null;
   });
   return r;
 }
@@ -962,6 +968,88 @@ function distanceMeters(lat1, lng1, lat2, lng2) {
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
   return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 }
+
+// ---- Employee Transport: spoken boarding code + GPS-proximity arrival ----
+// The employee reads this 4-digit code out to the driver once the vehicle
+// shows up, and the driver types it in to confirm the pickup - a lot harder
+// to fake than a plain "Mark Boarded" tap, since it requires the employee
+// to actually be there. Regenerated fresh on every dispatch (see
+// /api/transport/routes/:id/dispatch), so an old code from a previous day's
+// trip never carries over. 1000-9999 (never a leading zero) purely so it
+// always reads out as a clean 4-digit number.
+function randomBoardingCode() {
+  return String(1000 + Math.floor(Math.random() * 9000));
+}
+// How close (in meters) the driver's own GPS has to get to an employee's
+// pickup point before we treat it as "arrived" automatically - see
+// checkTransportProximity() below, called from every driver location-ping.
+// Wide enough to tolerate ordinary GPS drift/city-block imprecision without
+// firing block-early on a nearby but different address.
+const TRANSPORT_ARRIVAL_PROXIMITY_METERS = 200;
+async function checkTransportProximity(driverId, lat, lng) {
+  const activeRoutes = transportRoutes.filter((r) => r.assignedDriverId === driverId && r.driverTripStatus === "accepted");
+  for (const route of activeRoutes) {
+    const nextStop = route.stops.filter((s) => s.boardStatus === "pending").sort((a, b) => a.seq - b.seq)[0];
+    if (!nextStop || nextStop.arrivedAt || nextStop.lat == null || nextStop.lng == null) continue;
+    const dist = distanceMeters(lat, lng, nextStop.lat, nextStop.lng);
+    if (dist != null && dist <= TRANSPORT_ARRIVAL_PROXIMITY_METERS) {
+      nextStop.arrivedAt = nowIso();
+      nextStop.arrivalNotifiedAt = nowIso();
+      await persistTransportRoute(route);
+      const employee = transportEmployees.find((e) => e.id === nextStop.employeeId);
+      if (employee) {
+        sendPushToEmployee(employee, {
+          title: "Your driver has arrived",
+          body: "Your vehicle is at your pickup point now - board within 5 minutes and read your boarding code to the driver.",
+          url: "/client.html",
+        }).catch((err) => console.error("Push notify (arrival) failed:", err.message));
+      }
+    }
+  }
+}
+
+// ---- Employee Transport: free road-network ETA (OSRM) --------------------
+// Gives each employee a "driver is X min / Y km away" estimate using OSRM's
+// free public routing server - real road distance/time, but no live traffic
+// data (that would need a paid Google Distance Matrix key, which this app
+// deliberately doesn't depend on). Cached briefly and keyed by rounded
+// coordinates so many employees polling the same route in the same ~20s
+// window collapse into one outbound call instead of one each.
+const OSRM_BASE_URL = process.env.OSRM_BASE_URL || "https://router.project-osrm.org";
+const OSRM_TIMEOUT_MS = 4000;
+const OSRM_CACHE_MS = 20 * 1000;
+const osrmEtaCache = new Map(); // "fromLat,fromLng:toLat,toLng" -> {data, at}
+async function osrmEtaRaw(fromLat, fromLng, toLat, toLng) {
+  try {
+    const url = `${OSRM_BASE_URL}/route/v1/driving/${fromLng},${fromLat};${toLng},${toLat}?overview=false`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), OSRM_TIMEOUT_MS);
+    let res;
+    try {
+      res = await fetch(url, { signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) return null;
+    const json = await res.json();
+    const route = json.routes && json.routes[0];
+    if (!route) return null;
+    return { etaSeconds: Math.round(route.duration), distanceMeters: Math.round(route.distance) };
+  } catch (err) {
+    return null; // OSRM unreachable/timed out/rate-limited - ETA just won't show, never breaks the request it's attached to
+  }
+}
+async function osrmEtaCached(fromLat, fromLng, toLat, toLng) {
+  if (![fromLat, fromLng, toLat, toLng].every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  const key = `${fromLat.toFixed(3)},${fromLng.toFixed(3)}:${toLat.toFixed(3)},${toLng.toFixed(3)}`;
+  const cached = osrmEtaCache.get(key);
+  if (cached && Date.now() - cached.at < OSRM_CACHE_MS) return cached.data;
+  const data = await osrmEtaRaw(fromLat, fromLng, toLat, toLng);
+  osrmEtaCache.set(key, { data, at: Date.now() });
+  if (osrmEtaCache.size > 500) osrmEtaCache.delete(osrmEtaCache.keys().next().value);
+  return data;
+}
+
 // ---- Location history (Trip Replay) --------------------------------------
 // Fleetx's /analytics/live endpoint is a current-position snapshot only, not
 // a history feed - so Trip Replay can't wait on Fleetx to add one. Instead
@@ -2812,6 +2900,13 @@ app.post(
     route.driverTripStatus = "assigned";
     route.driverAcceptedAt = null;
     route.driverCompletedAt = null;
+    // Fresh spoken boarding code per employee for this dispatch - see
+    // randomBoardingCode() near distanceMeters(). Regenerated every time so
+    // a code from an earlier trip never carries over to a new one.
+    route.stops.forEach((s) => {
+      s.boardingCode = randomBoardingCode();
+      s.arrivalNotifiedAt = null;
+    });
     await persistTransportRoute(route);
     await audit(req.user, "dispatch_transport_route", `${req.user.name} dispatched a ${route.direction} route for ${clientNameServer(route.clientId)}`);
     if (route.assignedDriverId) {
@@ -3327,6 +3422,36 @@ app.get(
 );
 
 // -------- Employee self-service (mirrors driver-auth: mobile + PIN) --------
+// Sends a real browser push notification (works even if client.html isn't
+// open) to every device an employee has subscribed from - see
+// /api/client-employee-auth/push-subscribe. Mirrors sendPushToDriver()
+// exactly, just persisted through persistTransportEmployee() instead of the
+// main save() since employees live in the separate transport dataset. Never
+// throws - a push failure should never break whatever triggered it (a
+// driver's GPS ping crossing the arrival radius, a code-verified boarding).
+async function sendPushToEmployee(employee, { title, body, url }) {
+  if (!employee || !Array.isArray(employee.pushSubscriptions) || !employee.pushSubscriptions.length) return;
+  const payload = JSON.stringify({ title, body, url: url || "/client.html" });
+  const stillValid = [];
+  let changed = false;
+  for (const sub of employee.pushSubscriptions) {
+    try {
+      await webpush.sendNotification(sub, payload);
+      stillValid.push(sub);
+    } catch (err) {
+      if (err && (err.statusCode === 404 || err.statusCode === 410)) {
+        changed = true; // expired/revoked on the browser's end - drop it
+      } else {
+        console.error("Push send failed for employee", employee.id, err && err.message);
+        stillValid.push(sub); // transient error - keep it, don't give up on one hiccup
+      }
+    }
+  }
+  if (changed) {
+    employee.pushSubscriptions = stillValid;
+    await persistTransportEmployee(employee).catch((err) => console.error("Failed to persist pruned push subscriptions:", err.message));
+  }
+}
 function clientEmployeeAuth(req, res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
@@ -3359,6 +3484,41 @@ app.get("/api/client-employee-auth/me", clientEmployeeAuth, (req, res) => {
     themePresets: THEME_PRESETS,
   });
 });
+// Web push - lets an employee get a native "your driver has arrived"
+// notification even with client.html closed / phone locked. Same VAPID
+// keypair the driver app uses (one app-wide pair is fine - it's just the
+// server's push identity, not a per-user secret); see sendPushToEmployee()
+// above and checkTransportProximity() near distanceMeters().
+app.get("/api/client-employee-auth/vapid-public-key", clientEmployeeAuth, (req, res) => {
+  res.json({ publicKey: db.vapidKeys.publicKey });
+});
+app.post(
+  "/api/client-employee-auth/push-subscribe",
+  clientEmployeeAuth,
+  h(async (req, res) => {
+    const sub = req.body || {};
+    if (!sub.endpoint || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) {
+      return res.status(400).json({ error: "A valid push subscription object is required." });
+    }
+    if (!Array.isArray(req.transportEmployee.pushSubscriptions)) req.transportEmployee.pushSubscriptions = [];
+    req.transportEmployee.pushSubscriptions = req.transportEmployee.pushSubscriptions.filter((s) => s.endpoint !== sub.endpoint);
+    req.transportEmployee.pushSubscriptions.push({ endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } });
+    await persistTransportEmployee(req.transportEmployee);
+    res.json({ ok: true });
+  })
+);
+app.post(
+  "/api/client-employee-auth/push-unsubscribe",
+  clientEmployeeAuth,
+  h(async (req, res) => {
+    const { endpoint } = req.body || {};
+    if (Array.isArray(req.transportEmployee.pushSubscriptions) && endpoint) {
+      req.transportEmployee.pushSubscriptions = req.transportEmployee.pushSubscriptions.filter((s) => s.endpoint !== endpoint);
+      await persistTransportEmployee(req.transportEmployee);
+    }
+    res.json({ ok: true });
+  })
+);
 // Employee drops a pin on a map (or uses device GPS) for their home
 // location - this is the ONLY geocoding source the optimizer uses (see the
 // clarified design: no bulk/paid geocoding API), so it's a required step
@@ -3519,7 +3679,7 @@ app.get(
         liveVehicles = null; // live tracking just won't be included below
       }
     }
-    const result = routes.map((r) => {
+    const result = await Promise.all(routes.map(async (r) => {
       const stop = r.stops.find((s) => s.employeeId === req.transportEmployee.id);
       const vehicle = r.assignedVehicleId ? db.vehicles.find((v) => v.id === r.assignedVehicleId) : null;
       const driver = r.assignedDriverId
@@ -3540,6 +3700,20 @@ app.get(
           };
         }
       }
+      // Free road-network ETA (no live traffic - see osrmEtaCached() near
+      // distanceMeters()) from the vehicle's current GPS to THIS employee's
+      // own stop - only worth the call once the driver is actually out on
+      // the trip and this employee hasn't boarded yet.
+      let eta = null;
+      if (r.driverTripStatus === "accepted" && stop.boardStatus === "pending" && live && live.latitude != null && live.longitude != null) {
+        const etaData = await osrmEtaCached(live.latitude, live.longitude, stop.lat, stop.lng);
+        if (etaData) {
+          eta = {
+            etaMinutes: Math.max(1, Math.round(etaData.etaSeconds / 60)),
+            distanceKm: Math.round((etaData.distanceMeters / 1000) * 10) / 10,
+          };
+        }
+      }
       return {
         routeId: r.id,
         direction: r.direction,
@@ -3549,9 +3723,16 @@ app.get(
         vehicleReg: vehicle ? vehicle.reg : null,
         driverName: driver ? driver.name : null,
         driverPhone: driver ? driver.phone : null,
+        driverTripStatus: r.driverTripStatus,
+        // This employee's own stop state - lets the app show "driver has
+        // arrived" and their spoken boarding code once there's an active trip.
+        arrivedAt: stop.arrivedAt,
+        boardStatus: stop.boardStatus,
+        boardingCode: stop.boardingCode,
+        eta,
         live,
       };
-    });
+    }));
     res.json({ routes: result });
   })
 );
@@ -6802,6 +6983,9 @@ function publicTransportRouteForDriver(r) {
       noShowAt: s.noShowAt,
       // How many more ms until "Mark No Show" is allowed - 0 once eligible, null if not yet arrived.
       noShowEligibleInMs: s.arrivedAt ? Math.max(0, NO_SHOW_GRACE_MS - (Date.now() - new Date(s.arrivedAt).getTime())) : null,
+      // The driver never sees the actual code (the employee reads it out loud) -
+      // just whether one is expected, so the app knows to show a code box.
+      hasBoardingCode: !!s.boardingCode,
     })),
   };
 }
@@ -6864,9 +7048,26 @@ app.post(
     if (!stop) return res.status(404).json({ error: "Stop not found." });
     if (stop.boardStatus !== "pending") return res.status(400).json({ error: "This stop has already been resolved." });
     if (!stop.arrivedAt) return res.status(400).json({ error: "Mark yourself arrived at this stop first." });
+    // The employee reads their boarding code out loud, the driver types it
+    // in here - confirms the right person is actually boarding instead of
+    // just trusting a tap. Stops from before this feature existed have no
+    // code (boardingCode null) and fall back to the old tap-only flow.
+    if (stop.boardingCode) {
+      const code = String((req.body || {}).code || "").trim();
+      if (!code) return res.status(400).json({ error: "Enter the employee's boarding code." });
+      if (code !== stop.boardingCode) return res.status(400).json({ error: "That code doesn't match - ask the employee to read it out again." });
+    }
     stop.boardStatus = "boarded";
     stop.boardedAt = nowIso();
     await persistTransportRoute(route);
+    const employee = transportEmployees.find((e) => e.id === stop.employeeId);
+    if (employee) {
+      sendPushToEmployee(employee, {
+        title: "You're on board",
+        body: "Your pickup has been confirmed - have a good ride!",
+        url: "/client.html",
+      }).catch((err) => console.error("Push notify (boarded) failed:", err.message));
+    }
     res.json(publicTransportRouteForDriver(route));
   })
 );
@@ -6998,6 +7199,10 @@ app.post(
       db.driverLocationLogs.splice(0, db.driverLocationLogs.length - DRIVER_LOCATION_LOG_CAP);
     }
     await save();
+    // Every ping doubles as a check for "did we just get close enough to an
+    // Employee Transport pickup point to auto-mark arrival + notify them?" -
+    // fire-and-forget so a slow/failed check never delays this response.
+    checkTransportProximity(req.driver.id, lat, lng).catch((err) => console.error("Transport proximity check failed:", err.message));
     res.json({ ok: true });
   })
 );

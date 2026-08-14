@@ -274,6 +274,11 @@ let monthTrips = { upcoming: [], completed: [] };
 // separate concept from the regular `trips` above (multi-stop, per-
 // employee board/no-show). See /api/driver-auth/transport-routes*.
 let transportTrips = { upcoming: [], current: [], completed: [] };
+// In-progress boarding-code text per stop, keyed "routeId_seq" - kept
+// outside the trip data itself so a background poll/render mid-typing
+// doesn't wipe out what the driver has entered so far (same reasoning as
+// odoOpenDraft/odoCloseDraft below).
+let transportBoardCodeDrafts = {};
 let myLeaveRequests = [];
 let attendanceMonth = new Date().toISOString().slice(0,7);
 let attendanceRows = [];
@@ -346,6 +351,7 @@ function resetSession(){
   odoOpenDraft = ""; odoCloseDraft = "";
   driverTab = "current"; currentTrip = null;
   monthTrips = { upcoming: [], completed: [] }; myLeaveRequests = [];
+  transportTrips = { upcoming: [], current: [], completed: [] }; transportBoardCodeDrafts = {};
   attendanceRows = []; documentsData = null; payslip = null;
   vehicleRepairHistory = null; vehicleRepairHistoryReg = ""; showVehicleHistory = false;
   portalType = null;
@@ -933,11 +939,14 @@ function driverTabContentHtml(){
 }
 
 // ---------- Employee Transport - accepted trip, per-stop board/no-show ----------
-// A stop starts "pending" -> driver taps "Arrived Here" when they reach it
-// (starts the 5-minute no-show grace period) -> then either "Mark Boarded"
-// (any time after arriving) or "Mark No Show" (only once the 5 minutes
-// have actually passed, enforced both here and server-side) - so the
-// driver is never stuck waiting indefinitely for one employee to show up.
+// A stop starts "pending" -> arrival is usually detected automatically once
+// the driver's own GPS gets within ~200m of the stop (see
+// checkTransportProximity() server-side), but "Arrived Here" is still here
+// as a manual fallback for when GPS is off/inaccurate. Once arrived, the
+// employee reads their 4-digit boarding code out loud and the driver types
+// it in to confirm the pickup (Confirm Pickup) - or "Mark No Show" once the
+// 5-minute grace period has passed (enforced both here and server-side) -
+// so the driver is never stuck waiting indefinitely for one employee.
 function transportStopRowHtml(routeId, s){
   const badge = s.boardStatus==="boarded" ? `<span class="badge completed">Boarded</span>`
     : s.boardStatus==="no_show" ? `<span class="badge cancelled">No Show</span>`
@@ -948,8 +957,14 @@ function transportStopRowHtml(routeId, s){
       actions = `<button ${busy?"disabled":""} onclick="markStopArrived('${routeId}',${s.seq})">${busy?'<span class="spinner"></span>':"Arrived Here"}</button>`;
     } else {
       const remainMs = Math.max(0, new Date(s.arrivedAt).getTime() + 5*60*1000 - Date.now());
+      const key = routeId+"_"+s.seq;
+      const draft = transportBoardCodeDrafts[key] || "";
       actions = `
-        <button ${busy?"disabled":""} onclick="markStopBoarded('${routeId}',${s.seq})">${busy?'<span class="spinner"></span>':"Mark Boarded"}</button>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+          <input type="tel" inputmode="numeric" maxlength="4" placeholder="Employee's code" value="${draft}" style="width:120px;"
+            oninput="transportBoardCodeDrafts['${key}']=this.value.replace(/\\D/g,'').slice(0,4)"/>
+          <button ${busy?"disabled":""} onclick="markStopBoarded('${routeId}',${s.seq})">${busy?'<span class="spinner"></span>':"Confirm Pickup"}</button>
+        </div>
         <button id="noShowBtn_${routeId}_${s.seq}" data-arrived="${s.arrivedAt}" ${(busy||remainMs>0)?"disabled":""} onclick="markStopNoShow('${routeId}',${s.seq})">
           <span id="noShowLabel_${routeId}_${s.seq}">${remainMs>0 ? "No Show in "+Math.ceil(remainMs/1000)+"s" : "Mark No Show"}</span>
         </button>`;
@@ -997,8 +1012,15 @@ async function markStopArrived(routeId, seq){
 }
 async function markStopBoarded(routeId, seq){
   if(busy) return;
+  const key = routeId+"_"+seq;
+  const code = (transportBoardCodeDrafts[key]||"").trim();
+  if(code.length !== 4){ lastError = "Ask the employee to read out their 4-digit boarding code first."; render(); return; }
   busy = true; render();
-  try{ await api(`/driver-auth/transport-routes/${routeId}/stops/${seq}/board`, {method:"POST"}); await fetchTransportTrips(); }
+  try{
+    await api(`/driver-auth/transport-routes/${routeId}/stops/${seq}/board`, {method:"POST", body: JSON.stringify({code})});
+    delete transportBoardCodeDrafts[key];
+    await fetchTransportTrips();
+  }
   catch(e){ lastError = e.message; }
   busy = false; render();
 }

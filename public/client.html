@@ -211,6 +211,8 @@ async function boot(){
       employee = m.employee; empClient = m.client;
       applyTheme(employee.theme && employee.theme.key);
       await Promise.all([loadMyRoute(), loadMyRequests()]);
+      startEmpPolling();
+      subscribeEmployeeToPush();
     }catch(e){ /* handled by empApi */ }
   } else if(portalKind==="staff" && staffToken){
     try{
@@ -235,6 +237,7 @@ function backToChooser(){ portalKind=null; localStorage.removeItem("clientPortal
 function empLogout(silent){
   empToken=null; employee=null; empClient=null;
   localStorage.removeItem("clientEmpToken");
+  stopEmpPolling();
   if(!silent) empApi("/logout", {method:"POST"}).catch(()=>{});
   render();
 }
@@ -259,6 +262,8 @@ async function doEmployeeLogin(){
     localStorage.setItem("clientEmpToken", empToken);
     applyTheme(employee.theme && employee.theme.key);
     await Promise.all([loadMyRoute(), loadMyRequests()]);
+    startEmpPolling();
+    subscribeEmployeeToPush();
     busy=false; render();
   }catch(e){ busy=false; lastError=e.message; render(); }
 }
@@ -312,6 +317,50 @@ async function cancelRequest(id){
   try{ await empApi("/requests/"+id+"/cancel", {method:"POST"}); await loadMyRequests(); render(); }
   catch(e){ alert(e.message); }
 }
+
+// ---------- employee push notifications ("driver has arrived") ----------
+// Best-effort, same pattern as driver.html's subscribeToPush(): silently
+// gives up on browsers/contexts that don't support it. The 15s poll on
+// loadMyRoute() still shows an arrived driver either way (see
+// startEmpPolling()) - this just also wakes a closed tab/locked phone with
+// a native notification.
+function urlBase64ToUint8ArrayC(base64String){
+  const padding = "=".repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g,"+").replace(/_/g,"/");
+  const rawData = atob(base64);
+  const arr = new Uint8Array(rawData.length);
+  for(let i=0;i<rawData.length;i++) arr[i] = rawData.charCodeAt(i);
+  return arr;
+}
+async function subscribeEmployeeToPush(){
+  try{
+    if(!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    if(typeof Notification==="undefined" || Notification.permission==="denied") return;
+    const reg = await navigator.serviceWorker.register("/client-sw.js");
+    let permission = Notification.permission;
+    if(permission==="default") permission = await Notification.requestPermission();
+    if(permission!=="granted") return;
+    let sub = await reg.pushManager.getSubscription();
+    if(!sub){
+      const { publicKey } = await empApi("/vapid-public-key");
+      if(!publicKey) return;
+      sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey: urlBase64ToUint8ArrayC(publicKey) });
+    }
+    await empApi("/push-subscribe", {method:"POST", body: JSON.stringify(sub.toJSON())});
+  }catch(e){ console.warn("Push subscribe skipped:", e.message); }
+}
+
+// ---------- employee live polling (driver on the way / arrived / ETA) ----------
+let empPollTimer = null;
+function startEmpPolling(){
+  stopEmpPolling();
+  empPollTimer = setInterval(async ()=>{
+    if(!empToken) return;
+    await loadMyRoute();
+    render();
+  }, 15000);
+}
+function stopEmpPolling(){ if(empPollTimer){ clearInterval(empPollTimer); empPollTimer=null; } }
 
 // ---------- location pin (Leaflet) ----------
 let _pinMap = null, _pinMarker = null, _pinLatLng = employee ? null : null;
@@ -477,8 +526,37 @@ function empHomeHtml(){
     ${active ? `
       <p><b>${active.direction==="pickup"?"Pickup":"Drop"}</b> - stop ${active.stopSeq} of ${active.totalStops} &middot; <span class="badge ${active.status}">${active.status}</span></p>
       <p class="muted">Vehicle: ${active.vehicleReg||"Not assigned yet"} &middot; Driver: ${active.driverName||"Not assigned yet"}${active.driverPhone?" ("+active.driverPhone+")":""}</p>
+      ${driverStatusHtml(active)}
+      ${boardingCodeHtml(active)}
       ${liveTrackingHtml(active.live)}
     ` : pendingReq ? `<p class="muted">Your request is <b>${pendingReq.status}</b> - once routed, your vehicle and driver will show up here.</p>` : `<p class="muted">No active ride. Go to the Request tab to ask for one.</p>`}
+  </div>`;
+}
+// Tells the employee exactly where things stand right now - assigned but
+// not yet started, on the way (with an ETA to their own stop when one's
+// available), just arrived (their cue to head down and read out their
+// code), boarded, or no-show. See driverTripStatus/arrivedAt/boardStatus on
+// the my-route response.
+function driverStatusHtml(r){
+  if(r.boardStatus==="boarded") return `<div class="banner" style="background:#E8F5E9;border-color:#C8E6C9;color:#2E7D32;">🎉 You're on board - enjoy your ride!</div>`;
+  if(r.boardStatus==="no_show") return `<div class="banner" style="background:#FDECEA;border-color:#F5C6CB;color:#c0392b;">You were marked as a no-show on this trip. Contact your Travel Desk if this isn't right.</div>`;
+  if(r.arrivedAt) return `<div class="banner" style="background:#E8F5E9;border-color:#C8E6C9;color:#2E7D32;font-weight:600;">✅ Your driver has arrived! Head down and read out your boarding code below.</div>`;
+  if(r.driverTripStatus==="accepted"){
+    const etaText = r.eta ? ` - about ${r.eta.etaMinutes} min away (${r.eta.distanceKm} km)` : "";
+    return `<div class="banner" style="background:#EAF2FB;border-color:#CFE0F5;color:#2255a4;">🚗 Your driver is on the way${etaText}.</div>`;
+  }
+  if(r.driverTripStatus==="assigned") return `<div class="banner">Driver assigned - the trip hasn't started yet.</div>`;
+  return "";
+}
+// The employee reads this out loud to the driver once they've boarded -
+// see the code-verified /stops/:seq/board flow. Shown any time there's a
+// pending pickup so they can have it ready before the driver even shows up.
+function boardingCodeHtml(r){
+  if(r.boardStatus!=="pending" || !r.boardingCode) return "";
+  return `
+  <div style="margin-top:8px;padding:12px;border-radius:10px;background:var(--accent-light);text-align:center;">
+    <p class="muted" style="margin:0 0 4px;">Your boarding code - read this out to the driver when they arrive</p>
+    <p style="margin:0;font-size:26px;font-weight:800;letter-spacing:4px;color:var(--ink);">${r.boardingCode}</p>
   </div>`;
 }
 // Once boarding is close, the employee needs to know exactly where the
@@ -504,6 +582,8 @@ function empRideHtml(){
     <h2 class="section-title">${r.direction==="pickup"?"Pickup":"Drop"} route <span class="badge ${r.status}">${r.status}</span></h2>
     <div class="stop-row"><div class="stop-num">${r.stopSeq}</div><div>You board here - stop ${r.stopSeq} of ${r.totalStops}</div></div>
     <p class="muted" style="margin-top:8px;">Vehicle: ${r.vehicleReg||"Not assigned yet"}<br/>Driver: ${r.driverName||"Not assigned yet"}${r.driverPhone?" - "+r.driverPhone:""}</p>
+    ${driverStatusHtml(r)}
+    ${boardingCodeHtml(r)}
     ${liveTrackingHtml(r.live)}
   </div>`).join("");
 }
