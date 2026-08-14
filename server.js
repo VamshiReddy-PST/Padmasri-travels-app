@@ -7003,6 +7003,28 @@ app.get("/api/driver-auth/transport-routes", driverAuth, (req, res) => {
     completed: completed.map(publicTransportRouteForDriver),
   });
 });
+// Full completed-trip history for a driver, filtered to whatever date range
+// the app asks for (a single day, an ISO week, or a whole month - the app
+// computes from/to client-side and just sends the two dates). The
+// `completed` list on the endpoint above is deliberately capped to the last
+// 20 as a quick "recent activity" preview; this is the dedicated history
+// browser behind Employee Transport > Completed Trips History.
+app.get("/api/driver-auth/transport-routes/history", driverAuth, (req, res) => {
+  const { from, to } = req.query;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from || "") || !/^\d{4}-\d{2}-\d{2}$/.test(to || "")) {
+    return res.status(400).json({ error: "from and to (YYYY-MM-DD) are required." });
+  }
+  const rows = transportRoutes
+    .filter((r) => r.assignedDriverId === req.driver.id && r.status === "dispatched" && r.driverTripStatus === "completed" && r.driverCompletedAt)
+    .filter((r) => {
+      const d = r.driverCompletedAt.slice(0, 10);
+      return d >= from && d <= to;
+    })
+    .sort((a, b) => (b.driverCompletedAt || "").localeCompare(a.driverCompletedAt || ""))
+    .slice(0, 300);
+  res.json({ from, to, trips: rows.map(publicTransportRouteForDriver) });
+});
+
 function findDriverTransportRoute(req, res) {
   const route = transportRoutes.find((r) => r.id === req.params.id && r.assignedDriverId === req.driver.id);
   if (!route) { res.status(404).json({ error: "Trip not found." }); return null; }

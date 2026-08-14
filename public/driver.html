@@ -279,6 +279,12 @@ let transportTrips = { upcoming: [], current: [], completed: [] };
 // doesn't wipe out what the driver has entered so far (same reasoning as
 // odoOpenDraft/odoCloseDraft below).
 let transportBoardCodeDrafts = {};
+// Completed Employee Transport trip history, browsable by day/week/month -
+// separate from transportTrips.completed above (which is just a 20-row
+// "recent activity" preview) - see fetchTransportHistory().
+let transportHistoryRangeType = "day";
+let transportHistoryValue = new Date().toISOString().slice(0,10);
+let transportHistoryTrips = [];
 let myLeaveRequests = [];
 let attendanceMonth = new Date().toISOString().slice(0,7);
 let attendanceRows = [];
@@ -352,6 +358,7 @@ function resetSession(){
   driverTab = "current"; currentTrip = null;
   monthTrips = { upcoming: [], completed: [] }; myLeaveRequests = [];
   transportTrips = { upcoming: [], current: [], completed: [] }; transportBoardCodeDrafts = {};
+  transportHistoryRangeType = "day"; transportHistoryValue = new Date().toISOString().slice(0,10); transportHistoryTrips = [];
   attendanceRows = []; documentsData = null; payslip = null;
   vehicleRepairHistory = null; vehicleRepairHistoryReg = ""; showVehicleHistory = false;
   portalType = null;
@@ -461,7 +468,7 @@ async function refreshMe(){
 // both when switching tabs and by the 15s poll, so whichever tab is open
 // always has fresh data without re-fetching every tab on every poll.
 async function loadActiveTabData(){
-  if(driverTab==="upcoming") await Promise.all([fetchMonthTrips(), fetchMyLeaveRequests(), fetchTransportTrips()]);
+  if(driverTab==="upcoming") await Promise.all([fetchMonthTrips(), fetchMyLeaveRequests(), fetchTransportTrips(), fetchTransportHistory()]);
   else if(driverTab==="profile") await Promise.all([fetchPayslip(), fetchAttendance(), fetchHierarchy()]);
   else if(driverTab==="documents") await fetchDocuments();
   else await Promise.all([fetchCurrentTrip(), fetchMyRepairRequests(), fetchTransportTrips()]); // "current" tab, and the default
@@ -480,6 +487,61 @@ async function fetchMonthTrips(){
 }
 async function fetchTransportTrips(){
   try{ transportTrips = await api("/driver-auth/transport-routes"); }catch(e){ transportTrips = {upcoming:[],current:[],completed:[]}; }
+}
+// ---------- Employee Transport completed-trip history (day/week/month) ----------
+// The date input's format differs by range type (<input type=date|week|month>),
+// so transportHistoryValue holds whatever raw string that control produces;
+// this turns it into the from/to (YYYY-MM-DD) pair the server actually filters on.
+function isoWeekStringFor(date){
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2,"0")}`;
+}
+function computeHistoryRange(type, value){
+  if(type==="month"){
+    const m = /^\d{4}-\d{2}$/.test(value) ? value : new Date().toISOString().slice(0,7);
+    const [y,mo] = m.split("-").map(Number);
+    const lastDay = new Date(y, mo, 0).getDate();
+    return { from: `${m}-01`, to: `${m}-${String(lastDay).padStart(2,"0")}` };
+  }
+  if(type==="week"){
+    const w = /^\d{4}-W\d{2}$/.test(value) ? value : isoWeekStringFor(new Date());
+    const [yStr, wStr] = w.split("-W");
+    const y = Number(yStr), wk = Number(wStr);
+    const jan4 = new Date(Date.UTC(y,0,4));
+    const jan4Day = jan4.getUTCDay() || 7;
+    const week1Monday = new Date(jan4); week1Monday.setUTCDate(jan4.getUTCDate() - jan4Day + 1);
+    const monday = new Date(week1Monday); monday.setUTCDate(week1Monday.getUTCDate() + (wk-1)*7);
+    const sunday = new Date(monday); sunday.setUTCDate(monday.getUTCDate()+6);
+    const fmtIso = (d)=> d.toISOString().slice(0,10);
+    return { from: fmtIso(monday), to: fmtIso(sunday) };
+  }
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : new Date().toISOString().slice(0,10);
+  return { from: d, to: d };
+}
+async function fetchTransportHistory(){
+  const {from, to} = computeHistoryRange(transportHistoryRangeType, transportHistoryValue);
+  try{ const r = await api(`/driver-auth/transport-routes/history?from=${from}&to=${to}`); transportHistoryTrips = r.trips || []; }
+  catch(e){ transportHistoryTrips = []; }
+}
+async function setTransportHistoryRangeType(type){
+  if(transportHistoryRangeType===type) return;
+  transportHistoryRangeType = type;
+  transportHistoryValue = type==="month" ? new Date().toISOString().slice(0,7)
+    : type==="week" ? isoWeekStringFor(new Date())
+    : new Date().toISOString().slice(0,10);
+  render();
+  await fetchTransportHistory();
+  render();
+}
+async function setTransportHistoryValue(v){
+  transportHistoryValue = v;
+  render();
+  await fetchTransportHistory();
+  render();
 }
 async function fetchMyLeaveRequests(){
   try{ myLeaveRequests = await api("/driver-auth/leave-requests"); }catch(e){ myLeaveRequests = []; }
@@ -1239,6 +1301,39 @@ function transportUpcomingCardHtml(){
     </div>`).join("")}
   </div>`;
 }
+// Read-only history of completed Employee Transport trips, browsable by a
+// single day, an ISO week (Mon-Sun), or a whole month - separate from the
+// "New Pickup/Drop Trips" card above (that's for accepting NEW dispatches).
+function transportHistoryCardHtml(){
+  const trips = transportHistoryTrips;
+  const pickerHtml = transportHistoryRangeType==="month"
+    ? `<input type="month" value="${transportHistoryValue}" onchange="setTransportHistoryValue(this.value)" />`
+    : transportHistoryRangeType==="week"
+    ? `<input type="week" value="${transportHistoryValue}" onchange="setTransportHistoryValue(this.value)" />`
+    : `<input type="date" value="${transportHistoryValue}" onchange="setTransportHistoryValue(this.value)" />`;
+  const rowHtml = (r) => {
+    const boarded = r.stops.filter(s=>s.boardStatus==="boarded").length;
+    const noShow = r.stops.filter(s=>s.boardStatus==="no_show").length;
+    const doneDate = r.driverCompletedAt ? r.driverCompletedAt.slice(0,10) : null;
+    return `
+    <div class="trip-item">
+      <div class="date">${doneDate?fmtDate(doneDate):""}${r.driverCompletedAt?" &middot; "+fmtTime(r.driverCompletedAt):""}</div>
+      <div class="desc">${r.direction==="pickup"?"Pickup":"Drop"} &middot; ${r.clientName}${r.vehicleReg?" &middot; "+r.vehicleReg:""}</div>
+      <div class="desc">${boarded} boarded${noShow?`, ${noShow} no-show`:""} of ${r.totalEmployees}${r.totalDistanceKm!=null?` &middot; ${r.totalDistanceKm} km`:""}</div>
+    </div>`;
+  };
+  return `
+  <div class="card">
+    <h2 class="section-title">Completed Trips History</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+      <div style="display:flex;gap:6px;">
+        ${["day","week","month"].map(t=>`<button class="btn small ${transportHistoryRangeType===t?"":"secondary"}" onclick="setTransportHistoryRangeType('${t}')">${t[0].toUpperCase()+t.slice(1)}</button>`).join("")}
+      </div>
+      ${pickerHtml}
+    </div>
+    ${trips.length===0 ? `<div class="empty">No completed Employee Transport trips in this range.</div>` : trips.map(rowHtml).join("")}
+  </div>`;
+}
 function upcomingTripsTabHtml(){
   const up = monthTrips.upcoming || [];
   const done = monthTrips.completed || [];
@@ -1269,7 +1364,8 @@ function upcomingTripsTabHtml(){
   <div class="card">
     <h2 class="section-title">My Leave Requests</h2>
     ${myLeaveRequests.length===0 ? `<div class="empty">No leave requests yet.</div>` : myLeaveRequests.map(leaveRowHtml).join("")}
-  </div>`;
+  </div>
+  ${transportHistoryCardHtml()}`;
 }
 
 // ---------- Profile tab (Attendance + Payroll + Settings combined) ----------
