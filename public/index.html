@@ -1225,10 +1225,13 @@ const TAB_GROUP_MAP = {
   dashboard:"tools", admin_dashboard:"tools", operations:"tools",
 };
 // Which sidebar groups are expanded - keyed by group key, defaults to all
-// open so nothing is hidden the first time someone sees the new nav. Lives
-// outside sidebarNavHtml so toggling survives it being called again (e.g.
+// closed (minimalistic by default - nothing but the group labels shows until
+// you click one open). Lives outside sidebarNavHtml so toggling survives it
+// being called again (e.g.
 // every switchTab() re-render) - only a manual click collapses/expands.
-let sidebarGroupOpen = {fleet:true, trips:true, finance:true, people:true, tools:true};
+// Collapsed by default (minimalistic default view, per Owner's request) -
+// a group only opens once someone actually clicks its header.
+let sidebarGroupOpen = {fleet:false, trips:false, finance:false, people:false, tools:false};
 function toggleSidebarGroup(key){
   sidebarGroupOpen[key] = !sidebarGroupOpen[key];
   const nav = document.querySelector(".sidebar-nav");
@@ -3026,20 +3029,34 @@ async function assignmentsEditorHtml(){
   <div class="banner">Assign each vehicle to a company and one of its Route IDs, a site supervisor, and a driver here. Only Operations Manager, Data Team and Owner can make these changes - every change is logged. A vehicle with a Company but no Route (or vice versa) is flagged below - both are required to fully recognise a vehicle.</div>
   ${currentUser.role==="owner" ? `
   <div class="card">
-    <h2 class="section-title">Retire sample data</h2>
-    <div class="muted" style="margin-bottom:8px;">The original 55 placeholder vehicles created when this app was first set up (registrations like TS 09 AT 1001) - one click marks every one of them still active as Sold Out, so they drop out of every screen for everyone. Nothing is deleted - restore any of them anytime from the Sold Out Vehicles list below.</div>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('retire_sample')" title="${isCardOpen('retire_sample')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Retire sample data</h2>
+      ${cardChevronHtml('retire_sample')}
+    </div>
+    ${isCardOpen('retire_sample') ? `
+    <div class="muted" style="margin:8px 0;">The original 55 placeholder vehicles created when this app was first set up (registrations like TS 09 AT 1001) - one click marks every one of them still active as Sold Out, so they drop out of every screen for everyone. Nothing is deleted - restore any of them anytime from the Sold Out Vehicles list below.</div>
     <button class="btn small secondary" onclick="soldOutSampleVehicles()">🧹 Retire Claude sample vehicles (Sold Out)</button>
+    ` : ""}
   </div>` : ""}
   ${currentUser.role==="owner" && LEGACY_FIRST_BATCH_REGS.some(reg=>vehicles.some(v=>v.reg===reg)) ? `
   <div class="card" style="border:1px solid var(--red,#c0392b);">
-    <h2 class="section-title">One-time: permanently remove the first 6 placeholder vehicles</h2>
-    <div class="muted" style="margin-bottom:8px;">TS 09 AT 1001 through TS 09 FT 1006 - explicitly requested to be deleted rather than just marked Sold Out. This is a one-time exception, not a standing Delete feature: it only ever touches these exact 6 registrations, bypasses no other safety, and this card disappears once they're gone. This cannot be undone.</div>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('legacy_delete')" title="${isCardOpen('legacy_delete')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">One-time: permanently remove the first 6 placeholder vehicles</h2>
+      ${cardChevronHtml('legacy_delete')}
+    </div>
+    ${isCardOpen('legacy_delete') ? `
+    <div class="muted" style="margin:8px 0;">TS 09 AT 1001 through TS 09 FT 1006 - explicitly requested to be deleted rather than just marked Sold Out. This is a one-time exception, not a standing Delete feature: it only ever touches these exact 6 registrations, bypasses no other safety, and this card disappears once they're gone. This cannot be undone.</div>
     <button class="btn small danger" onclick="deleteLegacyFirstBatch()">🗑️ Permanently delete these 6 vehicles</button>
+    ` : ""}
   </div>` : ""}
   <div class="card">
-    <h2 class="section-title">Vehicles (${vehicles.length})</h2>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('vehicles_list')" title="${isCardOpen('vehicles_list')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Vehicles (${vehicles.length})</h2>
+      ${cardChevronHtml('vehicles_list')}
+    </div>
+    ${isCardOpen('vehicles_list') ? `
     ${editingVehicleId ? await vehicleDetailsEditorHtml(editingVehicleId) : ""}
-    <table><tr><th>Vehicle</th><th>Type / Fuel</th><th>Client</th><th>Route ID</th><th>Area</th><th>Area Supervisor</th><th>Driver</th><th>Driver since</th><th>Usage</th><th></th></tr>${rows}</table>
+    <table style="margin-top:10px;"><tr><th>Vehicle</th><th>Type / Fuel</th><th>Client</th><th>Route ID</th><th>Area</th><th>Area Supervisor</th><th>Driver</th><th>Driver since</th><th>Usage</th><th></th></tr>${rows}</table>
     <div class="banner">Every field below is required - a vehicle cannot be added without its complete onboarding data.</div>
     <form class="inline-form" onsubmit="return addVehicle(event)">
       <div class="f"><label>New registration number *</label><input type="text" id="newVehicleReg" placeholder="TS 09 XX 1234" required /></div>
@@ -3076,6 +3093,7 @@ async function assignmentsEditorHtml(){
       <button class="btn small" type="submit">+ Add vehicle</button>
     </form>
     <div class="muted" style="margin-top:6px;">Buses in this fleet only run on Diesel. Once added, these onboarding details (and each vehicle's documents) can be edited later via "Vehicle Details" above.</div>
+    ` : ""}
   </div>
 
   ${currentUser.role==="owner" ? await soldOutVehiclesCardHtml() : ""}
@@ -3196,9 +3214,14 @@ async function soldOutVehiclesCardHtml(){
     </tr>`).join("");
   return `
   <div class="card">
-    <h2 class="section-title">Sold Out Vehicles (${rows.length})</h2>
-    <div class="muted" style="margin-bottom:8px;">Hidden everywhere else in the app - no details beyond registration/make/model are kept visible. Restore here if one was marked by mistake.</div>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('sold_out_vehicles')" title="${isCardOpen('sold_out_vehicles')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Sold Out Vehicles (${rows.length})</h2>
+      ${cardChevronHtml('sold_out_vehicles')}
+    </div>
+    ${isCardOpen('sold_out_vehicles') ? `
+    <div class="muted" style="margin:8px 0;">Hidden everywhere else in the app - no details beyond registration/make/model are kept visible. Restore here if one was marked by mistake.</div>
     <table><tr><th>Vehicle</th><th>Make/Model</th><th>Marked sold out</th><th>By</th><th></th></tr>${trs}</table>
+    ` : ""}
   </div>`;
 }
 // Buses in this fleet only run on Diesel - selecting "Bus" locks the fuel
@@ -3804,8 +3827,12 @@ async function driversCardHtml(){
   }).join("");
   return `
   <div class="card">
-    <h2 class="section-title">Drivers (${meta.drivers.length})</h2>
-    <div class="muted" style="margin-bottom:8px;">Most recently joined first. Performance scores will appear here once client ratings are collected on the driver dashboard.</div>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('people_drivers')" title="${isCardOpen('people_drivers')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Drivers (${meta.drivers.length})</h2>
+      ${cardChevronHtml('people_drivers')}
+    </div>
+    ${isCardOpen('people_drivers') ? `
+    <div class="muted" style="margin:8px 0;">Most recently joined first. Performance scores will appear here once client ratings are collected on the driver dashboard.</div>
     <table><tr><th>Name</th><th>Mobile</th><th>License No.</th><th>Date of Joining</th><th>Driving Level</th><th>Performance</th><th>Mileage / Efficiency</th><th>Status</th><th></th></tr>
     ${rows || "<tr><td colspan='9' class='empty'>No drivers yet.</td></tr>"}
     </table>
@@ -3823,6 +3850,7 @@ async function driversCardHtml(){
       <button class="btn small" type="submit">+ Add driver</button>
     </form>
     <div class="muted" style="margin-top:6px;">ESI/PF/UAN numbers and certificate uploads can be added afterward via "Details" above.</div>
+    ` : ""}
     ` : ""}
   </div>`;
 }
@@ -5294,9 +5322,17 @@ function fleetMapCardHtml(fleetLive){
   const counts = {running:0, idle:0, other:0};
   list.forEach(v=>counts[fleetMapStatusOf(v)]++);
   const tile = (kind, cls, num, label) => `<div class="kpi ${cls} ${fleetMapStatusFilter===kind?'active':''}" style="cursor:pointer" onclick="setFleetMapFilter('${kind}')" title="Click to ${fleetMapStatusFilter===kind?'clear this filter':'show only '+label.toLowerCase()+' on the map'}"><div class="num" id="fleetMapCount_${kind}">${num}</div><div class="label">${label}</div></div>`;
+  const open = isCardOpen('fleet_map');
   return `
   <div class="card">
-    <div class="flex-between"><h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">📍 Live Fleet Map</h2><span class="muted" id="fleetMapLinkedCount">${list.length} of ${vehicles.length} vehicles linked to GPS</span></div>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('fleet_map')" title="${open?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">📍 Live Fleet Map</h2>
+      <span style="display:flex;align-items:center;gap:10px;">
+        <span class="muted" id="fleetMapLinkedCount">${list.length} of ${vehicles.length} vehicles linked to GPS</span>
+        ${cardChevronHtml('fleet_map')}
+      </span>
+    </div>
+    ${open ? `
     <div class="grid cols-3" style="margin:12px 0;">
       ${tile('running','good',counts.running,'Running')}
       ${tile('idle','warn',counts.idle,'Idle')}
@@ -5304,6 +5340,7 @@ function fleetMapCardHtml(fleetLive){
     </div>
     <div id="fleetMapContainer" class="fleet-map"></div>
     <div id="fleetMapError" class="live-track-empty" style="display:none;margin-top:8px;">Map couldn't load - check your internet connection and refresh.</div>
+    ` : ''}
   </div>`;
 }
 function setFleetMapFilter(kind){
@@ -5809,13 +5846,16 @@ function drawFuel3D(points){
   }, { displayModeBar: false, responsive: true });
 }
 
-// ---------- Collapsible dashboard sections (Owner + Admin dashboards) ----------
+// ---------- Collapsible sections/cards (used app-wide) ----------
 // In-memory only (resets on reload, same as other UI state like
-// editingVehicleId) - keeps long line-item lists out of the way by default
-// so both dashboards stay scannable at a glance. The header always shows
-// the item count, and clicking it either expands the list in place or
-// jumps straight to the existing full-detail screen for that data - never
-// both, so there's no confusion about what a click will do.
+// editingVehicleId) - keeps everything minimal and closed by default so no
+// screen dumps a wall of information at a glance (started on the Owner +
+// Admin dashboards, now reused by plain .card blocks across other screens
+// too via the same dashSectionOpen/toggleDashSection - see cardToggleHtml()
+// below for the plain-card version of this pattern). The header always
+// shows a count where there is one, and clicking it either expands the
+// content in place or jumps straight to an existing full-detail screen -
+// never both, so there's no confusion about what a click will do.
 let dashSectionOpen = {};
 function toggleDashSection(key){
   dashSectionOpen[key] = !dashSectionOpen[key];
@@ -5833,7 +5873,10 @@ function toggleDashSection(key){
 //   run on click instead of toggling open/closed.
 function collapsibleSection(key, title, count, bodyOrPreview, opts){
   opts = opts || {};
-  if(dashSectionOpen[key]===undefined) dashSectionOpen[key] = !!opts.defaultOpen;
+  // Always starts closed (minimalistic default view, per Owner's request) -
+  // opts.defaultOpen is intentionally ignored now; a section only opens once
+  // someone actually clicks it.
+  if(dashSectionOpen[key]===undefined) dashSectionOpen[key] = false;
   const open = !!dashSectionOpen[key];
   const isRedirect = !!opts.redirect;
   const clickAction = isRedirect ? opts.redirect : `toggleDashSection('${key}')`;
@@ -5847,6 +5890,22 @@ function collapsibleSection(key, title, count, bodyOrPreview, opts){
     </div>
     ${isRedirect ? `<div style="margin-top:8px;">${bodyOrPreview}</div>` : (open ? `<div style="margin-top:10px;">${bodyOrPreview}</div>` : '')}
   </div>`;
+}
+// Lighter-weight version of the above for hand-built cards that already
+// have their own custom header markup (extra badges/links/status dots
+// alongside the title) and just need the click-to-toggle + chevron
+// behavior bolted on, without collapsibleSection()'s own header layout.
+// isCardOpen(key) - always starts closed, same as collapsibleSection().
+// cardChevronHtml(key) - the clickable chevron to place at the end of a
+//   custom header row; the caller wraps its whole header row with
+//   onclick="toggleDashSection('key')" and cursor:pointer itself.
+function isCardOpen(key){
+  if(dashSectionOpen[key]===undefined) dashSectionOpen[key] = false;
+  return !!dashSectionOpen[key];
+}
+function cardChevronHtml(key){
+  const open = isCardOpen(key);
+  return `<span class="muted" style="font-size:15px;flex:none;">${open?'&#9662;':'&#9656;'}</span>`;
 }
 
 // ---- Employee Transport (Owner/Ops Manager/Data Team) -----------------
@@ -6342,15 +6401,23 @@ async function ownerDashboardScreen(){
   try{
     const occ = await api('/transport/occupancy');
     if(occ.routeCount > 0){
+      const transOpen = isCardOpen('transport_occupancy');
       transportOccupancyCard = `
       <div class="card">
-        <div class="flex-between"><h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">📍 Employee Transport Occupancy</h2><a href="javascript:void(0)" onclick="goto('transport')" class="muted">Manage &rsaquo;</a></div>
+        <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('transport_occupancy')" title="${transOpen?'Click to collapse':'Click to expand'}">
+          <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">📍 Employee Transport Occupancy</h2>
+          <span style="display:flex;align-items:center;gap:10px;">
+            <a href="javascript:void(0)" onclick="event.stopPropagation();goto('transport')" class="muted">Manage &rsaquo;</a>
+            ${cardChevronHtml('transport_occupancy')}
+          </span>
+        </div>
+        ${transOpen ? `
         <div class="grid cols-4" style="margin-top:12px;">
           <div class="kpi"><div class="num">${occ.routeCount}</div><div class="label">Active routes</div></div>
           <div class="kpi"><div class="num">${occ.totalEmployees}</div><div class="label">Employees riding</div></div>
           <div class="kpi"><div class="num">${occ.totalCapacity}</div><div class="label">Total seats deployed</div></div>
           <div class="kpi ${occ.averageOccupancyRatio>=70?'good':occ.averageOccupancyRatio>=40?'warn':'bad'}"><div class="num">${occ.averageOccupancyRatio}%</div><div class="label">Average occupancy</div></div>
-        </div>
+        </div>` : ''}
       </div>`;
     }
   }catch(e){ /* module not in use anywhere yet - card just stays empty */ }
@@ -6363,10 +6430,17 @@ async function ownerDashboardScreen(){
   try{
     const alerts = await api('/fuel-theft-alerts?status=active');
     if(alerts.length){
+      const theftOpen = isCardOpen('fuel_theft');
       fuelTheftAlertsCard = `
       <div class="card" style="border:1px solid #eab3ab;background:#fff8f7;">
-        <div class="flex-between"><h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;color:#7a2115;">⛽🚨 Suspected Fuel Theft</h2><span class="muted">${alerts.length} active alert${alerts.length===1?'':'s'}</span></div>
-        ${alerts.map(a=>{
+        <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('fuel_theft')" title="${theftOpen?'Click to collapse':'Click to expand'}">
+          <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;color:#7a2115;">⛽🚨 Suspected Fuel Theft</h2>
+          <span style="display:flex;align-items:center;gap:10px;">
+            <span class="muted">${alerts.length} active alert${alerts.length===1?'':'s'}</span>
+            ${cardChevronHtml('fuel_theft')}
+          </span>
+        </div>
+        ${theftOpen ? alerts.map(a=>{
           const mapLink = (a.latitude!=null && a.longitude!=null) ? `https://www.google.com/maps?q=${a.latitude},${a.longitude}` : null;
           const locationHtml = a.address ? a.address : (mapLink ? `${a.latitude}, ${a.longitude}` : "Location unavailable (no GPS fix)");
           return `
@@ -6378,7 +6452,7 @@ async function ownerDashboardScreen(){
             </div>
             <button class="btn small secondary" onclick="acknowledgeFuelTheftAlert('${a.id}')">Acknowledge</button>
           </div>`;
-        }).join("")}
+        }).join("") : ''}
       </div>`;
     }
   }catch(e){ /* role doesn't see fuel-theft alerts, or there aren't any yet */ }
@@ -6398,8 +6472,8 @@ async function ownerDashboardScreen(){
   // itself a microtask continuation of this function's own promise
   // resolving - runs first, so the containers reliably exist by the time
   // these timers fire.
-  setTimeout(()=>drawCharts(approved,pending,rejected, breathFailList.length, submitted-breathFailList.length), 0);
-  if(fleetLive.vehicles && fleetLive.vehicles.length) setTimeout(()=>renderFleetMapMarkers(fleetLive.vehicles), 0);
+  if(isCardOpen('charts')) setTimeout(()=>drawCharts(approved,pending,rejected, breathFailList.length, submitted-breathFailList.length), 0);
+  if(isCardOpen('fleet_map') && fleetLive.vehicles && fleetLive.vehicles.length) setTimeout(()=>renderFleetMapMarkers(fleetLive.vehicles), 0);
 
   return `
   <div class="cmd-hero">
@@ -6438,9 +6512,16 @@ async function ownerDashboardScreen(){
 
   ${await priorityDashboardHtml(idleVehicles, expiringDocs, tempDriverExpenses)}
 
-  <div class="charts-grid" style="margin-top:18px;">
-    <div class="card"><h2 class="section-title">Verification funnel</h2><canvas id="chartFunnel" height="180"></canvas></div>
-    <div class="card"><h2 class="section-title">Breathalyzer pass/fail</h2><canvas id="chartBreath" height="180"></canvas></div>
+  <div class="card" style="margin-top:18px;">
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('charts')" title="${isCardOpen('charts')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">📊 Verification &amp; breathalyzer charts</h2>
+      ${cardChevronHtml('charts')}
+    </div>
+    ${isCardOpen('charts') ? `
+    <div class="charts-grid" style="margin-top:12px;">
+      <div><h3 style="margin:0 0 8px;font-size:13px;color:var(--grey);">Verification funnel</h3><canvas id="chartFunnel" height="180"></canvas></div>
+      <div><h3 style="margin:0 0 8px;font-size:13px;color:var(--grey);">Breathalyzer pass/fail</h3><canvas id="chartBreath" height="180"></canvas></div>
+    </div>` : ''}
   </div>
 
   ${collapsibleSection('by_client', 'Vehicles by client', Object.keys(byClient).length, `<table><tr><th>Client</th><th>Vehicles</th></tr>${Object.entries(byClient).map(([c,n])=>`<tr><td>${c}</td><td>${n}</td></tr>`).join("")}</table>`, {defaultOpen:true})}
