@@ -56,7 +56,14 @@ const AI_TEST_STUB = process.env.AI_TEST_STUB === "1";
 // that's a separate follow-up once those details are available. See
 // FLEETX_SETUP.md for how to get and set FLEETX_API_TOKEN on Render.
 const FLEETX_API_TOKEN = process.env.FLEETX_API_TOKEN || "";
-const FLEETX_TAG = process.env.FLEETX_TAG || "Enmovil";
+// No default tag - unset FLEETX_TAG means "fetch the whole Fleetx account,
+// no tagNames filter". This used to default to "Enmovil", which matched the
+// full fleet when first tested, but the account has since grown (or been
+// regrouped) so that tag alone now only covers a subset of vehicles (107 of
+// 232, confirmed via a direct curl to Fleetx) - the rest were silently
+// invisible to this app. Set FLEETX_TAG on Render only if this account ever
+// needs to be scoped down to a specific tag again.
+const FLEETX_TAG = process.env.FLEETX_TAG || "";
 // One shared fetch reused across every viewer/vehicle for a minute at a time -
 // Fleetx returns the whole fleet in one call, so there's no reason to hit it
 // again just because a different vehicle's detail screen was opened.
@@ -77,7 +84,7 @@ async function fetchFleetxLiveRaw() {
     err.status = 503;
     throw err;
   }
-  const url = `https://api.fleetx.io/api/v1/analytics/live?tagNames=${encodeURIComponent(FLEETX_TAG)}`;
+  const url = `https://api.fleetx.io/api/v1/analytics/live${FLEETX_TAG ? `?tagNames=${encodeURIComponent(FLEETX_TAG)}` : ""}`;
   const res = await fetch(url, { headers: { Authorization: `bearer ${FLEETX_API_TOKEN}` } });
   if (!res.ok) {
     const err = new Error(`Live tracking is temporarily unavailable (Fleetx returned ${res.status}). Try again shortly.`);

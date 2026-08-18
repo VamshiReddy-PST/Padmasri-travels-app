@@ -28,12 +28,14 @@ export FLEETX_API_TOKEN=your-fleetx-bearer-token
 node server.js
 ```
 
-## Optional: changing the Fleetx tag
+## Optional: scoping to a specific Fleetx tag
 
-By default the app asks Fleetx for the `Enmovil` tag, which is what returned your whole fleet in testing. If Fleetx ever reorganizes your account under a different tag name, you can override it without new code:
+By default the app asks Fleetx for your **whole account** (no tag filter) - this used to default to just the `Enmovil` tag, but that tag stopped covering the full fleet as the account grew (it was only returning 107 of 232 vehicles), so the app now fetches everything unless you tell it otherwise.
+
+Only set this if you ever need to scope the app down to a subset of the Fleetx account (e.g. if that login is ever shared with another fleet/customer and you only want your own vehicles pulled in):
 
 - Key: `FLEETX_TAG`
-- Value: the new tag name
+- Value: the tag name to filter to
 
 ## A note on the token you already shared
 
