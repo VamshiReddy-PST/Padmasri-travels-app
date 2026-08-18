@@ -1232,16 +1232,16 @@ function tabsForInner(role){
   // request, they (plus Data Team and Owner) are the only roles that can
   // approve odometer/fuel readings. See ODOMETER_VERIFY_ROLES and
   // FUEL_CROSS_VERIFY_ROLES in server.js for the matching backend gate.
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["vehicle_tracking","📍 Vehicle Tracking"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["vehicle_tracking","📍 Vehicle Tracking"],["reports","Reports"],["routes","Routes"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["reports","Reports"],["routes","Routes"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   // Operations Manager deliberately has no odometer_verify/fuel_verify tab -
   // per the Owner's explicit request, Ops Manager has no role in approving
   // odometer or fuel readings (they previously had odometer_verify; removed
   // on request).
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["vehicle_tracking","📍 Vehicle Tracking"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["vehicle_tracking","📍 Vehicle Tracking"],["fuel_theft","⛽ Fuel Theft & Mileage"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["fuel_theft","⛽ Fuel Theft & Mileage"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["vehicle_tracking","📍 Vehicle Tracking"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="admin") return [["admin_dashboard","Dashboard"],["admin_vehicles","Vehicles"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
@@ -1269,7 +1269,7 @@ const SIDEBAR_GROUP_META = {
 const TAB_GROUP_MAP = {
   my_vehicles:"fleet", onboarding:"fleet", admin_vehicles:"fleet", usage:"fleet",
   assignments:"fleet", routes:"fleet", subvendor_expenses:"fleet",
-  odometer_verify:"fleet", fuel_verify:"fleet", fuel_theft:"fleet", vehicle_tracking:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
+  odometer_verify:"fleet", fuel_verify:"fleet", fuel_theft:"fleet", vehicle_tracking:"fleet", alerts:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
   subvendors:"fleet", hierarchy:"fleet",
   trips:"trips", my_attendance:"trips", attendance:"trips", my_expenses:"trips", queue:"trips",
   expenses:"finance", expenses_view:"finance", payroll:"finance", backup:"finance",
@@ -1400,6 +1400,7 @@ async function routeView(){
   if(tab==="gps_link") return gpsLinkScreen();
   if(tab==="fuel_theft") return fuelTheftScreen();
   if(tab==="vehicle_tracking") return view.name==="vehicle_tracking_detail" ? vehicleTrackingDetailScreen(view.vehicleId) : vehicleTrackingScreen();
+  if(tab==="alerts") return alertsFeedScreen();
   if(tab==="transport") return transportScreen();
   if(tab==="repairs") return repairRequestsScreen();
   if(tab==="workshop") return workshopScreen();
@@ -6970,6 +6971,78 @@ async function vehicleTrackingDetailScreen(vehicleId){
   ${bodyHtml}
   `;
 }
+
+// ---- Alerts feed (event-type filter chips) -----------------------------
+// Styled after the reference app's Alerts screen, but scoped to what this
+// fleet's data can honestly support today: Idling and Over Speeding are a
+// live snapshot from /api/fleet/live-tracking (not yet a duration-tracked
+// event log - a vehicle idling right now shows up, but there's no history
+// of "idled from 2pm-2:45pm" the way a real alert engine would build up
+// over time), Offline is the same live snapshot for GPS devices that have
+// gone quiet, and Fuel Theft reuses the real, already-persisted incident
+// records from checkFuelTheftForVehicle() on the backend. Panic Switch,
+// Geofence, Night Driving, Harsh Acceleration/Braking, Continuous Driving
+// and true stoppage-duration alerts all need either hardware this fleet's
+// GPS devices don't report or a new background detection engine (like the
+// fuel theft one) that hasn't been built yet - left out rather than faked.
+let alertsFilter = 'all';
+function setAlertsFilter(f){ alertsFilter = f; renderMain(); }
+const OVER_SPEED_KMH = 80; // flat first-cut threshold across all vehicle types/routes - not yet configurable per type
+async function alertsFeedScreen(){
+  let fleetLive = {vehicles:[]};
+  try{ fleetLive = await api('/fleet/live-tracking'); }catch(e){ fleetLive = {vehicles:[], error:e.message}; }
+  _lastFleetLiveVehicles = fleetLive.vehicles || [];
+
+  let theftAlerts = [];
+  try{ theftAlerts = await api('/fuel-theft-alerts?status=active'); }catch(e){ /* non-essential for this feed */ }
+  _lastTheftAlerts = theftAlerts;
+
+  const events = [];
+  _lastFleetLiveVehicles.forEach(d=>{
+    const vMeta = vehicles.find(v=>v.id===d.vehicleId);
+    const reg = d.reg || (vMeta && vMeta.reg) || d.vehicleId;
+    const status = trackingStatusOf(d);
+    if(status==='idling') events.push({type:'idling', vehicleId:d.vehicleId, reg, ts:d.lastUpdatedAt, detail:'Currently idling'});
+    if(status==='offline') events.push({type:'offline', vehicleId:d.vehicleId, reg, ts:d.lastUpdatedAt, detail:`GPS ${formatLiveStatusLabel(d.status)}`});
+    if(d.speedKmh!=null && d.speedKmh > OVER_SPEED_KMH) events.push({type:'overspeeding', vehicleId:d.vehicleId, reg, ts:d.lastUpdatedAt, detail:`${d.speedKmh} km/h (limit ${OVER_SPEED_KMH} km/h)`});
+  });
+  theftAlerts.forEach(a=>{
+    events.push({type:'fuel_theft', vehicleId:a.vehicleId, reg:a.vehicleReg, ts:a.lastDetectedAt||a.startedAt, detail:`~${a.litersLost} L lost`, alertId:a.id});
+  });
+  events.sort((a,b)=> (b.ts||'') < (a.ts||'') ? -1 : (b.ts||'')>(a.ts||'') ? 1 : 0);
+
+  const counts = {all:events.length, idling:0, overspeeding:0, offline:0, fuel_theft:0};
+  events.forEach(e=>counts[e.type]++);
+  const filtered = alertsFilter==='all' ? events : events.filter(e=>e.type===alertsFilter);
+
+  const TYPE_META = {
+    idling: {icon:'🟡', label:'Idling'},
+    overspeeding: {icon:'🚨', label:'Over Speeding'},
+    offline: {icon:'📴', label:'Offline'},
+    fuel_theft: {icon:'⛽🚨', label:'Fuel Theft'},
+  };
+  const chip = (key,label) => `<button type="button" class="filter-chip ${alertsFilter===key?'active':''}" onclick="setAlertsFilter('${key}')">${label} <span class="count">${counts[key]||0}</span></button>`;
+  const rowHtml = (e) => {
+    const meta = TYPE_META[e.type];
+    const onclick = e.type==='fuel_theft' ? `showTheftDetail('${e.alertId}')` : `goto('vehicle_tracking_detail',{vehicleId:'${e.vehicleId}'})`;
+    return `
+    <div style="border-bottom:1px solid var(--border);padding:10px 0;cursor:pointer;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;" onclick="${onclick}">
+      <div><b>${meta.icon} ${meta.label}</b> &middot; ${e.reg}<div class="muted" style="font-size:12px;">${e.detail}</div></div>
+      <div class="muted" style="font-size:12px;">${e.ts? timeAgoLabel(new Date(e.ts).getTime()) : ''}</div>
+    </div>`;
+  };
+
+  return `
+  <h1 class="page-title">🚨 Alerts</h1>
+  <p class="muted" style="margin-top:-8px;margin-bottom:14px;">A live snapshot, not a duration-tracked event history yet - Idling/Over Speeding/Offline reflect each vehicle's current GPS reading; Fuel Theft entries are real incident reports. Panic Switch, Geofence, Night Driving, Harsh Braking/Acceleration, Continuous Driving and stoppage-duration alerts aren't available from this fleet's current GPS data and aren't shown here.</p>
+  ${fleetLive.error? `<div class="banner error">${fleetLive.error}</div>` : ''}
+  <div class="filter-chip-row">
+    ${chip('all','All')}${chip('idling','Idling')}${chip('overspeeding','Over Speeding')}${chip('offline','Offline')}${chip('fuel_theft','Fuel Theft')}
+  </div>
+  ${!filtered.length? `<div class="empty">No alerts right now.</div>` : `<div class="card">${filtered.map(rowHtml).join("")}</div>`}
+  `;
+}
+
 function initTransportPinMap(officeLat, officeLng){
   const el = document.getElementById('transportPinMap');
   if(!el || typeof L==="undefined") return;
