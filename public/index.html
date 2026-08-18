@@ -2984,8 +2984,7 @@ async function assignmentsEditorHtml(){
       <td>
         <button class="btn small secondary" onclick="toggleVehicleDetails('${v.id}')">${editingVehicleId===v.id?'Close':'Vehicle Details'}</button>
         ${currentUser.role==="owner" ? `
-        <button class="btn small secondary" style="margin-top:4px;" onclick="markVehicleSoldOut('${v.id}','${(v.reg||'').replace(/'/g,"\\'")}')" title="Hides this vehicle everywhere for everyone - reversible from the Sold Out Vehicles list below.">Mark Sold Out</button>
-        <button class="btn small danger" style="margin-top:4px;" onclick="deleteVehicle('${v.id}','${(v.reg||'').replace(/'/g,"\\'")}')" title="Permanently deletes this vehicle - only allowed if it has no expense/trip history.">Delete</button>
+        <button class="btn small secondary" style="margin-top:4px;" onclick="markVehicleSoldOut('${v.id}','${(v.reg||'').replace(/'/g,"\\'")}')" title="Hides this vehicle everywhere for everyone - reversible from the Sold Out Vehicles list below. There is no delete option - Sold Out is the only way to retire a vehicle.">Mark Sold Out</button>
         ` : ""}
       </td>
     </tr>`;}).join("");
@@ -2994,9 +2993,9 @@ async function assignmentsEditorHtml(){
   <div class="banner">Assign each vehicle to a company and one of its Route IDs, a site supervisor, and a driver here. Only Operations Manager, Data Team and Owner can make these changes - every change is logged. A vehicle with a Company but no Route (or vice versa) is flagged below - both are required to fully recognise a vehicle.</div>
   ${currentUser.role==="owner" ? `
   <div class="card">
-    <h2 class="section-title">Remove sample data</h2>
-    <div class="muted" style="margin-bottom:8px;">The original 55 placeholder vehicles created when this app was first set up (registrations like TS 09 AT 1001) - one click removes every one of them that's still untouched. Any that have since picked up real expense/trip history are left alone and listed back to you.</div>
-    <button class="btn small secondary" onclick="deleteSampleVehicles()">🧹 Remove Claude sample vehicles</button>
+    <h2 class="section-title">Retire sample data</h2>
+    <div class="muted" style="margin-bottom:8px;">The original 55 placeholder vehicles created when this app was first set up (registrations like TS 09 AT 1001) - one click marks every one of them still active as Sold Out, so they drop out of every screen for everyone. Nothing is deleted - restore any of them anytime from the Sold Out Vehicles list below.</div>
+    <button class="btn small secondary" onclick="soldOutSampleVehicles()">🧹 Retire Claude sample vehicles (Sold Out)</button>
   </div>` : ""}
   <div class="card">
     <h2 class="section-title">Vehicles (${vehicles.length})</h2>
@@ -3109,28 +3108,20 @@ async function restoreVehicle(vehicleId, reg){
     await renderMain();
   }catch(e){ alert(e.message); }
 }
-async function deleteSampleVehicles(){
-  if(!confirm(`Remove all original Claude-seeded sample vehicles (registrations like TS 09 AT 1001)?\n\nOnly ones with no real expense/trip history are deleted - anything already in real use is left alone and reported back to you.`)) return;
+// No vehicle-delete option anywhere in this app, by design - Sold Out
+// (reversible, hides everywhere) is the only way to retire a vehicle, even
+// for the Owner. This is the bulk version of clicking "Mark Sold Out" on
+// each of the original 55 sample vehicles individually.
+async function soldOutSampleVehicles(){
+  if(!confirm(`Mark all original Claude-seeded sample vehicles (registrations like TS 09 AT 1001) as Sold Out?\n\nThey'll disappear from every screen for everyone - nothing is deleted, and any of them can be restored later from the Sold Out Vehicles list.`)) return;
   try{
-    const result = await api("/vehicles/delete-sample-data", {method:"POST"});
-    let msg = `Deleted ${result.deletedCount} sample vehicle(s).`;
-    if(result.skipped && result.skipped.length){
-      msg += `\n\nLeft alone (already in real use):\n` + result.skipped.map(s=>`${s.reg} - ${s.reason}`).join("\n");
-    }
-    if(result.notFoundCount){
-      msg += `\n\n${result.notFoundCount} of the original 55 were already gone (deleted earlier, sold out, or renamed).`;
+    const result = await api("/vehicles/sold-out-sample-data", {method:"POST"});
+    let msg = `Marked ${result.markedCount} sample vehicle(s) as Sold Out.`;
+    if(result.alreadySoldOutCount){
+      msg += `\n\n${result.alreadySoldOutCount} were already Sold Out.`;
     }
     alert(msg);
     await loadCoreData();
-    await renderMain();
-  }catch(e){ alert(e.message); }
-}
-async function deleteVehicle(vehicleId, reg){
-  if(!confirm(`Permanently delete ${reg}?\n\nThis cannot be undone. It will only work if this vehicle has no expense or trip history - if it's a real fleet vehicle that's just no longer in use, use "Mark Sold Out" instead.`)) return;
-  try{
-    await api(`/vehicles/${vehicleId}`, {method:"DELETE"});
-    vehicles = vehicles.filter(v=>v.id!==vehicleId);
-    if(editingVehicleId===vehicleId) editingVehicleId = null;
     await renderMain();
   }catch(e){ alert(e.message); }
 }
