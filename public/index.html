@@ -2648,7 +2648,8 @@ async function setLeave(id, status){
 // endpoints it calls (PATCH /vehicles/:id/details and /vehicles/:id/docs)
 // already grant "admin" access.
 async function adminVehiclesScreen(){
-  const rows = vehicles.map(v=>`
+  const filteredVehicles = vehicles.filter(v=>matchesSearch('admin_vehicles', v.reg, v.make, v.model, v.vehicleType, v.fuelType, v.siteId && siteName(v.siteId)));
+  const rows = filteredVehicles.map(v=>`
     <tr id="vehicle-row-${v.id}"${vehicleRowStyleAttr(v)}>
       <td><b>${v.reg}</b> ${quickEditBtnHtml(`toggleVehicleDetails('${v.id}')`, editingVehicleId===v.id)}${avgMileageBadgeHtml(v)}${recentlyChangedBadgeHtml(v)}</td>
       <td>${v.make||'-'} ${v.model||''}</td>
@@ -2663,7 +2664,9 @@ async function adminVehiclesScreen(){
   <div class="card">
     <h2 class="section-title">Vehicles (${vehicles.length})</h2>
     ${editingVehicleId ? await vehicleDetailsEditorHtml(editingVehicleId) : ""}
-    <table><tr><th>Vehicle</th><th>Make/Model</th><th>Type / Fuel</th><th>Area</th><th></th><th></th></tr>${rows || "<tr><td colspan='6' class='empty'>No vehicles yet.</td></tr>"}</table>
+    ${searchBoxHtml('admin_vehicles', 'Search by registration, make, model or area...', vehicles.length)}
+    ${searchResultCountHtml('admin_vehicles', filteredVehicles.length, vehicles.length)}
+    <table><tr><th>Vehicle</th><th>Make/Model</th><th>Type / Fuel</th><th>Area</th><th></th><th></th></tr>${rows || "<tr><td colspan='6' class='empty'>No vehicles match your search.</td></tr>"}</table>
     <div class="banner">Every field below is required - a vehicle cannot be added without its complete onboarding data.</div>
     <form class="inline-form" onsubmit="return addVehicle(event)">
       <div class="f"><label>New registration number *</label><input type="text" id="newVehicleReg" placeholder="TS 09 XX 1234" required /></div>
@@ -3003,7 +3006,14 @@ function vehicleAssignmentWarningHtml(v){
   return `<div style="margin-top:2px;"><span class="badge low" title="Required for this vehicle to be fully recognised">${missing.join(" & ")} not set</span></div>`;
 }
 async function assignmentsEditorHtml(){
-  const rows = vehicles.map(v=>{
+  const filteredVehicles = vehicles.filter(v=>{
+    const client = v.clientId ? meta.clients.find(c=>c.id===v.clientId) : null;
+    const site = v.siteId ? meta.sites.find(s=>s.id===v.siteId) : null;
+    const supervisor = v.supervisorId ? meta.users.find(u=>u.id===v.supervisorId) : null;
+    const driver = v.driverId ? meta.drivers.find(d=>d.id===v.driverId) : null;
+    return matchesSearch('vehicles', v.reg, v.make, v.model, v.vehicleType, v.fuelType, client&&client.name, site&&site.name, supervisor&&supervisor.name, driver&&driver.name);
+  });
+  const rows = filteredVehicles.map(v=>{
     const client = v.clientId ? meta.clients.find(c=>c.id===v.clientId) : null;
     const clientRoutes = client ? (client.routes||[]) : [];
     return `
@@ -3080,7 +3090,9 @@ async function assignmentsEditorHtml(){
     </div>
     ${isCardOpen('vehicles_list') ? `
     ${editingVehicleId ? await vehicleDetailsEditorHtml(editingVehicleId) : ""}
-    <table style="margin-top:10px;"><tr><th>Vehicle</th><th>Type / Fuel</th><th>Client</th><th>Route ID</th><th>Area</th><th>Area Supervisor</th><th>Driver</th><th>Driver since</th><th>Usage</th><th></th></tr>${rows}</table>
+    ${searchBoxHtml('vehicles', 'Search by registration, make, model, client, area, supervisor or driver...', vehicles.length)}
+    ${searchResultCountHtml('vehicles', filteredVehicles.length, vehicles.length)}
+    <table style="margin-top:10px;"><tr><th>Vehicle</th><th>Type / Fuel</th><th>Client</th><th>Route ID</th><th>Area</th><th>Area Supervisor</th><th>Driver</th><th>Driver since</th><th>Usage</th><th></th></tr>${rows || `<tr><td colspan="10" class="empty">No vehicles match your search.</td></tr>`}</table>
     <div class="banner">Every field below is required - a vehicle cannot be added without its complete onboarding data.</div>
     <form class="inline-form" onsubmit="return addVehicle(event)">
       <div class="f"><label>New registration number *</label><input type="text" id="newVehicleReg" placeholder="TS 09 XX 1234" required /></div>
@@ -3732,7 +3744,8 @@ function siteOptionsHtml(selected){
 async function peopleScreen(){
   const myRole = currentUser.role;
   const canEditAtAll = myRole==="owner" || myRole==="ops_manager" || myRole==="hr";
-  const rows = meta.users.map(u=>{
+  const filteredUsers = meta.users.filter(u=>matchesSearch('staff', u.name, roleLabel(u.role), u.email, u.phone, u.siteId&&siteName(u.siteId)));
+  const rows = filteredUsers.map(u=>{
     const inactive = u.active===false;
     const canEditThisOne = canEditAtAll && canManageRole(myRole, u.role);
     return `<tr style="${inactive?'opacity:.5':''}">
@@ -3764,7 +3777,9 @@ async function peopleScreen(){
       ${cardChevronHtml('people_staff')}
     </div>
     ${isCardOpen('people_staff') ? `
-    <table><tr><th>Name</th><th>Role</th><th>Area / Supervises</th><th>Email</th><th>Mobile Number</th><th>Date of Joining</th><th></th></tr>${rows}</table>
+    ${searchBoxHtml('staff', 'Search by name, role, area, email or mobile...', meta.users.length)}
+    ${searchResultCountHtml('staff', filteredUsers.length, meta.users.length)}
+    <table><tr><th>Name</th><th>Role</th><th>Area / Supervises</th><th>Email</th><th>Mobile Number</th><th>Date of Joining</th><th></th></tr>${rows || `<tr><td colspan="7" class="empty">No staff match your search.</td></tr>`}</table>
 
     ${canEditAtAll ? `
     <form class="inline-form" onsubmit="return ${editing ? 'saveEditPerson(event)' : 'addPerson(event)'}">
@@ -3889,7 +3904,8 @@ async function driversCardHtml(){
     if(!b.dateOfJoining) return -1;
     return b.dateOfJoining.localeCompare(a.dateOfJoining);
   });
-  const rows = sorted.map(d=>{
+  const filteredSorted = sorted.filter(d=>matchesSearch('drivers', d.name, d.phone, d.licenseNumber, d.drivingLevel));
+  const rows = filteredSorted.map(d=>{
     const summary = mileageSummary[d.id];
     const isActive = d.active !== false;
     return `<tr id="driver-row-${d.id}" ${isActive?'':'style="opacity:.6;background:#fafafa"'}>
@@ -3913,8 +3929,10 @@ async function driversCardHtml(){
     </div>
     ${isCardOpen('people_drivers') ? `
     <div class="muted" style="margin:8px 0;">Most recently joined first. Performance scores will appear here once client ratings are collected on the driver dashboard.</div>
+    ${searchBoxHtml('drivers', 'Search by name, mobile, license or driving level...', meta.drivers.length)}
+    ${searchResultCountHtml('drivers', filteredSorted.length, meta.drivers.length)}
     <table><tr><th>Name</th><th>Mobile</th><th>License No.</th><th>Date of Joining</th><th>Driving Level</th><th>Performance</th><th>Mileage / Efficiency</th><th>Status</th><th></th></tr>
-    ${rows || "<tr><td colspan='9' class='empty'>No drivers yet.</td></tr>"}
+    ${rows || "<tr><td colspan='9' class='empty'>No drivers match your search.</td></tr>"}
     </table>
     ${canEditAtAll ? `
     <form class="inline-form" onsubmit="return addDriverFull(event)">
@@ -4301,7 +4319,8 @@ async function hrAttendanceScreen(){
   const canDownload = currentUser.role==="hr" || currentUser.role==="owner";
   let entries = [];
   try{ entries = await api(`/attendance?from=${attFrom}&to=${attTo}`); }catch(e){}
-  const supRows = entries.map(a=>`
+  const filteredEntries = entries.filter(a=>matchesSearch('att_supervisors', a.userName, roleLabel(a.role), a.siteName));
+  const supRows = filteredEntries.map(a=>`
     <tr>
       <td>${fmtDMY(a.date)}</td>
       <td>${a.selfieUrl? `<img class="selfie-thumb" src="${a.selfieUrl}"/>` : "-"}</td>
@@ -4314,7 +4333,8 @@ async function hrAttendanceScreen(){
     </tr>`).join("");
 
   const driverEntries = await fetchDriverAttendanceRange(attFrom, attTo);
-  const driverRows = driverEntries.map(a=>
+  const filteredDriverEntries = driverEntries.filter(a=>matchesSearch('att_drivers', a.driver, a.vehicleReg, a.status, a.uniform));
+  const driverRows = filteredDriverEntries.map(a=>
     `<tr><td>${fmtDMY(a.date)}</td><td>${a.driver}</td><td>${a.vehicleReg}</td><td><span class="badge ${a.status==='present'?'ok':'low'}">${a.status}</span></td><td><span class="badge ${a.uniform==='compliant'?'ok':'low'}">${a.uniform}</span></td></tr>`
   ).join("");
 
@@ -4343,8 +4363,10 @@ async function hrAttendanceScreen(){
       <button class="btn small secondary" onclick="downloadAttendanceSupervisors('csv')">Download CSV</button>
       <button class="btn small secondary" onclick="downloadAttendanceSupervisors('xlsx')">Download Excel</button>
     </div>` : ""}
+    ${searchBoxHtml('att_supervisors', 'Search by name, role or area...', entries.length)}
+    ${searchResultCountHtml('att_supervisors', filteredEntries.length, entries.length)}
     <table><tr><th>Date</th><th>Selfie</th><th>Name</th><th>Role</th><th>Type</th><th>Time</th><th>Area</th><th>Distance</th><th>Status</th></tr>
-    ${supRows || "<tr><td colspan='9' class='empty'>No clock-ins for this range.</td></tr>"}</table>
+    ${supRows || `<tr><td colspan='9' class='empty'>${entries.length? 'No entries match your search.' : 'No clock-ins for this range.'}</td></tr>`}</table>
     ` : ""}
   </div>
   <div class="card">
@@ -4357,7 +4379,9 @@ async function hrAttendanceScreen(){
       <button class="btn small secondary" onclick="downloadAttendanceDrivers('csv')">Download CSV</button>
       <button class="btn small secondary" onclick="downloadAttendanceDrivers('xlsx')">Download Excel</button>
     </div>` : ""}
-    <table><tr><th>Date</th><th>Driver</th><th>Vehicle</th><th>Attendance</th><th>Uniform</th></tr>${driverRows || "<tr><td colspan='5' class='empty'>No entries submitted for this range.</td></tr>"}</table>
+    ${searchBoxHtml('att_drivers', 'Search by driver, vehicle, attendance or uniform...', driverEntries.length)}
+    ${searchResultCountHtml('att_drivers', filteredDriverEntries.length, driverEntries.length)}
+    <table><tr><th>Date</th><th>Driver</th><th>Vehicle</th><th>Attendance</th><th>Uniform</th></tr>${driverRows || `<tr><td colspan='5' class='empty'>${driverEntries.length? 'No entries match your search.' : 'No entries submitted for this range.'}</td></tr>`}</table>
     ` : ""}
   </div>
   ${canDownload ? await attendanceBackupCardHtml() : ""}`;
@@ -4536,9 +4560,16 @@ async function auditTableHtml(opts){
     params.set("to", opts.to || opts.from);
   } else if(opts.date) params.set("date", opts.date);
   let rows = [];
-  try{ rows = await api(`/audit?${params.toString()}`); }catch(e){ return {count:0, html:"<div class='empty'>Audit log not available for your role.</div>"}; }
-  const html = `<table><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr>${rows.map(a=>`<tr><td>${new Date(a.ts).toLocaleString('en-GB')}</td><td>${a.userName}</td><td>${a.action}</td><td>${a.detail}</td></tr>`).join("") || "<tr><td colspan='4' class='empty'>Nothing logged in this window.</td></tr>"}</table>`;
-  return {count: rows.length, html};
+  try{ rows = await api(`/audit?${params.toString()}`); }catch(e){ return {count:0, total:0, html:"<div class='empty'>Audit log not available for your role.</div>"}; }
+  const total = rows.length;
+  // opts.searchKey lets a caller (currently just the full Audit Log screen -
+  // the dashboard's 15/100-row snippets don't pass this) filter the fetched
+  // rows client-side by whatever's in that search box, without affecting
+  // the other two callers that never set it.
+  const filteredRows = opts.searchKey ? rows.filter(a=>matchesSearch(opts.searchKey, a.userName, a.action, a.detail)) : rows;
+  const searchBox = opts.searchKey ? searchBoxHtml(opts.searchKey, 'Search by user, action or detail...', total) + searchResultCountHtml(opts.searchKey, filteredRows.length, total) : "";
+  const html = `${searchBox}<table><tr><th>Time</th><th>User</th><th>Action</th><th>Detail</th></tr>${filteredRows.map(a=>`<tr><td>${new Date(a.ts).toLocaleString('en-GB')}</td><td>${a.userName}</td><td>${a.action}</td><td>${a.detail}</td></tr>`).join("") || `<tr><td colspan='4' class='empty'>${opts.searchKey && searchQuery[opts.searchKey] ? 'No entries match your search.' : 'Nothing logged in this window.'}</td></tr>`}</table>`;
+  return {count: filteredRows.length, total, html};
 }
 // Audit Log defaults to today only - pick a different date to look back
 // further, one day at a time.
@@ -4547,7 +4578,7 @@ async function auditTableHtml(opts){
 let auditFrom = todayStr();
 let auditTo = todayStr();
 async function auditScreen(){
-  const audit = await auditTableHtml({from: auditFrom, to: auditTo, limit: 1000});
+  const audit = await auditTableHtml({from: auditFrom, to: auditTo, limit: 1000, searchKey: 'audit'});
   return `
   <h1 class="page-title">Audit Log</h1>
   <div class="card">
@@ -4562,7 +4593,7 @@ async function auditScreen(){
   </div>
   <div class="card">
     <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('audit_log')" title="${isCardOpen('audit_log')?'Click to collapse':'Click to expand'}">
-      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Log entries (${audit.count})</h2>
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Log entries (${audit.total})</h2>
       ${cardChevronHtml('audit_log')}
     </div>
     ${isCardOpen('audit_log') ? audit.html : ""}
@@ -6016,6 +6047,45 @@ function cardChevronHtml(key){
   return `<span class="muted" style="font-size:15px;flex:none;">${open?'&#9662;':'&#9656;'}</span>`;
 }
 
+// ---- Generic list search/filter (reused on every list of >10 rows) ----
+// One text box per list, keyed by a short string ('vehicles', 'drivers',
+// 'staff', 'audit', ...) so multiple lists on the same screen each keep
+// their own independent search text. Filtering itself happens client-side
+// against whatever fields each screen passes in - nothing round-trips to
+// the server, so it's instant as you type.
+let searchQuery = {};
+function setSearchQuery(key, v){
+  searchQuery[key] = (v || "").trim().toLowerCase();
+  renderMain();
+}
+// True if every word in the search box appears somewhere across the given
+// fields (order-independent, so "TG08 tigor" matches "TG08U0154 - Tata
+// Tigor EV" either way round) - false only filters a row out when there's
+// an actual query and none of the fields match.
+function matchesSearch(key, ...fields){
+  const q = searchQuery[key];
+  if(!q) return true;
+  const haystack = fields.map(f=>String(f==null?'':f).toLowerCase()).join("  ");
+  return q.split(/\s+/).filter(Boolean).every(word=>haystack.includes(word));
+}
+// Renders the search box only once the list is actually long enough to
+// need one (>10 items) - keeps short lists uncluttered. Focus/cursor
+// position survives each re-render because the input's value is always
+// re-set from the same searchQuery state that oninput just wrote to.
+function searchBoxHtml(key, placeholder, totalCount){
+  if((totalCount||0) <= 10) return "";
+  const q = searchQuery[key] || "";
+  return `<div style="margin-bottom:10px;position:relative;">
+    <input type="text" placeholder="${placeholder||'Search...'}" value="${q.replace(/"/g,'&quot;')}" oninput="setSearchQuery('${key}', this.value)" style="width:100%;padding:9px 34px 9px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;box-sizing:border-box;" />
+    ${q ? `<button type="button" onclick="setSearchQuery('${key}','')" title="Clear search" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--grey);font-size:15px;line-height:1;">&#10005;</button>` : `<span style="position:absolute;right:12px;top:50%;transform:translateY(-50%);color:var(--grey);font-size:13px;pointer-events:none;">&#128269;</span>`}
+  </div>`;
+}
+// Small helper for the common "N of M shown" note under a filtered table.
+function searchResultCountHtml(key, shownCount, totalCount){
+  if(!(searchQuery[key])) return "";
+  return `<div class="muted" style="margin:-4px 0 8px;font-size:11.5px;">Showing ${shownCount} of ${totalCount}</div>`;
+}
+
 // ---- Employee Transport (Owner/Ops Manager/Data Team) -----------------
 // The day-to-day roster/request/optimizer work happens in the client's own
 // portal (public/client.html, run by their Travel Desk Manager) - this
@@ -7146,7 +7216,8 @@ function subvendorBillingLabel(b){
 }
 async function subvendorsScreen(){
   subvendors = await api("/subvendors");
-  const rows = subvendors.map(sv=>`
+  const filteredSubvendors = subvendors.filter(sv=>matchesSearch('subvendors', sv.name, sv.contactPerson, sv.email, sv.phone));
+  const rows = filteredSubvendors.map(sv=>`
     <tr>
       <td><b>${sv.name}</b></td>
       <td>${sv.contactPerson||"-"}</td>
@@ -7163,8 +7234,10 @@ async function subvendorsScreen(){
       ${cardChevronHtml('subvendors_list')}
     </div>
     ${isCardOpen('subvendors_list') ? `
+    ${searchBoxHtml('subvendors', 'Search by name, contact, email or mobile...', subvendors.length)}
+    ${searchResultCountHtml('subvendors', filteredSubvendors.length, subvendors.length)}
     <table><tr><th>Name</th><th>Contact Person</th><th>Email / Mobile</th><th>Status</th><th></th></tr>
-    ${rows || "<tr><td colspan='5' class='empty'>No subvendors added yet.</td></tr>"}</table>
+    ${rows || "<tr><td colspan='5' class='empty'>No subvendors match your search.</td></tr>"}</table>
     <form class="inline-form" onsubmit="return addSubvendor(event)">
       <div class="f"><label>Name *</label><input type="text" id="newSvName" required /></div>
       <div class="f"><label>Contact Person</label><input type="text" id="newSvContact" /></div>
@@ -7628,18 +7701,22 @@ async function workshopScreen(){
       <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">All Requests</h2>
       ${cardChevronHtml('workshop_all')}
     </div>
-    ${isCardOpen('workshop_all') ? `
+    ${isCardOpen('workshop_all') ? (()=>{
+      const filteredRequests = requests.filter(r=>matchesSearch('workshop_all', r.vehicleReg, r.issueDescription, r.status, r.assignedToName));
+      return `
+    ${searchBoxHtml('workshop_all', 'Search by vehicle, issue, status or assignee...', requests.length)}
+    ${searchResultCountHtml('workshop_all', filteredRequests.length, requests.length)}
     <table><tr><th>Date</th><th>Vehicle</th><th>Issue</th><th>Status</th><th>Assigned To</th><th>Cost</th></tr>
-    ${requests.map(r=>`<tr>
+    ${filteredRequests.map(r=>`<tr>
       <td>${new Date(r.createdAt).toLocaleDateString('en-GB')}</td>
       <td>${r.vehicleReg}</td>
       <td>${r.issueDescription}</td>
       <td>${repairStatusBadge(r.status)}</td>
       <td>${r.assignedToName||"-"}</td>
       <td>${r.totalCost!=null? 'Rs '+r.totalCost.toLocaleString('en-IN') : '-'}</td>
-    </tr>`).join("") || `<tr><td colspan="6" class="empty">No requests yet.</td></tr>`}
-    </table>
-    ` : ""}
+    </tr>`).join("") || `<tr><td colspan="6" class="empty">No requests match your search.</td></tr>`}
+    </table>`;
+    })() : ""}
   </div>` : "";
 
   const purchaseForm = WORKSHOP_STAFF_ROLES.includes(role) ? `
@@ -7674,16 +7751,22 @@ async function workshopScreen(){
       <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Recent Bulk Purchases</h2>
       ${cardChevronHtml('workshop_purchases')}
     </div>
-    ${isCardOpen('workshop_purchases') ? (purchases.length===0 ? `<div class="empty">No purchases logged yet.</div>` : `
+    ${isCardOpen('workshop_purchases') ? (purchases.length===0 ? `<div class="empty">No purchases logged yet.</div>` : (()=>{
+      const recent = purchases.slice(0,30);
+      const filteredPurchases = recent.filter(p=>matchesSearch('workshop_purchases', p.purchasedByName, p.items.map(i=>i.name).join(" ")));
+      return `
+    ${searchBoxHtml('workshop_purchases', 'Search by who bought it or item name...', recent.length)}
+    ${searchResultCountHtml('workshop_purchases', filteredPurchases.length, recent.length)}
     <table><tr><th>Date</th><th>By</th><th>Items</th><th>Total</th><th>Invoice</th></tr>
-    ${purchases.slice(0,30).map(p=>`<tr>
+    ${filteredPurchases.map(p=>`<tr>
       <td>${new Date(p.createdAt).toLocaleDateString('en-GB')}</td>
       <td>${p.purchasedByName}</td>
       <td>${p.items.map(i=>`${i.qty}${i.unit?' '+i.unit:''} ${i.name}`).join(", ")}</td>
       <td>Rs ${p.totalAmount.toLocaleString('en-IN')}</td>
       <td>${p.invoiceUrl? `<a href="${p.invoiceUrl}" target="_blank">View / Print</a>` : "-"}</td>
-    </tr>`).join("")}
-    </table>`) : ""}
+    </tr>`).join("") || `<tr><td colspan="5" class="empty">No purchases match your search.</td></tr>`}
+    </table>`;
+    })()) : ""}
   </div>` : "";
 
   return `
@@ -7912,8 +7995,10 @@ async function payrollManagementHtml(){
   const summary = await fetchPayrollSummary(payrollMonth);
   if(!summary || !summary.rows.length) return "";
   const canEdit = canEditPayrollFrontend();
-  const staffRows = summary.rows.filter(r=>r.personType==="user");
-  const driverRows = summary.rows.filter(r=>r.personType==="driver");
+  const allStaffRows = summary.rows.filter(r=>r.personType==="user");
+  const allDriverRows = summary.rows.filter(r=>r.personType==="driver");
+  const staffRows = allStaffRows.filter(r=>matchesSearch('payroll_staff', r.name, r.subLabel));
+  const driverRows = allDriverRows.filter(r=>matchesSearch('payroll_driver', r.name, r.subLabel));
   const rowHtml = async (r) => {
     const key = `${r.personType}:${r.personId}`;
     const detail = editingPayrollKey===key ? await payrollDetailHtml(r.personType, r.personId) : "";
@@ -7938,21 +8023,27 @@ async function payrollManagementHtml(){
   for(const r of driverRows) driverHtml += await rowHtml(r);
 
   return `
-  ${staffRows.length ? `
+  ${allStaffRows.length ? `
   <div class="card">
     <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('payroll_staff')" title="${isCardOpen('payroll_staff')?'Click to collapse':'Click to expand'}">
       <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Staff Payroll</h2>
       ${cardChevronHtml('payroll_staff')}
     </div>
-    ${isCardOpen('payroll_staff') ? `<table><tr><th>Name</th><th>Role</th><th>Gross</th><th>Deductions</th><th>Net Pay</th><th></th></tr>${staffHtml}</table>` : ""}
+    ${isCardOpen('payroll_staff') ? `
+    ${searchBoxHtml('payroll_staff', 'Search by name or role...', allStaffRows.length)}
+    ${searchResultCountHtml('payroll_staff', staffRows.length, allStaffRows.length)}
+    <table><tr><th>Name</th><th>Role</th><th>Gross</th><th>Deductions</th><th>Net Pay</th><th></th></tr>${staffHtml || `<tr><td colspan="6" class="empty">No staff match your search.</td></tr>`}</table>` : ""}
   </div>` : ''}
-  ${driverRows.length ? `
+  ${allDriverRows.length ? `
   <div class="card">
     <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('payroll_driver')" title="${isCardOpen('payroll_driver')?'Click to collapse':'Click to expand'}">
       <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Driver Payroll</h2>
       ${cardChevronHtml('payroll_driver')}
     </div>
-    ${isCardOpen('payroll_driver') ? `<table><tr><th>Name</th><th>Role</th><th>Gross</th><th>Deductions</th><th>Net Pay</th><th></th></tr>${driverHtml}</table>` : ""}
+    ${isCardOpen('payroll_driver') ? `
+    ${searchBoxHtml('payroll_driver', 'Search by name...', allDriverRows.length)}
+    ${searchResultCountHtml('payroll_driver', driverRows.length, allDriverRows.length)}
+    <table><tr><th>Name</th><th>Role</th><th>Gross</th><th>Deductions</th><th>Net Pay</th><th></th></tr>${driverHtml || `<tr><td colspan="6" class="empty">No drivers match your search.</td></tr>`}</table>` : ""}
   </div>` : ''}`;
 }
 function payrollComponentRowHtml(c){
