@@ -3684,7 +3684,11 @@ async function peopleScreen(){
   return `
   <h1 class="page-title">People</h1>
   <div class="card">
-    <h2 class="section-title">Staff (${meta.users.length})</h2>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('people_staff')" title="${isCardOpen('people_staff')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Staff (${meta.users.length})</h2>
+      ${cardChevronHtml('people_staff')}
+    </div>
+    ${isCardOpen('people_staff') ? `
     <table><tr><th>Name</th><th>Role</th><th>Area / Supervises</th><th>Email</th><th>Mobile Number</th><th>Date of Joining</th><th></th></tr>${rows}</table>
 
     ${canEditAtAll ? `
@@ -3704,6 +3708,7 @@ async function peopleScreen(){
     ${myRole==="hr" ? `<div class="muted">Only the Owner can create or edit Owner or HR accounts.</div>` : ""}
     ${myRole==="ops_manager" ? `<div class="muted">Only the Owner can create or edit Owner, Operations Manager, or HR accounts.</div>` : ""}
     ` : `<div class="muted" style="margin-top:6px;">You have view-only access to People - only the Owner, Operations Manager, and HR can make changes here.</div>`}
+    ` : ""}
   </div>
   ${await driversCardHtml()}`;
 }
@@ -4254,21 +4259,31 @@ async function hrAttendanceScreen(){
     </div>
   </div>
   <div class="card">
-    <h2 class="section-title">Supervisor clock-in / clock-out - ${attFrom} to ${attTo}</h2>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('att_supervisors')" title="${isCardOpen('att_supervisors')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Supervisor clock-in / clock-out - ${attFrom} to ${attTo}</h2>
+      ${cardChevronHtml('att_supervisors')}
+    </div>
+    ${isCardOpen('att_supervisors') ? `
     ${canDownload ? `<div class="controls" style="margin-bottom:8px;">
       <button class="btn small secondary" onclick="downloadAttendanceSupervisors('csv')">Download CSV</button>
       <button class="btn small secondary" onclick="downloadAttendanceSupervisors('xlsx')">Download Excel</button>
     </div>` : ""}
     <table><tr><th>Date</th><th>Selfie</th><th>Name</th><th>Role</th><th>Type</th><th>Time</th><th>Area</th><th>Distance</th><th>Status</th></tr>
     ${supRows || "<tr><td colspan='9' class='empty'>No clock-ins for this range.</td></tr>"}</table>
+    ` : ""}
   </div>
   <div class="card">
-    <h2 class="section-title">Driver attendance (from vehicle checklists) - ${attFrom} to ${attTo}</h2>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('att_drivers')" title="${isCardOpen('att_drivers')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Driver attendance (from vehicle checklists) - ${attFrom} to ${attTo}</h2>
+      ${cardChevronHtml('att_drivers')}
+    </div>
+    ${isCardOpen('att_drivers') ? `
     ${canDownload ? `<div class="controls" style="margin-bottom:8px;">
       <button class="btn small secondary" onclick="downloadAttendanceDrivers('csv')">Download CSV</button>
       <button class="btn small secondary" onclick="downloadAttendanceDrivers('xlsx')">Download Excel</button>
     </div>` : ""}
     <table><tr><th>Date</th><th>Driver</th><th>Vehicle</th><th>Attendance</th><th>Uniform</th></tr>${driverRows || "<tr><td colspan='5' class='empty'>No entries submitted for this range.</td></tr>"}</table>
+    ` : ""}
   </div>
   ${canDownload ? await attendanceBackupCardHtml() : ""}`;
 }
@@ -4355,13 +4370,18 @@ async function attendanceBackupCardHtml(){
     </tr>`).join("");
   return `
   <div class="card">
-    <h2 class="section-title">Attendance Backup</h2>
-    <p class="muted">Download a complete archive of every supervisor clock-in/out and driver attendance record roughly every ${ATTENDANCE_BACKUP_TARGET_DAYS} days and keep it somewhere outside the app.</p>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('att_backup')" title="${isCardOpen('att_backup')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Attendance Backup</h2>
+      ${cardChevronHtml('att_backup')}
+    </div>
     ${statusHtml}
+    ${isCardOpen('att_backup') ? `
+    <p class="muted">Download a complete archive of every supervisor clock-in/out and driver attendance record roughly every ${ATTENDANCE_BACKUP_TARGET_DAYS} days and keep it somewhere outside the app.</p>
     <button class="btn" onclick="downloadAttendanceBackup()">Download Attendance Backup</button>
     <table style="margin-top:12px;"><tr><th>Taken</th><th>By</th><th>Role</th><th>Next Scheduled</th></tr>
     ${rows || "<tr><td colspan='4' class='empty'>No attendance backups downloaded yet.</td></tr>"}
     </table>
+    ` : ""}
   </div>`;
 }
 async function downloadAttendanceBackup(){
@@ -4452,6 +4472,7 @@ async function auditTableHtml(opts){
 let auditFrom = todayStr();
 let auditTo = todayStr();
 async function auditScreen(){
+  const audit = await auditTableHtml({from: auditFrom, to: auditTo, limit: 1000});
   return `
   <h1 class="page-title">Audit Log</h1>
   <div class="card">
@@ -4463,7 +4484,13 @@ async function auditScreen(){
         <button class="btn small secondary" onclick="setAuditRange('${todayStr()}','${todayStr()}')">Today only</button>
       </div>
     </div>
-    ${(await auditTableHtml({from: auditFrom, to: auditTo, limit: 1000})).html}
+  </div>
+  <div class="card">
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('audit_log')" title="${isCardOpen('audit_log')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Log entries (${audit.count})</h2>
+      ${cardChevronHtml('audit_log')}
+    </div>
+    ${isCardOpen('audit_log') ? audit.html : ""}
   </div>`;
 }
 async function setAuditRange(from, to){
@@ -5568,8 +5595,14 @@ async function gpsLinkScreen(){
   <div class="muted" style="margin:-10px 0 14px;font-size:13px;">${linkedCount} Linked / ${devices.length} Sourced from API</div>
   <div class="banner">Auto-matching pairs a vehicle to a Fleetx device by registration number. If a device is labeled with a chassis number, engine number, or manufacturer name instead, link it manually here - once saved, the manual link always wins and stays until you change it.</div>
   <div class="card">
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('gps_linking')" title="${isCardOpen('gps_linking')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Vehicles (${filteredVehicles.length})</h2>
+      ${cardChevronHtml('gps_linking')}
+    </div>
+    ${isCardOpen('gps_linking') ? `
     <input type="text" placeholder="Search by registration, make, model, chassis or engine no..." value="${gpsLinkSearch}" oninput="setGpsLinkSearch(this.value)" style="width:100%;margin-bottom:12px;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;" />
     <table><tr><th>Vehicle</th><th>Link Status</th><th>Fleetx Device</th><th></th><th></th></tr>${rows || `<tr><td colspan="5" class="empty">No vehicles match your search.</td></tr>`}</table>
+    ` : ""}
   </div>
   <div class="card"><div class="muted">${devices.length} Fleetx device${devices.length===1?'':'s'} seen in the last live fetch.</div></div>
   `;
@@ -6065,9 +6098,8 @@ async function transportScreen(){
   const seaterTiers = TRANSPORT_SEATER_TIERS_FE;
 
   setTimeout(()=>{
-    initTransportPinMap(cfg.officeLat, cfg.officeLng);
-    seaterTiers.forEach(t=>updateRateCardFieldVisibility(t));
-    updateRateCardFieldVisibility('rt');
+    if(isCardOpen('transport_settings')) initTransportPinMap(cfg.officeLat, cfg.officeLng);
+    if(isCardOpen('transport_billing')){ seaterTiers.forEach(t=>updateRateCardFieldVisibility(t)); updateRateCardFieldVisibility('rt'); }
   }, 0);
   return `
   <h1 class="page-title">📍 Employee Transport</h1>
@@ -6087,7 +6119,11 @@ async function transportScreen(){
   </div>
 
   <div class="card">
-    <h2 class="section-title">Transport Settings</h2>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('transport_settings')" title="${isCardOpen('transport_settings')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Transport Settings</h2>
+      ${cardChevronHtml('transport_settings')}
+    </div>
+    ${isCardOpen('transport_settings') ? `
     <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
       <input type="checkbox" id="tr_enabled" ${cfg.enabled?'checked':''} /> Enabled for this client
     </label>
@@ -6099,10 +6135,15 @@ async function transportScreen(){
       <div class="field"><label>Max Ride (minutes)</label><input type="number" min="0" id="tr_max_ride" value="${cfg.maxRideMinutes}" /></div>
     </div>
     <button class="btn" style="margin-top:10px;" onclick="transportSaveConfig('${client.id}')">Save Settings</button>
+    ` : ""}
   </div>
 
   <div class="card">
-    <h2 class="section-title">Fleet Arrangement</h2>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('transport_fleet')" title="${isCardOpen('transport_fleet')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Fleet Arrangement</h2>
+      ${cardChevronHtml('transport_fleet')}
+    </div>
+    ${isCardOpen('transport_fleet') ? `
     <p class="muted" style="margin-bottom:10px;">How this client's fleet is actually run - not exclusive, a client can be more than one of these at once (e.g. fixed buses on set routes plus a flexible cab pool for overflow).</p>
     <div class="grid cols-3">
       <label class="card" style="cursor:pointer;background:var(--surface-2,#f7f7f5);">
@@ -6127,10 +6168,15 @@ async function transportScreen(){
       ${seaterTiers.map(t=>`<div class="field"><label>${t}-seater count</label><input type="number" min="0" id="tr_cf_count_${t}" value="${contractedFleetMap[t]||''}" placeholder="0" /></div>`).join("")}
     </div>
     <button class="btn" style="margin-top:10px;" onclick="transportSaveConfig('${client.id}')">Save Settings</button>
+    ` : ""}
   </div>
 
   <div class="card">
-    <h2 class="section-title">Billing &amp; Pricing</h2>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('transport_billing')" title="${isCardOpen('transport_billing')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Billing &amp; Pricing</h2>
+      ${cardChevronHtml('transport_billing')}
+    </div>
+    ${isCardOpen('transport_billing') ? `
     <p class="muted" style="margin-bottom:10px;">Every contract prices differently - pick a model per seater-type. A 5-seater cab under 15km can be a flat rate per pickup (Slab), a 40-seater bus can be a fixed monthly number, another client's 40-seater can be billed strictly per km.</p>
     <div class="field" style="max-width:420px;"><label>Default Model (fallback if a tier below isn't set)</label>
       <select id="tr_billing_default">
@@ -6141,10 +6187,15 @@ async function transportScreen(){
       ${seaterTiers.map(t=>rateCardEditorHtml(t, cfg)).join("")}
     </div>
     <button class="btn" style="margin-top:10px;" onclick="transportSaveConfig('${client.id}')">Save Settings</button>
+    ` : ""}
   </div>
 
   <div class="card">
-    <h2 class="section-title">Route Templates <span class="muted" style="font-weight:normal;">(contracted routes - mainly for buses)</span></h2>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('transport_routetemplates')" title="${isCardOpen('transport_routetemplates')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Route Templates <span class="muted" style="font-weight:normal;">(contracted routes - mainly for buses)</span></h2>
+      ${cardChevronHtml('transport_routetemplates')}
+    </div>
+    ${isCardOpen('transport_routetemplates') ? `
     <p class="muted" style="margin-bottom:10px;">Set these once at onboarding: a named route, its vehicle type, how many vehicles run it, and (optionally) its own price if it differs from the seater-type default above.</p>
     <table><tr><th>Name</th><th>Direction</th><th>Type</th><th>Vehicles</th><th>Schedule</th><th>Price</th><th></th><th></th></tr>
     ${(cfg.routeTemplates||[]).length ? cfg.routeTemplates.map(rt=>`
@@ -6160,10 +6211,15 @@ async function transportScreen(){
       </tr>`).join("") : `<tr><td colspan="8" class="muted">No contracted route templates yet.</td></tr>`}
     </table>
     ${routeTemplateFormHtml(client, cfg, seaterTiers)}
+    ` : ""}
   </div>
 
   <div class="card">
-    <h2 class="section-title">Client Portal Logins</h2>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('transport_logins')" title="${isCardOpen('transport_logins')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Client Portal Logins</h2>
+      ${cardChevronHtml('transport_logins')}
+    </div>
+    ${isCardOpen('transport_logins') ? `
     <table><tr><th>Name</th><th>Role</th><th>Email/Mobile</th><th>Status</th></tr>
     ${clientUsers.length ? clientUsers.map(u=>`<tr><td>${u.name}</td><td>${({travel_desk_manager:"Travel Desk Manager",billing:"Billing",hod:"HOD"})[u.role]||u.role}</td><td>${u.email||u.phone}</td><td>${u.active?"Active":"Inactive"}</td></tr>`).join("") : `<tr><td colspan="4" class="muted">No portal logins yet.</td></tr>`}
     </table>
@@ -6181,11 +6237,15 @@ async function transportScreen(){
       <div class="field"><label>Temporary Password</label><input type="text" id="tr_cu_password" placeholder="Temp@1234" /></div>
     </div>
     <button class="btn" onclick="transportCreateClientUser('${client.id}')">Create Login</button>
+    ` : ""}
   </div>
 
   <div class="card">
-    <h2 class="section-title">Routes</h2>
-    ${routes.length ? routes.map(r=>`
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('transport_routes')" title="${isCardOpen('transport_routes')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Routes ${routes.length? `<span class="badge">${routes.length}</span>`:''}</h2>
+      ${cardChevronHtml('transport_routes')}
+    </div>
+    ${isCardOpen('transport_routes') ? (routes.length ? routes.map(r=>`
       <div style="border-bottom:1px solid var(--border);padding:10px 0;">
         <div class="flex-between">
           <b>${r.direction==="pickup"?"Pickup":"Drop"} &middot; ${r.seaterTier}-seater &middot; ${r.totalEmployees} employees &middot; ${r.occupancyRatio}% occupancy${r.comfortViolations?` &middot; ${r.comfortViolations} flagged`:''}</b>
@@ -6200,7 +6260,7 @@ async function transportScreen(){
           ${r.status==="draft"?`<button class="btn small" onclick="transportApproveRoute('${r.id}')">Approve</button>`:''}
           ${r.status==="approved"?`<button class="btn small" onclick="transportDispatchRoute('${r.id}')">Dispatch</button>`:''}
         </div>
-      </div>`).join("") : `<div class="muted">No routes yet - the client's Travel Desk Manager runs the optimizer from their portal.</div>`}
+      </div>`).join("") : `<div class="muted">No routes yet - the client's Travel Desk Manager runs the optimizer from their portal.</div>`) : ""}
   </div>`;
 }
 async function transportSaveConfig(clientId){
@@ -7023,7 +7083,11 @@ async function subvendorsScreen(){
   <h1 class="page-title">Subvendors</h1>
   <div class="banner">A Subvendor is an external vehicle owner/operator ("Driver-cum-Owner") we contract with - separate from our own drivers and from clients. Each linked vehicle has one fixed billing contract (Per Trip / Per KM / Per Package Monthly) that stays constant for the contract unless explicitly revised (e.g. a fuel price variation). Subvendors sign in separately via the Subvendor portal to see their own vehicles, trips, income and payments.</div>
   <div class="card">
-    <h2 class="section-title">All Subvendors (${subvendors.length})</h2>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('subvendors_list')" title="${isCardOpen('subvendors_list')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">All Subvendors (${subvendors.length})</h2>
+      ${cardChevronHtml('subvendors_list')}
+    </div>
+    ${isCardOpen('subvendors_list') ? `
     <table><tr><th>Name</th><th>Contact Person</th><th>Email / Mobile</th><th>Status</th><th></th></tr>
     ${rows || "<tr><td colspan='5' class='empty'>No subvendors added yet.</td></tr>"}</table>
     <form class="inline-form" onsubmit="return addSubvendor(event)">
@@ -7035,6 +7099,7 @@ async function subvendorsScreen(){
       <button class="btn small" type="submit">+ Add Subvendor</button>
     </form>
     <div class="muted" style="margin-top:6px;">Either an email or mobile number is required so they can log in - they'll be forced to set their own password the first time.</div>
+    ` : ""}
   </div>
   ${editingSubvendorId ? await subvendorDetailHtml(editingSubvendorId) : ""}
   `;
@@ -7455,8 +7520,11 @@ async function workshopScreen(){
 
   const incomingHtml = canAssign ? `
   <div class="card">
-    <h2 class="section-title">Incoming Requests ${incoming.length? `<span class="badge pending">${incoming.length}</span>`:''}</h2>
-    ${incoming.length===0 ? `<div class="empty">Nothing waiting on assignment.</div>` : `
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('workshop_incoming')" title="${isCardOpen('workshop_incoming')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Incoming Requests ${incoming.length? `<span class="badge pending">${incoming.length}</span>`:''}</h2>
+      ${cardChevronHtml('workshop_incoming')}
+    </div>
+    ${isCardOpen('workshop_incoming') ? (incoming.length===0 ? `<div class="empty">Nothing waiting on assignment.</div>` : `
     <table><tr><th>Date</th><th>Vehicle</th><th>Issue</th><th>Urgency</th><th>Raised By</th><th>Assign to</th><th></th></tr>
     ${incoming.map(r=>`<tr>
       <td>${new Date(r.createdAt).toLocaleDateString('en-GB')}</td>
@@ -7467,18 +7535,25 @@ async function workshopScreen(){
       <td><select id="assignTo_${r.id}"><option value="">Select staff...</option>${staffOptions}</select></td>
       <td><button class="btn small" onclick="assignRepairRequest('${r.id}')">Assign</button></td>
     </tr>`).join("")}
-    </table>`}
+    </table>`) : ""}
   </div>` : "";
 
   const myRepairsHtml = WORKSHOP_STAFF_ROLES.includes(role) ? `
   <div class="card">
-    <h2 class="section-title">My Assigned Repairs</h2>
-    ${mine.length===0 ? `<div class="empty">Nothing assigned to you right now.</div>` : mine.map(r=>workshopMyRepairCardHtml(r)).join("")}
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('workshop_mine')" title="${isCardOpen('workshop_mine')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">My Assigned Repairs ${mine.length? `<span class="badge pending">${mine.length}</span>`:''}</h2>
+      ${cardChevronHtml('workshop_mine')}
+    </div>
+    ${isCardOpen('workshop_mine') ? (mine.length===0 ? `<div class="empty">Nothing assigned to you right now.</div>` : mine.map(r=>workshopMyRepairCardHtml(r)).join("")) : ""}
   </div>` : "";
 
   const allRequestsHtml = isManagerView ? `
   <div class="card">
-    <h2 class="section-title">All Requests</h2>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('workshop_all')" title="${isCardOpen('workshop_all')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">All Requests</h2>
+      ${cardChevronHtml('workshop_all')}
+    </div>
+    ${isCardOpen('workshop_all') ? `
     <table><tr><th>Date</th><th>Vehicle</th><th>Issue</th><th>Status</th><th>Assigned To</th><th>Cost</th></tr>
     ${requests.map(r=>`<tr>
       <td>${new Date(r.createdAt).toLocaleDateString('en-GB')}</td>
@@ -7489,6 +7564,7 @@ async function workshopScreen(){
       <td>${r.totalCost!=null? 'Rs '+r.totalCost.toLocaleString('en-IN') : '-'}</td>
     </tr>`).join("") || `<tr><td colspan="6" class="empty">No requests yet.</td></tr>`}
     </table>
+    ` : ""}
   </div>` : "";
 
   const purchaseForm = WORKSHOP_STAFF_ROLES.includes(role) ? `
@@ -7519,8 +7595,11 @@ async function workshopScreen(){
     <button class="btn" style="margin-top:10px;" onclick="submitWorkshopPurchase()">Log Purchase</button>
   </div>
   <div class="card">
-    <h2 class="section-title">Recent Bulk Purchases</h2>
-    ${purchases.length===0 ? `<div class="empty">No purchases logged yet.</div>` : `
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('workshop_purchases')" title="${isCardOpen('workshop_purchases')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Recent Bulk Purchases</h2>
+      ${cardChevronHtml('workshop_purchases')}
+    </div>
+    ${isCardOpen('workshop_purchases') ? (purchases.length===0 ? `<div class="empty">No purchases logged yet.</div>` : `
     <table><tr><th>Date</th><th>By</th><th>Items</th><th>Total</th><th>Invoice</th></tr>
     ${purchases.slice(0,30).map(p=>`<tr>
       <td>${new Date(p.createdAt).toLocaleDateString('en-GB')}</td>
@@ -7529,7 +7608,7 @@ async function workshopScreen(){
       <td>Rs ${p.totalAmount.toLocaleString('en-IN')}</td>
       <td>${p.invoiceUrl? `<a href="${p.invoiceUrl}" target="_blank">View / Print</a>` : "-"}</td>
     </tr>`).join("")}
-    </table>`}
+    </table>`) : ""}
   </div>` : "";
 
   return `
@@ -7715,13 +7794,18 @@ async function myPayslipCardHtml(){
   const payslip = await fetchPayslip("user", currentUser.id, payrollMonth);
   return `
   <div class="card">
-    <h2 class="section-title">My Payslip - ${payrollMonth}</h2>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('my_payslip')" title="${isCardOpen('my_payslip')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">My Payslip - ${payrollMonth}</h2>
+      ${cardChevronHtml('my_payslip')}
+    </div>
+    ${isCardOpen('my_payslip') ? `
     ${payslipTableHtml(payslip)}
     <div class="controls" style="margin-top:10px;">
       <button class="btn small secondary" onclick="downloadPayslip('user','${currentUser.id}','pdf')">Download PDF</button>
       <button class="btn small secondary" onclick="downloadPayslip('user','${currentUser.id}','csv')">Download CSV</button>
       <button class="btn small secondary" onclick="downloadPayslip('user','${currentUser.id}','xlsx')">Download Excel</button>
     </div>
+    ` : ""}
   </div>`;
 }
 async function downloadPayslip(personType, personId, format){
@@ -7781,13 +7865,19 @@ async function payrollManagementHtml(){
   return `
   ${staffRows.length ? `
   <div class="card">
-    <h2 class="section-title">Staff Payroll</h2>
-    <table><tr><th>Name</th><th>Role</th><th>Gross</th><th>Deductions</th><th>Net Pay</th><th></th></tr>${staffHtml}</table>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('payroll_staff')" title="${isCardOpen('payroll_staff')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Staff Payroll</h2>
+      ${cardChevronHtml('payroll_staff')}
+    </div>
+    ${isCardOpen('payroll_staff') ? `<table><tr><th>Name</th><th>Role</th><th>Gross</th><th>Deductions</th><th>Net Pay</th><th></th></tr>${staffHtml}</table>` : ""}
   </div>` : ''}
   ${driverRows.length ? `
   <div class="card">
-    <h2 class="section-title">Driver Payroll</h2>
-    <table><tr><th>Name</th><th>Role</th><th>Gross</th><th>Deductions</th><th>Net Pay</th><th></th></tr>${driverHtml}</table>
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('payroll_driver')" title="${isCardOpen('payroll_driver')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Driver Payroll</h2>
+      ${cardChevronHtml('payroll_driver')}
+    </div>
+    ${isCardOpen('payroll_driver') ? `<table><tr><th>Name</th><th>Role</th><th>Gross</th><th>Deductions</th><th>Net Pay</th><th></th></tr>${driverHtml}</table>` : ""}
   </div>` : ''}`;
 }
 function payrollComponentRowHtml(c){
