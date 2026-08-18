@@ -2984,41 +2984,40 @@ async function assignmentsEditorHtml(){
     <tr id="vehicle-row-${v.id}"${vehicleRowStyleAttr(v)}>
       <td><b>${v.reg}</b> ${quickEditBtnHtml(`toggleVehicleDetails('${v.id}')`, editingVehicleId===v.id)}${vehicleAssignmentWarningHtml(v)}${avgMileageBadgeHtml(v)}${recentlyChangedBadgeHtml(v)}</td>
       <td>${v.vehicleType||'-'} / ${v.fuelType||'-'}</td>
-      <td><select onchange="assignField('${v.id}','clientId', this.value||null)">
-        <option value="">- none (internal route) -</option>
+      <td><select style="width:140px;max-width:100%;" onchange="assignField('${v.id}','clientId', this.value||null)">
+        <option value="">- none (internal) -</option>
         ${meta.clients.map(c=>`<option value="${c.id}" ${v.clientId===c.id?'selected':''}>${c.name}</option>`).join("")}
       </select></td>
       <td>
-        <select ${!client?'disabled title="Select a company first"':''} onchange="assignField('${v.id}','routeId', this.value||null)">
-          <option value="">${client? '- select route -' : '- select company first -'}</option>
+        <select style="width:160px;max-width:100%;" ${!client?'disabled title="Select a company first"':''} onchange="assignField('${v.id}','routeId', this.value||null)">
+          <option value="">${client? '- select route -' : '- select company -'}</option>
           ${clientRoutes.map(r=>`<option value="${r.id}" ${v.routeId===r.id?'selected':''}>${r.routeNumber||'(no number)'} - ${r.name}</option>`).join("")}
         </select>
         ${v.routeId ? `<div class="muted" style="margin-top:2px;">Starting point: ${vehicleRouteStartingPoint(v)}</div>` : ""}
       </td>
-      <td><select onchange="assignField('${v.id}','siteId', this.value||null)">
+      <td><select style="width:120px;max-width:100%;" onchange="assignField('${v.id}','siteId', this.value||null)">
         <option value="">- unassigned -</option>
         ${meta.sites.map(s=>`<option value="${s.id}" ${v.siteId===s.id?'selected':''}>${s.name}</option>`).join("")}
       </select></td>
-      <td><select onchange="assignField('${v.id}','supervisorId', this.value||null)">
+      <td><select style="width:130px;max-width:100%;" onchange="assignField('${v.id}','supervisorId', this.value||null)">
         <option value="">- unassigned -</option>
         ${meta.users.filter(u=>u.role==='site_supervisor').map(u=>`<option value="${u.id}" ${v.supervisorId===u.id?'selected':''}>${u.name}</option>`).join("")}
       </select>
       ${v.supervisorId ? `<div class="muted" style="margin-top:2px;">${userPhone(v.supervisorId)}</div>` : ""}</td>
-      <td><select onchange="assignField('${v.id}','driverId', this.value||null)">
+      <td><select style="width:130px;max-width:100%;" onchange="assignField('${v.id}','driverId', this.value||null)">
         <option value="">- unassigned -</option>
         ${meta.drivers.map(d=>`<option value="${d.id}" ${v.driverId===d.id?'selected':''}>${d.name}</option>`).join("")}
       </select>
       ${v.driverId ? `<div class="muted" style="margin-top:2px;">${driverPhone(v.driverId)}</div>` : ""}</td>
-      <td><input type="date" value="${v.driverAssignedDate||''}" title="Date this driver was assigned to this vehicle" onchange="assignField('${v.id}','driverAssignedDate', this.value||null)" /></td>
-      <td><select onchange="assignField('${v.id}','usage', this.value)">
+      <td><input type="date" style="width:130px;" value="${v.driverAssignedDate||''}" title="Date this driver was assigned to this vehicle" onchange="assignField('${v.id}','driverAssignedDate', this.value||null)" /></td>
+      <td><select style="width:130px;max-width:100%;" onchange="assignField('${v.id}','usage', this.value)">
         <option value="fixed_route" ${v.usage==='fixed_route'?'selected':''}>Fixed Route</option>
         <option value="client_on_demand" ${v.usage==='client_on_demand'?'selected':''}>Client on demand</option>
         <option value="booking" ${v.usage==='booking'?'selected':''}>Booking</option>
       </select></td>
       <td>
-        <button class="btn small secondary" onclick="toggleVehicleDetails('${v.id}')">${editingVehicleId===v.id?'Close':'Vehicle Details'}</button>
         ${currentUser.role==="owner" ? `
-        <button class="btn small secondary" style="margin-top:4px;" onclick="markVehicleSoldOut('${v.id}','${(v.reg||'').replace(/'/g,"\\'")}')" title="Hides this vehicle everywhere for everyone - reversible from the Sold Out Vehicles list below. There is no delete option - Sold Out is the only way to retire a vehicle.">Mark Sold Out</button>
+        <button class="btn small secondary" onclick="markVehicleSoldOut('${v.id}','${(v.reg||'').replace(/'/g,"\\'")}')" title="Hides this vehicle everywhere for everyone - reversible from the Sold Out Vehicles list below. There is no delete option - Sold Out is the only way to retire a vehicle.">Mark Sold Out</button>
         ` : ""}
       </td>
     </tr>`;}).join("");
