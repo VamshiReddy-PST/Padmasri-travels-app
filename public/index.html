@@ -5336,8 +5336,16 @@ async function gpsLinkScreen(){
       <td><button class="btn small secondary" onclick="goto('fuel_graph',{vehicleId:'${v.id}'})">⛽ Fuel Pattern</button></td>
     </tr>`;
   }).join("");
+  // "Linked" = a vehicle that currently resolves to some live Fleetx device
+  // right now (manual override or plain registration match) - built off the
+  // same linkedVehicleId the backend already computed per device, rather
+  // than just checking fleetxVehicleNumber, so a stale manual link that no
+  // longer matches anything live doesn't get counted as linked.
+  const linkedVehicleIds = new Set(devices.filter(d=>d.linkedVehicleId).map(d=>d.linkedVehicleId));
+  const linkedCount = vehicles.filter(v=>linkedVehicleIds.has(v.id)).length;
   return `
   <h1 class="page-title">📡 GPS Device Linking</h1>
+  <div class="muted" style="margin:-10px 0 14px;font-size:13px;">${linkedCount} Linked / ${devices.length} Sourced from API</div>
   <div class="banner">Auto-matching pairs a vehicle to a Fleetx device by registration number. If a device is labeled with a chassis number, engine number, or manufacturer name instead, link it manually here - once saved, the manual link always wins and stays until you change it.</div>
   <div class="card">
     <input type="text" placeholder="Search by registration, make, model, chassis or engine no..." value="${gpsLinkSearch}" oninput="setGpsLinkSearch(this.value)" style="width:100%;margin-bottom:12px;padding:9px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;" />
