@@ -28,7 +28,7 @@
     --on-accent:#ffffff; --on-accent-rgb:255,255,255; --accent-text:var(--accent);
   }
   *{box-sizing:border-box;}
-  body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;}
+  body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;overflow-x:hidden;}
   .accent-script{font-family:'Playfair Display',Georgia,serif;font-style:italic;font-weight:600;}
   #app{min-height:100vh;background:#f2f1e4;display:flex;align-items:stretch;}
   /* ---- Left sidebar shell (replaces the old top tab bar) ----
@@ -73,7 +73,14 @@
      16" MacBook and a 13" laptop both just get more/less breathing room),
      with a generous cap + auto-centering only so lines of text don't stretch
      unreadably wide on a large external monitor - not a fixed layout. */
-  main{padding:22px 28px 60px;width:100%;max-width:1440px;margin:0 auto;box-sizing:border-box;}
+  /* overflow-x:auto here (not on body/#app) is the fix for wide tables
+     dragging the sticky left sidebar out of view: any content wider than
+     the available width now scrolls horizontally within main itself, so
+     the sidebar - a sibling of .app-col, never a descendant of main - stays
+     put no matter how far right you scroll a table. main's height is
+     intrinsic (auto), so this never introduces an unwanted vertical
+     scrollbar of its own. */
+  main{padding:22px 28px 60px;width:100%;max-width:1440px;margin:0 auto;box-sizing:border-box;overflow-x:auto;}
   @media(max-width:1180px){
     main{max-width:100%;padding:20px 22px 50px;}
   }
@@ -2617,7 +2624,7 @@ async function setLeave(id, status){
 async function adminVehiclesScreen(){
   const rows = vehicles.map(v=>`
     <tr id="vehicle-row-${v.id}"${vehicleRowStyleAttr(v)}>
-      <td><b>${v.reg}</b>${avgMileageBadgeHtml(v)}${recentlyChangedBadgeHtml(v)}</td>
+      <td><b>${v.reg}</b> ${quickEditBtnHtml(`toggleVehicleDetails('${v.id}')`, editingVehicleId===v.id)}${avgMileageBadgeHtml(v)}${recentlyChangedBadgeHtml(v)}</td>
       <td>${v.make||'-'} ${v.model||''}</td>
       <td>${v.vehicleType||'-'} / ${v.fuelType||'-'}</td>
       <td>${v.siteId ? siteName(v.siteId) : '<span class="muted">Unassigned</span>'}</td>
@@ -2950,6 +2957,13 @@ function vehicleRowStyleAttr(v){
   if(isRecentlyChangedVehicle(v)) return ' style="background:#FFE066;"';
   return '';
 }
+// A compact edit control shown immediately beside the vehicle reg / driver
+// name in the first column of every listing - editing these is the most
+// frequent action in the app, so it shouldn't require scrolling across a
+// wide table to reach a button living in the last column.
+function quickEditBtnHtml(onclickCall, isOpen){
+  return `<button class="btn small secondary quick-edit-btn" title="${isOpen?'Close editor':'Edit'}" onclick="${onclickCall}">${isOpen?'&#10005; Close':'&#9998; Edit'}</button>`;
+}
 function recentlyChangedBadgeHtml(v){
   if(editingVehicleId===v.id || !isRecentlyChangedVehicle(v)) return '';
   const when = new Date(v.detailsUpdatedAt).toLocaleString('en-GB');
@@ -2968,7 +2982,7 @@ async function assignmentsEditorHtml(){
     const clientRoutes = client ? (client.routes||[]) : [];
     return `
     <tr id="vehicle-row-${v.id}"${vehicleRowStyleAttr(v)}>
-      <td><b>${v.reg}</b>${vehicleAssignmentWarningHtml(v)}${avgMileageBadgeHtml(v)}${recentlyChangedBadgeHtml(v)}</td>
+      <td><b>${v.reg}</b> ${quickEditBtnHtml(`toggleVehicleDetails('${v.id}')`, editingVehicleId===v.id)}${vehicleAssignmentWarningHtml(v)}${avgMileageBadgeHtml(v)}${recentlyChangedBadgeHtml(v)}</td>
       <td>${v.vehicleType||'-'} / ${v.fuelType||'-'}</td>
       <td><select onchange="assignField('${v.id}','clientId', this.value||null)">
         <option value="">- none (internal route) -</option>
@@ -3776,8 +3790,8 @@ async function driversCardHtml(){
   const rows = sorted.map(d=>{
     const summary = mileageSummary[d.id];
     const isActive = d.active !== false;
-    return `<tr ${isActive?'':'style="opacity:.6;background:#fafafa"'}>
-      <td><b>${d.name}</b></td>
+    return `<tr id="driver-row-${d.id}" ${isActive?'':'style="opacity:.6;background:#fafafa"'}>
+      <td><b>${d.name}</b> ${canEditAtAll ? quickEditBtnHtml(`toggleDriverDetails('${d.id}')`, editingDriverId===d.id) : ''}</td>
       <td>${d.phone || "-"}</td>
       <td>${d.licenseNumber || "-"}</td>
       <td>${fmtDMY(d.dateOfJoining)}</td>
@@ -4050,9 +4064,15 @@ async function reactivateDriver(id, force){
     await renderMain();
   }catch(e){ alert(e.message); }
 }
-function toggleDriverDetails(id){
-  editingDriverId = editingDriverId===id ? null : id;
-  renderMain();
+async function toggleDriverDetails(id){
+  const opening = editingDriverId !== id;
+  editingDriverId = opening ? id : null;
+  await renderMain();
+  // The driver editor opens inline right below that row (unlike the vehicle
+  // editor, which always renders at the top) - still worth a smooth scroll
+  // since the editor itself is tall and the row could be far down the list.
+  const target = document.getElementById(`driver-row-${id}`);
+  if(target) target.scrollIntoView({behavior:"smooth", block:"start"});
 }
 async function saveDriverDetails(evt, id){
   evt.preventDefault();
