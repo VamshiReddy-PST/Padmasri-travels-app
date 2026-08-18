@@ -1,0 +1,132 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const { JSDOM } = require("jsdom");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5907;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed: " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+
+  // Find a vehicle with a site assigned, and one without, to file expenses against.
+  const { data: metaResp } = await jf(`${API}/api/meta`, { headers: { Authorization: "Bearer " + ownerToken } });
+  const vehiclesResp = await jf(`${API}/api/vehicles`, { headers: { Authorization: "Bearer " + ownerToken } });
+  const vehicles = vehiclesResp.data;
+  const vehicleWithSite = vehicles.find(v => v.siteId);
+  check("found a seed vehicle with a siteId to test against", !!vehicleWithSite, vehicleWithSite && vehicleWithSite.id);
+
+  const TEST_BILL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+  // File + approve a vehicle-tagged (maintenance) expense
+  const { res: expRes, data: expData } = await jf(`${API}/api/expenses`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ vehicleId: vehicleWithSite.id, category: "Maintenance", amount: 2500, description: "Test tyre replacement", isOfficeExpenditure: false, bill: TEST_BILL }),
+  });
+  check("vehicle expense created", expRes.ok, expData);
+  check("vehicle expense snapshot siteId matches vehicle's site", expData.siteId === vehicleWithSite.siteId, { got: expData.siteId, want: vehicleWithSite.siteId });
+  await jf(`${API}/api/expenses/${expData.id}/decide`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ status: "approved" }),
+  });
+
+  // File + approve an Office Expenditure (no vehicle)
+  const { res: officeRes, data: officeData } = await jf(`${API}/api/expenses`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ category: "Office", amount: 1000, description: "Test stationery", isOfficeExpenditure: true, bill: TEST_BILL }),
+  });
+  check("office expense created", officeRes.ok, officeData);
+  check("office expense has no siteId/vehicleId", officeData.siteId === null && officeData.vehicleId === null, officeData);
+  await jf(`${API}/api/expenses/${officeData.id}/decide`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ status: "approved" }),
+  });
+  // ---------- backend: operational-cost-analysis endpoint ----------
+  const { res: ocaRes, data: oca } = await jf(`${API}/api/reports/operational-cost-analysis`, {
+    headers: { Authorization: "Bearer " + ownerToken },
+  });
+  check("operational-cost-analysis endpoint returns 200", ocaRes.ok, oca);
+  check("response includes officeExpenditureTotal >= 1000", oca.officeExpenditureTotal >= 1000, oca.officeExpenditureTotal);
+  check("response includes siteCount matching db.sites length", oca.siteCount === (metaResp.sites ? metaResp.sites.length : oca.siteCount), { siteCount: oca.siteCount, metaSites: metaResp.sites && metaResp.sites.length });
+  check("officeExpenditureSharePerSite = officeTotal / siteCount", Math.abs(oca.officeExpenditureSharePerSite - Math.round((oca.officeExpenditureTotal / oca.siteCount) * 100) / 100) < 0.01, oca);
+  const vehRow = oca.vehicles.find(v => v.vehicleId === vehicleWithSite.id);
+  check("vehicle-wise row exists for our test vehicle and includes the 2500 expense", vehRow && vehRow.total >= 2500, vehRow);
+  const siteRow = oca.sites.find(s => s.siteId === vehicleWithSite.siteId);
+  check("site-wise row exists for the vehicle's site with matching direct cost + office share baked into total", siteRow && siteRow.directVehicleCost >= 2500 && siteRow.totalOperationalCost === Math.round((siteRow.directVehicleCost + siteRow.officeExpenditureShare) * 100) / 100, siteRow);
+  check("every site in db.sites appears in the sites array (even ones with 0 direct spend)", oca.sites.length === oca.siteCount, { rows: oca.sites.length, siteCount: oca.siteCount });
+
+  // role gating: site_supervisor should NOT be able to hit this (REPORT_ROLES = owner, ops_manager, area_supervisor)
+  const raviToken = await loginStaff("9000100001", "Padmasri@1111");
+  const { res: forbidRes } = await jf(`${API}/api/reports/operational-cost-analysis`, { headers: { Authorization: "Bearer " + raviToken } });
+  check("site_supervisor is forbidden from the cost-analysis endpoint", forbidRes.status === 403, forbidRes.status);
+
+  // ---------- frontend: index.html Reports tab -> Total Operational Cost Analysis screen ----------
+  const html = await (await fetch(`${API}/`)).text();
+  const dom = new JSDOM(html, {
+    url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+    beforeParse(win) {
+      win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+      win.URL.createObjectURL = () => "blob:mock";
+      win.URL.revokeObjectURL = () => {};
+      win.localStorage.setItem("fleetAuthToken", ownerToken);
+    },
+  });
+  const win = dom.window;
+  const errs = [];
+  win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+  await wait(800);
+  await win.eval(`switchTab('reports')`);
+  await wait(500);
+  let body = win.document.body.innerHTML;
+  check("Reports tab shows the Total Operational Cost Analysis card", body.includes("Total Operational Cost Analysis"));
+  await win.eval(`goto('cost_analysis')`);
+  await wait(900);
+  body = win.document.body.innerHTML;
+  check("cost analysis screen: no runtime JS errors", errs.length === 0, errs);
+  check("cost analysis screen shows Site-wise table", body.includes("Site-wise Total Operational Cost"));
+  check("cost analysis screen shows Vehicle-wise table", body.includes("Vehicle-wise Expenditure"));
+  check("cost analysis screen shows our test vehicle's reg", body.includes(vehicleWithSite.reg));
+  check("cost analysis screen has a Back to Reports button", body.includes("Back to Reports"));
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

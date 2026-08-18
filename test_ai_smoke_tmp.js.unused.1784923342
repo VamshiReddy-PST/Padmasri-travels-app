@@ -1,0 +1,115 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5923;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword, apiBase) {
+  const base = apiBase || API;
+  let { res, data } = await jf(`${base}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed: " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${base}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+function auth(token) { return { Authorization: "Bearer " + token, "Content-Type": "application/json" }; }
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT), AI_TEST_STUB: "1" });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+  const raviToken = await loginStaff("9000100001", "Padmasri@1111");
+
+  // ---------- Role gating ----------
+  const { res: forbiddenRes } = await jf(`${API}/api/ai/chat`, { method: "POST", headers: auth(raviToken), body: JSON.stringify({ message: "hi" }) });
+  check("non-owner is forbidden from AI chat", forbiddenRes.status === 403, forbiddenRes.status);
+  const { res: forbiddenInsightsRes } = await jf(`${API}/api/ai/insights`, { headers: auth(raviToken) });
+  check("non-owner is forbidden from AI insights", forbiddenInsightsRes.status === 403, forbiddenInsightsRes.status);
+
+  // ---------- Chat: generic question -> stub picks fleet_overview tool ----------
+  const { res: chatRes, data: chatData } = await jf(`${API}/api/ai/chat`, {
+    method: "POST", headers: auth(ownerToken),
+    body: JSON.stringify({ message: "How is the fleet doing today?", history: [] }),
+  });
+  check("chat endpoint responds 200", chatRes.ok, chatData);
+  check("chat used the fleet_overview tool", chatData && chatData.toolsUsed && chatData.toolsUsed.includes("fleet_overview"), chatData);
+  check("chat reply references the tool result", chatData && /grounded/i.test(chatData.reply), chatData);
+
+  // ---------- Chat: message with a vehicle reg -> stub picks vehicle_expenditure tool ----------
+  const { data: vehData } = await jf(`${API}/api/vehicles`, { headers: auth(ownerToken) });
+  const someVehicle = vehData[0];
+  const { res: chat2Res, data: chat2Data } = await jf(`${API}/api/ai/chat`, {
+    method: "POST", headers: auth(ownerToken),
+    body: JSON.stringify({ message: `Why is ${someVehicle.reg} so expensive?`, history: [{ role: "user", content: "earlier question" }, { role: "assistant", content: "earlier answer" }] }),
+  });
+  check("chat with vehicle reg responds 200", chat2Res.ok, chat2Data);
+  check("chat used the vehicle_expenditure tool", chat2Data && chat2Data.toolsUsed && chat2Data.toolsUsed.includes("vehicle_expenditure"), chat2Data);
+
+  // ---------- Chat: empty message rejected ----------
+  const { res: emptyRes } = await jf(`${API}/api/ai/chat`, { method: "POST", headers: auth(ownerToken), body: JSON.stringify({ message: "   " }) });
+  check("empty message is rejected with 400", emptyRes.status === 400, emptyRes.status);
+
+  // ---------- Insights: first call computes + caches ----------
+  const { res: insRes, data: insData } = await jf(`${API}/api/ai/insights`, { headers: auth(ownerToken) });
+  check("insights endpoint responds 200", insRes.ok, insData);
+  check("insights returns an array with the stub insight", insData && Array.isArray(insData.insights) && insData.insights.some(i => i.title.includes("[AI_TEST_STUB]")), insData);
+  check("insights response includes generatedAt", !!(insData && insData.generatedAt), insData);
+
+  // ---------- Insights: second call returns the SAME cached generatedAt ----------
+  await wait(50);
+  const { data: insData2 } = await jf(`${API}/api/ai/insights`, { headers: auth(ownerToken) });
+  check("insights are cached (same generatedAt on second call)", insData2.generatedAt === insData.generatedAt, { first: insData.generatedAt, second: insData2.generatedAt });
+
+  // ---------- Insights: ?refresh=1 forces a recompute ----------
+  await wait(50);
+  const { data: insData3 } = await jf(`${API}/api/ai/insights?refresh=1`, { headers: auth(ownerToken) });
+  check("insights ?refresh=1 recomputes (different generatedAt)", insData3.generatedAt !== insData.generatedAt, { first: insData.generatedAt, refreshed: insData3.generatedAt });
+
+  // ---------- Without AI_TEST_STUB and no API key, both endpoints fail cleanly ----------
+  server.kill();
+  await wait(500);
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env2 = Object.assign({}, process.env, { PORT: String(PORT + 1) });
+  delete env2.AI_TEST_STUB;
+  delete env2.ANTHROPIC_API_KEY;
+  const server2 = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env: env2 });
+  server2.stderr.on("data", (d) => console.error("SERVER2 ERR:", d.toString()));
+  await wait(1500);
+  const API2 = `http://127.0.0.1:${PORT + 1}`;
+  const ownerToken2 = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999", API2);
+  const { res: noKeyRes, data: noKeyData } = await jf(`${API2}/api/ai/chat`, { method: "POST", headers: auth(ownerToken2), body: JSON.stringify({ message: "hello" }) });
+  check("without an API key, chat fails with a clear 'not set up' error (not a crash)", noKeyRes.status === 503 && /set up/i.test(noKeyData.error || ""), { status: noKeyRes.status, data: noKeyData });
+  server2.kill();
+
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

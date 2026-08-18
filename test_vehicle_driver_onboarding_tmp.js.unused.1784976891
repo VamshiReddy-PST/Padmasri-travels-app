@@ -1,0 +1,213 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const { JSDOM } = require("jsdom");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5945;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed for " + identifier + ": " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+function auth(token) { return { Authorization: "Bearer " + token, "Content-Type": "application/json" }; }
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const raviToken = await loginStaff("9000100001", "Padmasri@1111"); // site_supervisor
+  const dataTeamToken = await loginStaff("9000100005", "Padmasri@5555"); // data_team
+  const hrToken = await loginStaff("9000100007", "Padmasri@6666"); // hr
+  const opsToken = await loginStaff("9000100004", "Padmasri@4444"); // ops_manager
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999"); // owner
+
+  const vehicleBody = {
+    reg: "TS TEST 0001", vehicleType: "Cab", fuelType: "Petrol", usage: "fixed_route",
+    make: "Maruti", model: "Ertiga", engineNo: "ENGX001", chassisNo: "CHSX001",
+    rcDate: "2022-01-01", seatingCapacity: 6,
+  };
+
+  // ---------- 1. Site Supervisor adds a vehicle -> starts pending ----------
+  const { res: addVehRes, data: addVehData } = await jf(`${API}/api/vehicles`, { method: "POST", headers: auth(raviToken), body: JSON.stringify(vehicleBody) });
+  check("site_supervisor can add a vehicle", addVehRes.ok, addVehData);
+  check("new vehicle starts status=pending", addVehData.status === "pending", addVehData.status);
+  check("new vehicle is auto-assigned to the submitting supervisor", addVehData.supervisorId, addVehData.supervisorId);
+  const newVehicleId = addVehData.id;
+
+  // ---------- 2. Pending vehicle is invisible in every normal vehicle list ----------
+  const { data: raviVehicles } = await jf(`${API}/api/vehicles`, { headers: auth(raviToken) });
+  check("pending vehicle does NOT show in the submitting supervisor's own vehicle list", !raviVehicles.some(v => v.id === newVehicleId), raviVehicles.map(v=>v.reg));
+  const { data: ownerVehicles } = await jf(`${API}/api/vehicles`, { headers: auth(ownerToken) });
+  check("pending vehicle does NOT show in the Owner's vehicle list either", !ownerVehicles.some(v => v.id === newVehicleId), null);
+
+  // ---------- 3. Site Supervisor can track it via my-submissions ----------
+  const { data: mySubs } = await jf(`${API}/api/vehicles/my-submissions`, { headers: auth(raviToken) });
+  check("site_supervisor sees their pending vehicle in my-submissions", mySubs.some(v => v.id === newVehicleId && v.status === "pending"), mySubs);
+
+  // ---------- 4. ops_manager (not an approver) cannot see or decide the queue ----------
+  const { res: opsQueueRes } = await jf(`${API}/api/vehicles/pending-approvals`, { headers: auth(opsToken) });
+  check("ops_manager is forbidden from the vehicle approval queue", opsQueueRes.status === 403, opsQueueRes.status);
+  const { res: opsApproveRes } = await jf(`${API}/api/vehicles/${newVehicleId}/approve`, { method: "PATCH", headers: auth(opsToken), body: JSON.stringify({ status: "approved" }) });
+  check("ops_manager is forbidden from approving a vehicle", opsApproveRes.status === 403, opsApproveRes.status);
+  const { res: supervisorApproveRes } = await jf(`${API}/api/vehicles/${newVehicleId}/approve`, { method: "PATCH", headers: auth(raviToken), body: JSON.stringify({ status: "approved" }) });
+  check("site_supervisor cannot approve their own vehicle", supervisorApproveRes.status === 403, supervisorApproveRes.status);
+
+  // ---------- 5. Data Team sees it in the queue and can reject (comment required) ----------
+  const { data: dtQueue } = await jf(`${API}/api/vehicles/pending-approvals`, { headers: auth(dataTeamToken) });
+  check("data_team sees the pending vehicle in their approval queue", dtQueue.some(v => v.id === newVehicleId), dtQueue.map(v=>v.reg));
+
+  const { res: rejectNoCommentRes } = await jf(`${API}/api/vehicles/${newVehicleId}/approve`, { method: "PATCH", headers: auth(dataTeamToken), body: JSON.stringify({ status: "rejected" }) });
+  check("rejecting a vehicle without a comment is rejected with 400", rejectNoCommentRes.status === 400, rejectNoCommentRes.status);
+
+  const { res: rejectRes, data: rejectData } = await jf(`${API}/api/vehicles/${newVehicleId}/approve`, { method: "PATCH", headers: auth(dataTeamToken), body: JSON.stringify({ status: "rejected", comment: "Missing insurance photo" }) });
+  check("data_team can reject a vehicle with a reason", rejectRes.ok && rejectData.status === "rejected" && rejectData.rejectionComment === "Missing insurance photo", rejectData);
+
+  const { data: mySubsAfterReject } = await jf(`${API}/api/vehicles/my-submissions`, { headers: auth(raviToken) });
+  const rejectedInSubs = mySubsAfterReject.find(v => v.id === newVehicleId);
+  check("supervisor sees the rejection reason in their submissions list", rejectedInSubs && rejectedInSubs.rejectionComment === "Missing insurance photo", rejectedInSubs);
+
+  // ---------- 6. Submit a second vehicle and approve it -> now counts as real ----------
+  const { data: addVeh2 } = await jf(`${API}/api/vehicles`, { method: "POST", headers: auth(raviToken), body: JSON.stringify(Object.assign({}, vehicleBody, { reg: "TS TEST 0002", engineNo: "ENGX002", chassisNo: "CHSX002" })) });
+  const { res: approveRes, data: approveData } = await jf(`${API}/api/vehicles/${addVeh2.id}/approve`, { method: "PATCH", headers: auth(dataTeamToken), body: JSON.stringify({ status: "approved" }) });
+  check("data_team can approve a vehicle", approveRes.ok && approveData.status === "approved", approveData);
+  const { data: raviVehiclesAfterApproval } = await jf(`${API}/api/vehicles`, { headers: auth(raviToken) });
+  check("approved vehicle now shows up in the supervisor's normal vehicle list", raviVehiclesAfterApproval.some(v => v.id === addVeh2.id), raviVehiclesAfterApproval.map(v=>v.reg));
+
+  // Already-decided vehicle can't be decided again
+  const { res: redecideRes } = await jf(`${API}/api/vehicles/${addVeh2.id}/approve`, { method: "PATCH", headers: auth(dataTeamToken), body: JSON.stringify({ status: "rejected", comment: "test" }) });
+  check("an already-approved vehicle cannot be decided on again", redecideRes.status === 400, redecideRes.status);
+
+  // ---------- 7. Site Supervisor adds a driver -> starts pending, invisible in meta ----------
+  const { res: addDrvRes, data: addDrvData } = await jf(`${API}/api/drivers`, { method: "POST", headers: auth(raviToken), body: JSON.stringify({ name: "Test Driver Onboard", phone: "9812399001", licenseNumber: "DLTEST001" }) });
+  check("site_supervisor can add a driver", addDrvRes.ok, addDrvData);
+  check("new driver starts approvalStatus=pending", addDrvData.approvalStatus === "pending", addDrvData.approvalStatus);
+  const newDriverId = addDrvData.id;
+
+  const { data: metaAsRavi } = await jf(`${API}/api/meta`, { headers: auth(raviToken) });
+  check("pending driver does NOT show in /api/meta drivers list", !metaAsRavi.drivers.some(d => d.id === newDriverId), null);
+
+  const { data: myDriverSubs } = await jf(`${API}/api/drivers/my-submissions`, { headers: auth(raviToken) });
+  check("site_supervisor sees their pending driver in my-submissions", myDriverSubs.some(d => d.id === newDriverId && d.approvalStatus === "pending"), myDriverSubs);
+
+  // ---------- 8. Data Team (not a driver approver) cannot see/decide the driver queue; HR can ----------
+  const { res: dtDriverQueueRes } = await jf(`${API}/api/drivers/pending-approvals`, { headers: auth(dataTeamToken) });
+  check("data_team is forbidden from the driver approval queue", dtDriverQueueRes.status === 403, dtDriverQueueRes.status);
+
+  const { data: hrQueue } = await jf(`${API}/api/drivers/pending-approvals`, { headers: auth(hrToken) });
+  check("hr sees the pending driver in their approval queue", hrQueue.some(d => d.id === newDriverId), hrQueue.map(d=>d.name));
+
+  const { res: rejectDrvNoCommentRes } = await jf(`${API}/api/drivers/${newDriverId}/approve`, { method: "PATCH", headers: auth(hrToken), body: JSON.stringify({ status: "rejected" }) });
+  check("rejecting a driver without a comment is rejected with 400", rejectDrvNoCommentRes.status === 400, rejectDrvNoCommentRes.status);
+
+  const { res: approveDrvRes, data: approveDrvData } = await jf(`${API}/api/drivers/${newDriverId}/approve`, { method: "PATCH", headers: auth(hrToken), body: JSON.stringify({ status: "approved" }) });
+  check("hr can approve a driver", approveDrvRes.ok && approveDrvData.approvalStatus === "approved", approveDrvData);
+
+  const { data: metaAfterApproval } = await jf(`${API}/api/meta`, { headers: auth(raviToken) });
+  check("approved driver now shows up in /api/meta drivers list", metaAfterApproval.drivers.some(d => d.id === newDriverId), metaAfterApproval.drivers.map(d=>d.name));
+
+  // ---------- 9. Owner can approve both vehicles and drivers ----------
+  const { data: addVeh3 } = await jf(`${API}/api/vehicles`, { method: "POST", headers: auth(raviToken), body: JSON.stringify(Object.assign({}, vehicleBody, { reg: "TS TEST 0003", engineNo: "ENGX003", chassisNo: "CHSX003" })) });
+  const { res: ownerApproveVehRes } = await jf(`${API}/api/vehicles/${addVeh3.id}/approve`, { method: "PATCH", headers: auth(ownerToken), body: JSON.stringify({ status: "approved" }) });
+  check("owner can approve a vehicle too", ownerApproveVehRes.ok, ownerApproveVehRes.status);
+
+  // ---------- 10. No delete endpoint exists for vehicles or drivers (confirms "cannot delete") ----------
+  const { res: delVehRes } = await jf(`${API}/api/vehicles/${addVeh3.id}`, { method: "DELETE", headers: auth(raviToken) });
+  check("there is no DELETE endpoint for vehicles (404/405, not a successful delete)", !delVehRes.ok, delVehRes.status);
+  const { res: delDrvRes } = await jf(`${API}/api/drivers/${newDriverId}`, { method: "DELETE", headers: auth(raviToken) });
+  check("there is no DELETE endpoint for drivers either", !delDrvRes.ok, delDrvRes.status);
+
+  // ---------- 11. Frontend: site_supervisor can reach the onboarding screen and submit ----------
+  const html = await (await fetch(`${API}/`)).text();
+  const dom = new JSDOM(html, {
+    url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+    beforeParse(win) {
+      win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+      win.localStorage.setItem("fleetAuthToken", raviToken);
+    },
+  });
+  const win = dom.window;
+  const errs = [];
+  win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+  await wait(900);
+  await win.eval(`switchTab('onboarding')`);
+  await wait(700);
+  const heading = (win.document.querySelector("h1.page-title") || {}).textContent || "";
+  check("site_supervisor's onboarding screen renders", /Add Vehicle/i.test(heading), heading);
+
+  const setVal = (id, val) => { const el = win.document.getElementById(id); if (el) el.value = val; };
+  setVal("obVehicleReg", "TS TEST 0009");
+  setVal("obVehicleType", "Cab");
+  setVal("obVehicleFuel", "Petrol");
+  setVal("obVehicleUsage", "fixed_route");
+  setVal("obVehicleMake", "Maruti");
+  setVal("obVehicleModel", "Ertiga");
+  setVal("obVehicleEngineNo", "ENGX009");
+  setVal("obVehicleChassisNo", "CHSX009");
+  setVal("obVehicleRcDate", "2022-01-01");
+  setVal("obVehicleSeating", "6");
+  win.alert = () => {}; // swallow the confirmation alert() in jsdom
+  await win.eval(`submitVehicleOnboarding({preventDefault(){}})`);
+  await wait(700);
+  const submissionRows = () => Array.from(win.document.querySelectorAll("table tr")).map(r => r.textContent);
+  check("submitted vehicle appears in 'Your vehicle submissions' with PENDING status", submissionRows().some(t => t.includes("TS TEST 0009") && t.includes("PENDING")), submissionRows());
+
+  await win.eval(`switchTab('my_vehicles')`);
+  await wait(700);
+  const myVehiclesText = win.document.body.textContent;
+  check("the pending vehicle does NOT appear on the My Vehicles operational screen", !myVehiclesText.includes("TS TEST 0009"), null);
+
+  // ---------- 12. Frontend: Fleet Approvals screen for data_team ----------
+  const domDt = new JSDOM(html, {
+    url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+    beforeParse(win2) {
+      win2.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+      win2.localStorage.setItem("fleetAuthToken", dataTeamToken);
+    },
+  });
+  const winDt = domDt.window;
+  const dtErrs = [];
+  winDt.addEventListener("error", (e) => dtErrs.push(e.error ? e.error.stack || e.error.message : e.message));
+  await wait(900);
+  await winDt.eval(`switchTab('approvals')`);
+  await wait(700);
+  const dtBodyText = winDt.document.body.textContent;
+  check("data_team's Fleet Approvals screen shows the pending vehicle from the frontend test", dtBodyText.includes("TS TEST 0009"), null);
+
+  check("no runtime JS errors in the site_supervisor onboarding flow", errs.length === 0, errs);
+  check("no runtime JS errors in the data_team approvals flow", dtErrs.length === 0, dtErrs);
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

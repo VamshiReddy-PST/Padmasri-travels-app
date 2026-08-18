@@ -1,0 +1,871 @@
+{
+  "users": [
+    {
+      "id": "u_ravi",
+      "name": "Ravi Kumar",
+      "role": "site_supervisor",
+      "pin": "1111",
+      "active": true,
+      "siteId": "s_gachibowli",
+      "supervises": [],
+      "phone": "9000100001",
+      "dateOfJoining": "2023-06-12"
+    },
+    {
+      "id": "u_suresh",
+      "name": "Suresh Naik",
+      "role": "site_supervisor",
+      "pin": "2222",
+      "active": true,
+      "siteId": "s_kondapur",
+      "supervises": [],
+      "phone": "9000100002",
+      "dateOfJoining": "2023-08-01"
+    },
+    {
+      "id": "u_priya",
+      "name": "Priya Sharma",
+      "role": "area_supervisor",
+      "pin": "3333",
+      "active": true,
+      "siteId": null,
+      "supervises": [
+        "u_ravi",
+        "u_suresh"
+      ],
+      "phone": "9000100003",
+      "dateOfJoining": "2022-11-20"
+    },
+    {
+      "id": "u_anil",
+      "name": "Anil Menon",
+      "role": "ops_manager",
+      "pin": "4444",
+      "active": true,
+      "siteId": null,
+      "supervises": [],
+      "phone": "9000100004",
+      "dateOfJoining": "2021-04-15"
+    },
+    {
+      "id": "u_sneha",
+      "name": "Sneha Rao",
+      "role": "data_team",
+      "pin": "5555",
+      "active": true,
+      "siteId": null,
+      "supervises": [],
+      "phone": "9000100005",
+      "dateOfJoining": "2023-01-09"
+    },
+    {
+      "id": "u_owner",
+      "name": "Vamshi Reddy",
+      "role": "owner",
+      "pin": "9999",
+      "active": true,
+      "siteId": null,
+      "supervises": [],
+      "phone": "9000100006",
+      "dateOfJoining": "2019-01-01",
+      "email": "vamshi.reddy@padmasritravels.in"
+    },
+    {
+      "id": "u_hr",
+      "name": "Divya Prasad",
+      "role": "hr",
+      "pin": "6666",
+      "active": true,
+      "siteId": null,
+      "supervises": [],
+      "phone": "9000100007",
+      "dateOfJoining": "2022-03-03"
+    },
+    {
+      "id": "u_bookings",
+      "name": "Kavya Reddy",
+      "role": "bookings",
+      "pin": "7777",
+      "active": true,
+      "siteId": null,
+      "supervises": [],
+      "phone": "9000100008",
+      "dateOfJoining": "2024-02-14"
+    }
+  ],
+  "clients": [
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_01",
+      "name": "TIBCON"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_02",
+      "name": "COSPOWER"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_03",
+      "name": "Astra Microwave Products Limited"
+    },
+    {
+      "routeCap": 4,
+      "routes": [
+        {
+          "id": "rt_aiesl_1",
+          "name": "Alwal",
+          "routeNumber": "6A"
+        },
+        {
+          "id": "rt_aiesl_2",
+          "name": "ECIL",
+          "routeNumber": "6B"
+        },
+        {
+          "id": "rt_aiesl_3",
+          "name": "Balnagar",
+          "routeNumber": "6C"
+        },
+        {
+          "id": "rt_aiesl_4",
+          "name": "Miyapur",
+          "routeNumber": "6D"
+        }
+      ],
+      "id": "c_04",
+      "name": "AIESL"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_05",
+      "name": "GMR MRO"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_06",
+      "name": "GMR School of Aviation"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_07",
+      "name": "AI SATS"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_08",
+      "name": "GHIAL"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_09",
+      "name": "GHIAL Immigration"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_10",
+      "name": "GHIAL Customs"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_11",
+      "name": "GHIAL EV"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_12",
+      "name": "GMR Aviation Academy"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_13",
+      "name": "WAISL"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_14",
+      "name": "SGD Pharma"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_15",
+      "name": "TK Elevators"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_16",
+      "name": "Swamy & Sons"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_17",
+      "name": "GMR Cargo Bus"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_18",
+      "name": "GMR Cargo Customs"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_19",
+      "name": "GMR Cargo Loaders"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_20",
+      "name": "Pepsico"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_21",
+      "name": "Cityflo"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_22",
+      "name": "VGB Technologies"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_23",
+      "name": "Cityflo Morning Cabs"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_24",
+      "name": "L'Oreal"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_25",
+      "name": "TATA Elxsi"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_26",
+      "name": "SSSS"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_27",
+      "name": "Routematic"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_28",
+      "name": "BHEL CISF"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_29",
+      "name": "BHEL"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_30",
+      "name": "BSNL"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_31",
+      "name": "IITH"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_32",
+      "name": "BHEL R&D"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_33",
+      "name": "BHEL R&D Driver"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_34",
+      "name": "NRSC"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_35",
+      "name": "BHEL GE"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_36",
+      "name": "AI ASL"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_37",
+      "name": "Scoops"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_38",
+      "name": "KTPS Stage 5 & 6"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_39",
+      "name": "KTPS Stage 7"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_40",
+      "name": "YTPS"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_41",
+      "name": "GMR Vizag"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_42",
+      "name": "GMR Cargo Vizag"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_43",
+      "name": "WAISL Vizag"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_44",
+      "name": "Cityflo Chennai"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_45",
+      "name": "GMR Goa RAXA"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_46",
+      "name": "GMR Towing Hyd"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_47",
+      "name": "GGIAL"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_48",
+      "name": "JODAS Expoim"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_49",
+      "name": "Vickro Biopharma"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_50",
+      "name": "Chromo Labs"
+    },
+    {
+      "routeCap": 0,
+      "routes": [],
+      "id": "c_51",
+      "name": "IIL Ambulance"
+    }
+  ],
+  "sites": [
+    {
+      "id": "s_gachibowli",
+      "name": "Site A - Gachibowli",
+      "lat": 17.4401,
+      "lng": 78.3489,
+      "areaSupervisorId": "u_priya"
+    },
+    {
+      "id": "s_kondapur",
+      "name": "Site B - Kondapur",
+      "lat": 17.4615,
+      "lng": 78.3629,
+      "areaSupervisorId": "u_priya"
+    }
+  ],
+  "drivers": [
+    {
+      "id": "d_mahesh",
+      "name": "Mahesh",
+      "phone": "9000000001",
+      "licenseNumber": "TS0920180011223",
+      "aadharNumber": "234501112223",
+      "esiNumber": "ESI-4471102",
+      "pfNumber": "TN/CHN/0098765/000/1234567",
+      "uanNumber": "100234567891",
+      "esiCertificateUrl": null,
+      "pfCertificateUrl": null,
+      "dateOfJoining": "2022-05-10",
+      "drivingLevel": "Senior",
+      "performanceScore": null
+    },
+    {
+      "id": "d_kiran",
+      "name": "Kiran",
+      "phone": "9000000002",
+      "licenseNumber": "TS0920190022334",
+      "aadharNumber": "234502223334",
+      "esiNumber": "ESI-4471103",
+      "pfNumber": "TN/CHN/0098765/000/1234568",
+      "uanNumber": "100234567892",
+      "esiCertificateUrl": null,
+      "pfCertificateUrl": null,
+      "dateOfJoining": "2023-02-18",
+      "drivingLevel": "Standard",
+      "performanceScore": null
+    },
+    {
+      "id": "d_raju",
+      "name": "Raju",
+      "phone": "9000000003",
+      "licenseNumber": "TS0920170033445",
+      "aadharNumber": "234503334445",
+      "esiNumber": "ESI-4471104",
+      "pfNumber": "TN/CHN/0098765/000/1234569",
+      "uanNumber": "100234567893",
+      "esiCertificateUrl": null,
+      "pfCertificateUrl": null,
+      "dateOfJoining": "2021-09-01",
+      "drivingLevel": "Expert",
+      "performanceScore": null
+    },
+    {
+      "id": "d_prasad",
+      "name": "Prasad",
+      "phone": "9000000004",
+      "licenseNumber": "TS0920230044556",
+      "aadharNumber": "234504445556",
+      "esiNumber": "ESI-4471105",
+      "pfNumber": "TN/CHN/0098765/000/1234570",
+      "uanNumber": "100234567894",
+      "esiCertificateUrl": null,
+      "pfCertificateUrl": null,
+      "dateOfJoining": "2024-06-20",
+      "drivingLevel": "Trainee",
+      "performanceScore": null
+    },
+    {
+      "id": "d_vijay",
+      "name": "Vijay",
+      "phone": "9000000005",
+      "licenseNumber": "TS0920210055667",
+      "aadharNumber": "234505556667",
+      "esiNumber": "ESI-4471106",
+      "pfNumber": "TN/CHN/0098765/000/1234571",
+      "uanNumber": "100234567895",
+      "esiCertificateUrl": null,
+      "pfCertificateUrl": null,
+      "dateOfJoining": "2023-11-11",
+      "drivingLevel": "Standard",
+      "performanceScore": null
+    },
+    {
+      "id": "d_naveen",
+      "name": "Naveen",
+      "phone": "9000000006",
+      "licenseNumber": "TS0920240066778",
+      "aadharNumber": "234506667778",
+      "esiNumber": "ESI-4471107",
+      "pfNumber": "TN/CHN/0098765/000/1234572",
+      "uanNumber": "100234567896",
+      "esiCertificateUrl": null,
+      "pfCertificateUrl": null,
+      "dateOfJoining": "2025-01-05",
+      "drivingLevel": "Trainee",
+      "performanceScore": null
+    }
+  ],
+  "vehicles": [
+    {
+      "id": "v1",
+      "reg": "TS 09 AT 1001",
+      "route": "Route 12 - IT Corridor",
+      "usage": "fixed_route",
+      "clientId": null,
+      "siteId": "s_gachibowli",
+      "supervisorId": "u_ravi",
+      "driverId": "d_mahesh",
+      "driverAssignedDate": "2026-07-01",
+      "make": "Tata",
+      "model": "Winger",
+      "engineNo": "ENG1001",
+      "chassisNo": "CHS1001",
+      "rcDate": "2022-09-01",
+      "seatingCapacity": 13,
+      "vehicleType": "Bus",
+      "fuelType": "Diesel",
+      "standardMileage": 4.2,
+      "lastOdometer": 45260,
+      "docs": {
+        "RC": {
+          "number": "RC1001",
+          "expiry": "2027-09-01"
+        },
+        "Permit": {
+          "number": "PM2001",
+          "expiry": "2026-08-05",
+          "isStatePermit": false,
+          "districtCount": 2,
+          "districtNames": "Hyderabad, Rangareddy"
+        },
+        "Insurance": {
+          "number": "INS3001",
+          "expiry": "2026-07-25"
+        },
+        "Fitness": {
+          "number": "FIT4001",
+          "expiry": "2027-01-15"
+        },
+        "Tax": {
+          "number": "TAX5001",
+          "expiry": "2027-05-01"
+        },
+        "PUC": {
+          "number": "PUC6001",
+          "expiry": "2026-08-01"
+        }
+      }
+    },
+    {
+      "id": "v2",
+      "reg": "TS 09 BT 1002",
+      "route": "Route 07 - Old City",
+      "usage": "fixed_route",
+      "clientId": null,
+      "siteId": "s_kondapur",
+      "supervisorId": "u_suresh",
+      "driverId": "d_kiran",
+      "driverAssignedDate": "2026-07-01",
+      "make": "Force",
+      "model": "Traveller",
+      "engineNo": "ENG1002",
+      "chassisNo": "CHS1002",
+      "rcDate": "2022-09-08",
+      "seatingCapacity": 17,
+      "vehicleType": "Bus",
+      "fuelType": "Diesel",
+      "standardMileage": 4.2,
+      "lastOdometer": 45480,
+      "docs": {
+        "RC": {
+          "number": "RC1002",
+          "expiry": "2027-09-08"
+        },
+        "Permit": {
+          "number": "PM2002",
+          "expiry": "2026-08-08",
+          "isStatePermit": false,
+          "districtCount": 1,
+          "districtNames": "Hyderabad"
+        },
+        "Insurance": {
+          "number": "INS3002",
+          "expiry": "2026-07-27"
+        },
+        "Fitness": {
+          "number": "FIT4002",
+          "expiry": "2027-01-20"
+        },
+        "Tax": {
+          "number": "TAX5002",
+          "expiry": "2027-05-04"
+        },
+        "PUC": {
+          "number": "PUC6002",
+          "expiry": "2026-07-30"
+        }
+      }
+    },
+    {
+      "id": "v3",
+      "reg": "TS 09 CT 1003",
+      "route": "Route 21 - Airport Shuttle",
+      "usage": "fixed_route",
+      "clientId": null,
+      "siteId": "s_gachibowli",
+      "supervisorId": "u_ravi",
+      "driverId": "d_raju",
+      "driverAssignedDate": "2026-07-01",
+      "make": "Toyota",
+      "model": "Innova",
+      "engineNo": "ENG1003",
+      "chassisNo": "CHS1003",
+      "rcDate": "2022-09-15",
+      "seatingCapacity": 7,
+      "vehicleType": "Cab",
+      "fuelType": "Petrol",
+      "standardMileage": 4.5,
+      "lastOdometer": 45700,
+      "docs": {
+        "RC": {
+          "number": "RC1003",
+          "expiry": "2027-09-15"
+        },
+        "Permit": {
+          "number": "PM2003",
+          "expiry": "2026-08-11",
+          "isStatePermit": true,
+          "districtCount": 0,
+          "districtNames": ""
+        },
+        "Insurance": {
+          "number": "INS3003",
+          "expiry": "2026-07-29"
+        },
+        "Fitness": {
+          "number": "FIT4003",
+          "expiry": "2027-01-25"
+        },
+        "Tax": {
+          "number": "TAX5003",
+          "expiry": "2027-05-08"
+        },
+        "PUC": {
+          "number": "PUC6003",
+          "expiry": "2026-08-05"
+        }
+      }
+    },
+    {
+      "id": "v4",
+      "reg": "TS 09 DT 1004",
+      "route": "Client On-Demand",
+      "usage": "client_on_demand",
+      "clientId": "c_01",
+      "siteId": "s_kondapur",
+      "supervisorId": "u_suresh",
+      "driverId": "d_prasad",
+      "driverAssignedDate": "2026-07-01",
+      "make": "Mahindra",
+      "model": "Bolero",
+      "engineNo": "ENG1004",
+      "chassisNo": "CHS1004",
+      "rcDate": "2022-09-20",
+      "seatingCapacity": 9,
+      "vehicleType": "Cab",
+      "fuelType": "CNG",
+      "standardMileage": 4,
+      "lastOdometer": 45920,
+      "docs": {
+        "RC": {
+          "number": "RC1004",
+          "expiry": "2027-09-20"
+        },
+        "Permit": {
+          "number": "PM2004",
+          "expiry": "2026-08-14",
+          "isStatePermit": false,
+          "districtCount": 2,
+          "districtNames": "Hyderabad, Rangareddy"
+        },
+        "Insurance": {
+          "number": "INS3004",
+          "expiry": "2026-07-31"
+        },
+        "Fitness": {
+          "number": "FIT4004",
+          "expiry": "2027-01-28"
+        },
+        "Tax": {
+          "number": "TAX5004",
+          "expiry": "2027-05-11"
+        },
+        "PUC": {
+          "number": "PUC6004",
+          "expiry": "2026-08-08"
+        }
+      }
+    },
+    {
+      "id": "v5",
+      "reg": "TS 09 ET 1005",
+      "route": "Client On-Demand",
+      "usage": "client_on_demand",
+      "clientId": "c_02",
+      "siteId": "s_gachibowli",
+      "supervisorId": "u_ravi",
+      "driverId": "d_vijay",
+      "driverAssignedDate": "2026-07-01",
+      "make": "Mahindra",
+      "model": "Bolero",
+      "engineNo": "ENG1005",
+      "chassisNo": "CHS1005",
+      "rcDate": "2022-09-25",
+      "seatingCapacity": 9,
+      "vehicleType": "Cab",
+      "fuelType": "EV",
+      "standardMileage": 4,
+      "lastOdometer": 46140,
+      "docs": {
+        "RC": {
+          "number": "RC1005",
+          "expiry": "2027-09-25"
+        },
+        "Permit": {
+          "number": "PM2005",
+          "expiry": "2026-08-18",
+          "isStatePermit": false,
+          "districtCount": 1,
+          "districtNames": "Hyderabad"
+        },
+        "Insurance": {
+          "number": "INS3005",
+          "expiry": "2026-08-02"
+        },
+        "Fitness": {
+          "number": "FIT4005",
+          "expiry": "2027-02-01"
+        },
+        "Tax": {
+          "number": "TAX5005",
+          "expiry": "2027-05-14"
+        },
+        "PUC": {
+          "number": "PUC6005",
+          "expiry": "2026-08-11"
+        }
+      }
+    },
+    {
+      "id": "v6",
+      "reg": "TS 09 FT 1006",
+      "route": "Route 07 - Old City",
+      "usage": "fixed_route",
+      "clientId": null,
+      "siteId": "s_kondapur",
+      "supervisorId": "u_suresh",
+      "driverId": "d_naveen",
+      "driverAssignedDate": "2026-07-01",
+      "make": "Force",
+      "model": "Traveller",
+      "engineNo": "ENG1006",
+      "chassisNo": "CHS1006",
+      "rcDate": "2022-09-28",
+      "seatingCapacity": 17,
+      "vehicleType": "Bus",
+      "fuelType": "Diesel",
+      "standardMileage": 4.2,
+      "lastOdometer": 46360,
+      "docs": {
+        "RC": {
+          "number": "RC1006",
+          "expiry": "2027-09-28"
+        },
+        "Permit": {
+          "number": "PM2006",
+          "expiry": "2026-08-21",
+          "isStatePermit": false,
+          "districtCount": 1,
+          "districtNames": "Rangareddy"
+        },
+        "Insurance": {
+          "number": "INS3006",
+          "expiry": "2026-08-04"
+        },
+        "Fitness": {
+          "number": "FIT4006",
+          "expiry": "2027-02-04"
+        },
+        "Tax": {
+          "number": "TAX5006",
+          "expiry": "2027-05-17"
+        },
+        "PUC": {
+          "number": "PUC6006",
+          "expiry": "2026-08-14"
+        }
+      }
+    }
+  ],
+  "records": {},
+  "odometerLogs": {},
+  "leaves": [
+    {
+      "id": "l1",
+      "driverId": "d_mahesh",
+      "driver": "Mahesh",
+      "type": "Planned",
+      "start": "2026-07-19",
+      "end": "2026-07-21",
+      "status": "approved",
+      "requestedBy": "u_ravi"
+    },
+    {
+      "id": "l2",
+      "driverId": "d_kiran",
+      "driver": "Kiran",
+      "type": "Emergency",
+      "start": "2026-07-15",
+      "end": "2026-07-16",
+      "status": "pending",
+      "requestedBy": "u_suresh"
+    }
+  ],
+  "supervisorAttendance": [],
+  "expenses": [],
+  "auditLog": [
+    {
+      "id": "a_seed",
+      "ts": "2026-07-15T00:00:00.000Z",
+      "userId": "system",
+      "userName": "System",
+      "action": "seed",
+      "detail": "Fleet Supervisor App initialized with demo data (2 clients, 2 sites, 6 vehicles, 6 drivers, 7 users)."
+    }
+  ]
+}

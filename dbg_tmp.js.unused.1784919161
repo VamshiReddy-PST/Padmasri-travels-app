@@ -1,0 +1,35 @@
+const path = require('path');
+const { spawn } = require('child_process');
+const { JSDOM } = require('jsdom');
+const fetch = require('node-fetch');
+const APPDIR = '/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app';
+const PORT = 5917;
+const API = `http://127.0.0.1:${PORT}`;
+function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
+(async()=>{
+  const env = Object.assign({}, process.env, {PORT:String(PORT)});
+  const server = spawn('node',[path.join(APPDIR,'server.js')],{cwd:APPDIR, env});
+  await wait(1500);
+  const ownerLogin = await (await fetch(API+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({identifier:'vamshi.reddy@padmasritravels.in',password:'Padmasri@9999'})})).json();
+  let ownerToken = ownerLogin.token;
+  if(ownerLogin.user && ownerLogin.user.mustChangePassword){
+    await (await fetch(API+'/api/change-password',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+ownerToken},body:JSON.stringify({currentPassword:'Padmasri@9999',newPassword:'NewPass!12345'})})).json();
+  }
+  await fetch(API+'/api/users',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+ownerToken},body:JSON.stringify({name:'Dbg Mech',role:'mechanic',phone:'9000700002',password:'TempPass!123'})});
+  const dom = new JSDOM(await (await fetch(API+'/driver.html')).text(), {
+    url: API+'/driver.html', runScripts:'dangerously', resources:'usable', pretendToBeVisual:true,
+    beforeParse(win){ win.fetch=(u,o)=>fetch(u.startsWith('http')?u:API+u,o); win.navigator.geolocation={getCurrentPosition:(ok)=>ok({coords:{latitude:17,longitude:78}})}; }
+  });
+  const win = dom.window;
+  await wait(600);
+  win.document.getElementById('driverPhone').value='9000700002';
+  win.document.getElementById('driverPin').value='1234';
+  await win.eval('doPortalLogin()');
+  await wait(1000);
+  console.log('portalType', win.eval('portalType'));
+  console.log('workshopUser', JSON.stringify(win.eval('workshopUser')));
+  console.log('workshopTab', win.eval('workshopTab'));
+  console.log(win.document.body.innerHTML.slice(0,1500));
+  server.kill('SIGKILL');
+  process.exit(0);
+})();

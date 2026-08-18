@@ -1,0 +1,132 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const { JSDOM } = require("jsdom");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5925;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed: " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT), AI_TEST_STUB: "1" });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+  const raviToken = await loginStaff("9000100001", "Padmasri@1111");
+  const { data: vehData } = await jf(`${API}/api/vehicles`, { headers: { Authorization: "Bearer " + ownerToken } });
+  const someVehicle = vehData[0];
+
+  async function newAppWindow(token) {
+    const html = await (await fetch(`${API}/`)).text();
+    const dom = new JSDOM(html, {
+      url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+      beforeParse(win) {
+        win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+        win.localStorage.setItem("fleetAuthToken", token);
+      },
+    });
+    await wait(900);
+    return dom.window;
+  }
+
+  // ---------- Owner: dashboard renders the command-center hero + AI insights ----------
+  let win = await newAppWindow(ownerToken);
+  const errs = [];
+  win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+  await win.eval(`switchTab('dashboard')`);
+  await wait(900); // dashboard render + background loadAiInsights() round trip
+
+  const h1Texts = () => Array.from(win.document.querySelectorAll("h1")).map(h => h.textContent.trim());
+  check("dashboard shows the Fleet Operating System hero title", h1Texts().includes("Fleet Operating System"));
+  check("dashboard shows a Fleet Health score", /\d+/.test((win.document.querySelector(".cmd-score-num") || {}).textContent || ""), (win.document.querySelector(".cmd-score-num")||{}).textContent);
+  const cmdKpiCount = win.document.querySelectorAll(".cmd-kpi").length;
+  check("dashboard renders cmd-kpi cards (hero + grid)", cmdKpiCount >= 8, cmdKpiCount);
+
+  await wait(600); // give the background AI insights fetch more time if slow
+  const insightCards = win.document.querySelectorAll(".ai-insight-card");
+  const sectionTitles = () => Array.from(win.document.querySelectorAll(".section-title")).map(s => s.textContent.trim());
+  check("dashboard has an AI Insights section", sectionTitles().some(t => t.includes("AI Insights")), sectionTitles());
+  check("AI Insights section shows the stub insight card", insightCards.length > 0 && Array.from(insightCards).some(c => c.textContent.includes("[AI_TEST_STUB]")), insightCards.length);
+
+  // ---------- Owner: nav has the AI Assistant tab; non-owner roles don't ----------
+  const ownerTabLabels = Array.from(win.document.querySelectorAll("nav.tabbar button")).map(b => b.textContent.trim());
+  check("owner nav includes AI Assistant tab", ownerTabLabels.some(t => t.includes("AI Assistant")), ownerTabLabels);
+
+  let winRavi = await newAppWindow(raviToken);
+  await wait(700);
+  const raviTabLabels = Array.from(winRavi.document.querySelectorAll("nav.tabbar button")).map(b => b.textContent.trim());
+  check("non-owner (site supervisor) nav does NOT include AI Assistant tab", !raviTabLabels.some(t => t.includes("AI Assistant")), raviTabLabels);
+
+  // ---------- Owner: AI Assistant chat - suggested prompt flow ----------
+  await win.eval(`switchTab('ai_assistant')`);
+  await wait(600);
+  const heroTitles = () => Array.from(win.document.querySelectorAll(".ai-hero h1")).map(h => h.textContent.trim());
+  check("AI Assistant screen shows its hero title", heroTitles().some(t => t.includes("AI Fleet Assistant")), heroTitles());
+  const suggestChips = win.document.querySelectorAll(".ai-suggest-chip");
+  check("AI Assistant shows suggested prompt chips before any message", suggestChips.length >= 3, suggestChips.length);
+
+  await win.eval(`askAiSuggested("How is the fleet doing today?")`);
+  await wait(700);
+  let userMsgs = () => Array.from(win.document.querySelectorAll(".ai-msg.user")).map(m => m.textContent.trim());
+  let assistantMsgs = () => Array.from(win.document.querySelectorAll(".ai-msg.assistant")).map(m => m.textContent.trim());
+  check("chat shows the user's question", userMsgs().some(t => t.includes("How is the fleet doing today?")), userMsgs());
+  check("chat shows an assistant reply", assistantMsgs().some(t => t.includes("grounded answer")), assistantMsgs());
+  check("chat reply shows which tool was checked (transparency)", assistantMsgs().some(t => t.includes("Checked:") && t.includes("fleet overview")), assistantMsgs());
+
+  // ---------- Owner: free-typed question mentioning a real vehicle reg ----------
+  await win.eval(`
+    document.getElementById('aiChatInputBox').value = ${JSON.stringify(`Why is ${someVehicle.reg} so expensive?`)};
+    sendAiChatMessage();
+  `);
+  await wait(700);
+  check("second question appears in chat", userMsgs().some(t => t.includes(someVehicle.reg)), userMsgs());
+  check("second reply used the vehicle_expenditure tool", assistantMsgs().some(t => t.includes("vehicle expenditure")), assistantMsgs());
+  check("chat history now has 2 user + 2 assistant messages", userMsgs().length === 2 && assistantMsgs().length === 2, { user: userMsgs().length, assistant: assistantMsgs().length });
+
+  // ---------- Owner: empty submit is a no-op (doesn't add a blank message) ----------
+  const beforeCount = win.document.querySelectorAll(".ai-msg").length;
+  await win.eval(`document.getElementById('aiChatInputBox').value = "   "; sendAiChatMessage();`);
+  await wait(300);
+  const afterCount = win.document.querySelectorAll(".ai-msg").length;
+  check("submitting a blank/whitespace message is a no-op", afterCount === beforeCount, { before: beforeCount, after: afterCount });
+
+  check("no runtime JS errors across the whole flow", errs.length === 0, errs);
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

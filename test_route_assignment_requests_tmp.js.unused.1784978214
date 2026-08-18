@@ -1,0 +1,185 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const { JSDOM } = require("jsdom");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5952;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed for " + identifier + ": " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+function auth(token) { return { Authorization: "Bearer " + token, "Content-Type": "application/json" }; }
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const raviToken = await loginStaff("9000100001", "Padmasri@1111"); // site_supervisor
+  const dataTeamToken = await loginStaff("9000100005", "Padmasri@5555"); // data_team
+  const opsToken = await loginStaff("9000100004", "Padmasri@4444"); // ops_manager
+  const hrToken = await loginStaff("9000100007", "Padmasri@6666"); // hr
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999"); // owner
+
+  // ---------- Setup: owner creates a fresh test client with route-cap room ----------
+  const { data: newClient } = await jf(`${API}/api/clients`, { method: "POST", headers: auth(ownerToken), body: JSON.stringify({ name: "Test Client For Routes" }) });
+  await jf(`${API}/api/clients/${newClient.id}/route-cap`, { method: "PATCH", headers: auth(ownerToken), body: JSON.stringify({ routeCap: 1 }) });
+
+  // ---------- 1. Site Supervisor proposes a new route -> pending, not yet in catalog ----------
+  const { res: rrRes, data: rrData } = await jf(`${API}/api/clients/${newClient.id}/route-requests`, { method: "POST", headers: auth(raviToken), body: JSON.stringify({ name: "Kompally", routeNumber: "9K" }) });
+  check("site_supervisor can propose a new route", rrRes.ok && rrData.status === "pending", rrData);
+
+  const { data: clientsAfterProposal } = await jf(`${API}/api/meta`, { headers: auth(raviToken) });
+  const clientCheck1 = clientsAfterProposal.clients.find(c => c.id === newClient.id);
+  check("proposed route does NOT show in the client's route catalog yet", !(clientCheck1.routes || []).some(r => r.name === "Kompally"), clientCheck1.routes);
+
+  // ---------- 2. Non-approver (hr) blocked; site_supervisor can't approve own proposal ----------
+  const { res: hrQueueRes } = await jf(`${API}/api/clients/route-requests/pending-approvals`, { headers: auth(hrToken) });
+  check("hr is forbidden from the route-request approval queue", hrQueueRes.status === 403, hrQueueRes.status);
+  const { res: selfApproveRes } = await jf(`${API}/api/clients/route-requests/${rrData.id}/approve`, { method: "PATCH", headers: auth(raviToken), body: JSON.stringify({ status: "approved" }) });
+  check("site_supervisor cannot approve their own route proposal", selfApproveRes.status === 403, selfApproveRes.status);
+
+  // ---------- 3. ops_manager (one of the 3 approvers) sees + rejects it (comment required) ----------
+  const { data: opsQueue } = await jf(`${API}/api/clients/route-requests/pending-approvals`, { headers: auth(opsToken) });
+  check("ops_manager sees the pending route request", opsQueue.some(r => r.id === rrData.id), opsQueue.map(r=>r.name));
+  const { res: rejectNoCommentRes } = await jf(`${API}/api/clients/route-requests/${rrData.id}/approve`, { method: "PATCH", headers: auth(opsToken), body: JSON.stringify({ status: "rejected" }) });
+  check("rejecting a route request without a comment fails with 400", rejectNoCommentRes.status === 400, rejectNoCommentRes.status);
+  const { res: rejectRes, data: rejectData } = await jf(`${API}/api/clients/route-requests/${rrData.id}/approve`, { method: "PATCH", headers: auth(opsToken), body: JSON.stringify({ status: "rejected", comment: "Wrong starting point spelling" }) });
+  check("ops_manager can reject a route request with a reason", rejectRes.ok && rejectData.status === "rejected" && rejectData.rejectionComment === "Wrong starting point spelling", rejectData);
+
+  // ---------- 4. Propose a second route and have data_team approve it -> now in the catalog ----------
+  const { data: rrData2 } = await jf(`${API}/api/clients/${newClient.id}/route-requests`, { method: "POST", headers: auth(raviToken), body: JSON.stringify({ name: "Bowenpally", routeNumber: "9B" }) });
+  const { res: approveRes, data: approveData } = await jf(`${API}/api/clients/route-requests/${rrData2.id}/approve`, { method: "PATCH", headers: auth(dataTeamToken), body: JSON.stringify({ status: "approved" }) });
+  check("data_team can approve a route request", approveRes.ok && approveData.status === "approved" && approveData.createdRouteId, approveData);
+  const { data: metaAfterApproval } = await jf(`${API}/api/meta`, { headers: auth(raviToken) });
+  const clientCheck2 = metaAfterApproval.clients.find(c => c.id === newClient.id);
+  check("approved route now shows up in the client's route catalog", (clientCheck2.routes || []).some(r => r.name === "Bowenpally" && r.routeNumber === "9B"), clientCheck2.routes);
+  const approvedRoute = clientCheck2.routes.find(r => r.name === "Bowenpally");
+
+  // Cap is now full again (2/2) - a third proposal should fail even before approval
+  const { res: capFullRes } = await jf(`${API}/api/clients/${newClient.id}/route-requests`, { method: "POST", headers: auth(raviToken), body: JSON.stringify({ name: "Third Route", routeNumber: "9C" }) });
+  check("proposing a route once the client is at cap is rejected", capFullRes.status === 400, capFullRes.status);
+
+  // ---------- 5. Site Supervisor requests a driver/route/company assignment for their OWN vehicle ----------
+  const { data: raviVehicles } = await jf(`${API}/api/vehicles`, { headers: auth(raviToken) });
+  const myVehicle = raviVehicles[0];
+  check("site_supervisor has at least one existing approved vehicle to test with", !!myVehicle, raviVehicles.length);
+  const { data: metaForDriver } = await jf(`${API}/api/meta`, { headers: auth(raviToken) });
+  const someDriver = metaForDriver.drivers[0];
+
+  const beforeVehicle = (await jf(`${API}/api/vehicles`, { headers: auth(raviToken) })).data.find(v => v.id === myVehicle.id);
+
+  const { res: arRes, data: arData } = await jf(`${API}/api/vehicles/${myVehicle.id}/assignment-requests`, {
+    method: "POST", headers: auth(raviToken),
+    body: JSON.stringify({ clientId: newClient.id, routeId: approvedRoute.id, driverId: someDriver.id }),
+  });
+  check("site_supervisor can request an assignment for their own vehicle", arRes.ok && arData.status === "pending", arData);
+
+  const { data: vehicleAfterRequest } = await jf(`${API}/api/vehicles`, { headers: auth(raviToken) });
+  const unchangedVehicle = vehicleAfterRequest.find(v => v.id === myVehicle.id);
+  check("the vehicle itself is NOT changed yet (still pending approval)", unchangedVehicle.clientId === beforeVehicle.clientId && unchangedVehicle.driverId === beforeVehicle.driverId, { before: beforeVehicle, after: unchangedVehicle });
+
+  // ---------- 6. Someone else's vehicle can't be requested ----------
+  const { data: suresh } = { data: null };
+  const otherVehicle = raviVehicles.length > 0 ? (await jf(`${API}/api/vehicles`, { headers: auth(dataTeamToken) })).data.find(v => v.supervisorId && v.supervisorId !== "u_ravi") : null;
+  if (otherVehicle) {
+    const { res: foreignRes } = await jf(`${API}/api/vehicles/${otherVehicle.id}/assignment-requests`, { method: "POST", headers: auth(raviToken), body: JSON.stringify({ clientId: newClient.id, routeId: approvedRoute.id, driverId: someDriver.id }) });
+    check("site_supervisor cannot request an assignment for another supervisor's vehicle", foreignRes.status === 403, foreignRes.status);
+  } else {
+    console.log("OK  - no other-supervisor vehicle found to test cross-supervisor rejection (skipped, not a failure)");
+  }
+
+  // ---------- 7. hr (not an assignment approver) blocked; owner approves -> vehicle actually updates ----------
+  const { res: hrAssignQueueRes } = await jf(`${API}/api/vehicles/assignment-requests/pending-approvals`, { headers: auth(hrToken) });
+  check("hr is forbidden from the assignment-request approval queue", hrAssignQueueRes.status === 403, hrAssignQueueRes.status);
+
+  const { res: ownerApproveRes, data: ownerApproveData } = await jf(`${API}/api/vehicles/assignment-requests/${arData.id}/approve`, { method: "PATCH", headers: auth(ownerToken), body: JSON.stringify({ status: "approved" }) });
+  check("owner can approve an assignment request", ownerApproveRes.ok && ownerApproveData.status === "approved", ownerApproveData);
+
+  const { data: vehicleAfterApproval } = await jf(`${API}/api/vehicles`, { headers: auth(raviToken) });
+  const updatedVehicle = vehicleAfterApproval.find(v => v.id === myVehicle.id);
+  check("approved assignment request actually updates the vehicle's client/route/driver", updatedVehicle.clientId === newClient.id && updatedVehicle.routeId === approvedRoute.id && updatedVehicle.driverId === someDriver.id, updatedVehicle);
+  check("driverAssignmentHistory got a new open stint for the newly assigned driver", updatedVehicle.driverAssignmentHistory.some(s => s.driverId === someDriver.id && s.assignedTo === null), updatedVehicle.driverAssignmentHistory);
+
+  // Already-decided request can't be redecided
+  const { res: redecideRes } = await jf(`${API}/api/vehicles/assignment-requests/${arData.id}/approve`, { method: "PATCH", headers: auth(ownerToken), body: JSON.stringify({ status: "rejected", comment: "x" }) });
+  check("an already-approved assignment request cannot be decided on again", redecideRes.status === 400, redecideRes.status);
+
+  // ---------- 8. Frontend: site_supervisor's Routes tab has the propose/assign forms and status trackers ----------
+  const html = await (await fetch(`${API}/`)).text();
+  const dom = new JSDOM(html, {
+    url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+    beforeParse(win) {
+      win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+      win.localStorage.setItem("fleetAuthToken", raviToken);
+    },
+  });
+  const win = dom.window;
+  const errs = [];
+  win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+  win.alert = () => {};
+  await wait(900);
+  await win.eval(`switchTab('routes')`);
+  await wait(800);
+  const bodyText = win.document.body.textContent;
+  check("Site Supervisor's Routes screen shows the 'Propose a New Route' form", /Propose a New Route/.test(bodyText), null);
+  check("Site Supervisor's Routes screen shows the 'Assign a Driver to a Route' form", /Assign a Driver to a Route/.test(bodyText), null);
+  check("Site Supervisor's Routes screen shows their rejected route proposal with reason", /Kompally/.test(bodyText) && /Wrong starting point spelling/.test(bodyText), null);
+  check("Site Supervisor's Routes screen shows their approved assignment request", bodyText.includes(myVehicle.reg) && /APPROVED/.test(bodyText), null);
+
+  // ---------- 9. Frontend: Fleet Approvals for ops_manager shows route/assignment queues ----------
+  const domOps = new JSDOM(html, {
+    url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+    beforeParse(win2) {
+      win2.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+      win2.localStorage.setItem("fleetAuthToken", opsToken);
+    },
+  });
+  const winOps = domOps.window;
+  const opsErrs = [];
+  winOps.addEventListener("error", (e) => opsErrs.push(e.error ? e.error.stack || e.error.message : e.message));
+  await wait(900);
+  await winOps.eval(`switchTab('approvals')`);
+  await wait(800);
+  const opsBodyText = winOps.document.body.textContent;
+  check("ops_manager's Fleet Approvals screen shows Pending Route Proposals section", /Pending Route Proposals/.test(opsBodyText), null);
+  check("ops_manager's Fleet Approvals screen shows Pending Assignment Requests section", /Pending Assignment Requests/.test(opsBodyText), null);
+
+  check("no runtime JS errors in the site_supervisor routes flow", errs.length === 0, errs);
+  check("no runtime JS errors in the ops_manager approvals flow", opsErrs.length === 0, opsErrs);
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

@@ -1,0 +1,1408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
+<title>Padmasri Travels - Driver App</title>
+<meta name="theme-color" content="#2B2E1F" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@1,500;1,600;1,700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#2B2E1F; --accent:#4C6A2B; --accent-dark:#3A5220; --accent-light:#E9EDA8; --green:#2E7D32;
+    --amber:#b8860b; --red:#c0392b; --grey:#6b6b5e; --bg:#FBF8E3; --card:#ffffff;
+    --border:#ECE6C8; --purple:#6C63FF; --purple-light:#E7E5FF;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;-webkit-tap-highlight-color:transparent;}
+  .accent-script{font-family:'Playfair Display',Georgia,serif;font-style:italic;font-weight:600;}
+  #app{max-width:480px;margin:0 auto;min-height:100vh;background:var(--bg);padding-bottom:40px;}
+  header.topbar{background:var(--ink);color:#fff;padding:16px 18px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;}
+  header.topbar .brand{font-weight:700;font-size:17px;}
+  header.topbar .who{font-size:12.5px;opacity:.9;text-align:right;}
+  main{padding:16px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:18px;margin-bottom:16px;box-shadow:0 4px 14px rgba(43,46,31,.06);}
+  h1.page-title{font-size:19px;margin:2px 0 16px;color:var(--ink);text-align:center;}
+  h2.section-title{font-size:15px;margin:0 0 12px;color:var(--ink);}
+  .muted{color:var(--grey);font-size:12.5px;}
+  .banner{background:#FBF3D6;border:1px solid #EBDA9B;color:#7a5a00;padding:12px 14px;border-radius:14px;font-size:13.5px;margin-bottom:16px;}
+  .banner.error{background:#fbe4e1;border-color:#eab3ab;color:#7a2115;}
+  .banner.ok{background:#E9F3DC;border-color:#C4DBA0;color:#3A5220;}
+  .field{margin-bottom:16px;}
+  .field label{display:block;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--grey);margin-bottom:6px;font-weight:600;}
+  .field input{width:100%;padding:14px 12px;border:1px solid var(--border);background:#fff;border-radius:14px;font-size:18px;text-align:center;letter-spacing:1px;}
+  .field select{width:100%;padding:14px 12px;border:1px solid var(--border);background:#fff;border-radius:14px;font-size:15px;text-align:left;letter-spacing:normal;}
+  .field.left input{text-align:left;letter-spacing:normal;font-size:15px;}
+  .big-btn{width:100%;background:var(--accent);color:#fff;border:none;padding:16px;border-radius:16px;font-size:16px;font-weight:700;cursor:pointer;}
+  .big-btn:hover{background:var(--accent-dark);}
+  .big-btn:disabled{opacity:.45;cursor:not-allowed;}
+  .big-btn.secondary{background:#fff;color:var(--accent);border:2px solid var(--accent);}
+  .big-btn.danger{background:var(--red);}
+  .swipe-track{position:relative;width:100%;height:58px;background:var(--accent-light);border:1px solid var(--border);border-radius:29px;overflow:hidden;margin-top:6px;user-select:none;}
+  .swipe-track .swipe-label{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--ink);font-weight:700;font-size:14px;letter-spacing:.3px;pointer-events:none;}
+  .swipe-track.logout .swipe-label{color:#fff;}
+  .swipe-track.logout{background:#f6d9d4;}
+  .swipe-thumb{position:absolute;top:3px;left:3px;width:52px;height:52px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;cursor:grab;box-shadow:0 1px 4px rgba(0,0,0,.25);touch-action:none;}
+  .swipe-track.logout .swipe-thumb{background:var(--red);}
+  .countdown{font-size:34px;font-weight:800;color:var(--ink);text-align:center;margin:6px 0 14px;letter-spacing:1px;}
+  .countdown.warn{color:var(--red);}
+  .photo-box{border:2px dashed #C9C2A0;border-radius:14px;padding:14px;text-align:center;background:#FCFBF2;margin-bottom:14px;}
+  .photo-box img{max-width:100%;max-height:180px;border-radius:8px;margin-top:10px;}
+  .trip-item{border:1px solid var(--border);border-radius:14px;padding:12px 14px;margin-bottom:10px;}
+  .trip-item .date{font-weight:700;color:var(--ink);font-size:14px;}
+  .trip-item .desc{font-size:13px;color:#333;margin-top:2px;}
+  .trip-item .meta{font-size:11.5px;color:var(--grey);margin-top:4px;}
+  .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;margin-top:6px;}
+  .badge.upcoming{background:#FBF3D6;color:var(--amber);}
+  .badge.in_progress{background:var(--purple-light);color:var(--purple);}
+  .badge.completed{background:#E9F3DC;color:var(--green);}
+  .badge.pending{background:#FBF3D6;color:var(--amber);}
+  .badge.approved{background:#E9F3DC;color:var(--green);}
+  .badge.rejected{background:#fbe4e1;color:var(--red);}
+  .driver-tabbar{display:flex;gap:6px;overflow-x:auto;margin-bottom:14px;-webkit-overflow-scrolling:touch;padding-bottom:2px;}
+  .driver-tabbar button{flex:0 0 auto;background:#fff;border:1px solid var(--border);color:var(--grey);padding:9px 14px;border-radius:20px;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;}
+  .driver-tabbar button.active{background:var(--accent-light);color:var(--ink);border-color:var(--accent-light);font-weight:700;}
+  .trip-point{margin-top:10px;padding:10px 12px;background:#FCFBF2;border:1px solid var(--border);border-radius:12px;}
+  .trip-point-label{font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.4px;}
+  .trip-point a{font-size:12px;}
+  .doc-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid #F1ECD4;font-size:13px;}
+  .doc-row:last-child{border-bottom:none;}
+  .doc-row .dl-link{background:var(--accent);color:#fff;padding:7px 12px;border-radius:8px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  table th{text-align:left;padding:7px 5px;color:var(--ink);border-bottom:2px solid var(--border);font-size:11.5px;}
+  table td{padding:7px 5px;border-bottom:1px solid #F1ECD4;}
+  .trip-actions{margin-top:10px;display:flex;gap:8px;}
+  .trip-actions button{flex:1;padding:9px;border-radius:10px;border:1px solid var(--accent);background:#fff;color:var(--accent);font-size:12.5px;font-weight:600;cursor:pointer;}
+  .empty{text-align:center;color:var(--grey);padding:20px 10px;font-size:13px;}
+  .status-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--grey);}
+  .status-pill .dot{width:8px;height:8px;border-radius:50%;background:var(--green);}
+  .status-pill .dot.off{background:#c9c9c9;}
+  .footer-note{font-size:11px;color:#9a9576;text-align:center;padding:18px 10px 4px;}
+  .footer-note a{color:var(--accent);}
+  .month-picker{display:flex;align-items:center;gap:10px;margin-bottom:14px;}
+  .month-picker input{flex:1;padding:10px;border:1px solid var(--border);border-radius:10px;font-size:14px;}
+  .payslip-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #F1ECD4;font-size:13.5px;}
+  .payslip-row.total{font-weight:700;color:var(--ink);border-top:2px solid var(--border);border-bottom:none;padding-top:10px;margin-top:4px;}
+  .dl-row{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px;}
+  .dl-row button{min-width:100px;}
+  .dl-row button{flex:1;}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  /* ---- Fleet Assistant (workshop portal) ---- */
+  .ws-ai-hero{background:linear-gradient(135deg,var(--purple-light),#fff);border:1px solid var(--border);border-radius:18px;padding:16px 18px;margin-bottom:14px;}
+  .ws-ai-hero h1{font-size:17px;margin:0 0 4px;color:var(--ink);}
+  .ws-ai-hero p{font-size:12.5px;color:var(--grey);margin:0;}
+  .ws-ai-chat-window{max-height:340px;overflow-y:auto;margin-bottom:12px;}
+  .ws-ai-msg{padding:10px 12px;border-radius:12px;font-size:13px;line-height:1.5;margin-bottom:8px;white-space:pre-wrap;}
+  .ws-ai-msg.user{background:var(--accent-light);color:var(--ink);margin-left:20%;}
+  .ws-ai-msg.assistant{background:#F4F2FF;border:1px solid var(--purple-light);}
+  .ws-ai-tag{display:block;font-size:10.5px;font-weight:700;color:var(--purple);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px;}
+  .ws-ai-tools-used{font-size:10.5px;color:var(--grey);margin-top:5px;}
+  .ws-ai-suggest-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;}
+  .ws-ai-suggest-chip{background:#fff;border:1px solid var(--purple-light);color:var(--purple);padding:7px 12px;border-radius:16px;font-size:11.5px;font-weight:600;cursor:pointer;}
+  .ws-ai-input-row textarea{width:100%;padding:12px;border:1px solid var(--border);border-radius:14px;font-size:14px;resize:vertical;min-height:52px;margin-bottom:10px;font-family:inherit;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<input type="file" id="odoOpenInput" accept="image/*" capture="environment" style="display:none" />
+<input type="file" id="odoCloseInput" accept="image/*" capture="environment" style="display:none" />
+<script>
+/* =========================================================================
+   PADMASRI TRAVELS - DRIVER + WORKSHOP STAFF APP
+   Deliberately separate from index.html and its login system: Drivers and
+   Workshop staff (Manager, Supervisor, Mechanic, Helper, Electrician) don't
+   have email addresses and aren't trained on the full staff app, so they
+   all sign in here with just their mobile number + a 4-digit PIN (default
+   1234, never forced to change - see server.js backfillDefaults for why).
+   One combined login form (see doPortalLogin) tries /api/driver-auth/login
+   first, then falls back to /api/workshop-auth/login - the same phone+PIN
+   the person types works for whichever portal their account belongs to,
+   so nobody has to know or care which "kind" of login they have.
+   `portalType` ("driver" | "workshop") tracks which session is active and
+   is what every render/boot function below branches on. The two sessions
+   (driverSessions vs workshopSessions on the server) are completely
+   independent - a phone number only ever matches one or the other.
+   ========================================================================= */
+
+const API = "/api";
+let portalType = localStorage.getItem("portalType") || null; // "driver" | "workshop"
+let driverToken = localStorage.getItem("driverAuthToken") || null;
+let driver = null;
+let shift = null;
+let workshopToken = localStorage.getItem("workshopAuthToken") || null;
+let workshopUser = null;
+let workshopTab = "myrepairs";
+let workshopRequests = [];
+let workshopPurchases = [];
+let workshopStaffList = [];
+let workshopBusy = false;
+let pendingWorkshopInvoice = null;
+// Free, built-in Fleet Assistant (no paid API) - same rule-based backend
+// the main staff app uses, just reached through the Workshop token instead.
+let wsChatHistory = []; // [{role:"user"|"assistant", content:string, tool?:string}]
+let wsChatBusy = false;
+let wsChatError = "";
+function escapeHtmlWs(str){
+  return String(str==null?"":str).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+let lastError = "";
+// Which sub-tab is showing once the shift is active (on_trip/ready_to_logout).
+let driverTab = "current";
+let currentTrip = null;
+let tripsMonth = new Date().toISOString().slice(0,7);
+let monthTrips = { upcoming: [], completed: [] };
+let myLeaveRequests = [];
+let attendanceMonth = new Date().toISOString().slice(0,7);
+let attendanceRows = [];
+let documentsData = null;
+const DOC_TYPE_LABELS = { RC:"RC", Permit:"Permit", Insurance:"Insurance", Fitness:"Fitness Certificate", Tax:"Road Tax", PUC:"PUC", TemporaryPermit:"Temporary Permit", BorderTax:"Border Tax" };
+let lastPos = { lat: null, lng: null };
+let locationOk = false;
+let pingTimer = null;
+let pollTimer = null;
+let capturedOpenPhoto = null;
+let capturedClosePhoto = null;
+// Whatever the driver has typed so far into the odometer fields, kept
+// outside the DOM so a re-render (the countdown ticking, a location poll,
+// a photo capture completing) never wipes out an in-progress reading.
+let odoOpenDraft = "";
+let odoCloseDraft = "";
+let busy = false;
+let payslipMonth = new Date().toISOString().slice(0,7);
+let payslip = null;
+let payslipLoading = false;
+
+async function api(path, opts={}){
+  const headers = Object.assign({"Content-Type":"application/json"}, opts.headers||{});
+  if(driverToken) headers["Authorization"] = "Bearer " + driverToken;
+  const res = await fetch(API+path, Object.assign({}, opts, {headers}));
+  if(res.status === 401){
+    resetSession();
+    render();
+    throw new Error("Session expired - please log in again.");
+  }
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || ("Request failed ("+res.status+")"));
+  return data;
+}
+
+function resetSession(){
+  driverToken = null; driver = null; shift = null;
+  odoOpenDraft = ""; odoCloseDraft = "";
+  driverTab = "current"; currentTrip = null;
+  monthTrips = { upcoming: [], completed: [] }; myLeaveRequests = [];
+  attendanceRows = []; documentsData = null; payslip = null;
+  vehicleRepairHistory = null; vehicleRepairHistoryReg = ""; showVehicleHistory = false;
+  portalType = null;
+  localStorage.removeItem("driverAuthToken");
+  localStorage.removeItem("portalType");
+  stopLocationPings(); stopPolling();
+}
+
+// ---------- Workshop staff (separate session, same login form) ----------
+async function workshopApi(path, opts={}){
+  const headers = Object.assign({"Content-Type":"application/json"}, opts.headers||{});
+  if(workshopToken) headers["Authorization"] = "Bearer " + workshopToken;
+  const res = await fetch(API+path, Object.assign({}, opts, {headers}));
+  if(res.status === 401){
+    resetWorkshopSession();
+    render();
+    throw new Error("Session expired - please log in again.");
+  }
+  const data = await res.json().catch(()=>({}));
+  if(!res.ok) throw new Error(data.error || ("Request failed ("+res.status+")"));
+  return data;
+}
+function resetWorkshopSession(){
+  workshopToken = null; workshopUser = null; portalType = null;
+  workshopTab = "myrepairs";
+  workshopRequests = []; workshopPurchases = []; workshopStaffList = [];
+  pendingWorkshopInvoice = null;
+  localStorage.removeItem("workshopAuthToken");
+  localStorage.removeItem("portalType");
+}
+const WORKSHOP_MANAGER_ROLES = ["workshop_manager","workshop_supervisor"];
+const WORKSHOP_ROLE_LABELS = { workshop_manager:"Workshop Manager", workshop_supervisor:"Workshop Supervisor", mechanic:"Mechanic", helper:"Helper", electrician:"Electrician" };
+function roleLabelClient(r){ return WORKSHOP_ROLE_LABELS[r] || r; }
+async function loadWorkshopTabData(){
+  if(workshopTab==="queue"){
+    try{
+      const [reqs, staff] = await Promise.all([workshopApi("/workshop-auth/repair-requests"), workshopApi("/workshop-auth/staff")]);
+      workshopRequests = reqs; workshopStaffList = staff;
+    }catch(e){}
+  } else if(workshopTab==="myrepairs"){
+    try{ workshopRequests = await workshopApi("/workshop-auth/repair-requests"); }catch(e){}
+  } else if(workshopTab==="purchases"){
+    try{ workshopPurchases = await workshopApi("/workshop-auth/workshop-purchases"); }catch(e){}
+  }
+}
+async function setWorkshopTab(tab){
+  workshopTab = tab;
+  render();
+  await loadWorkshopTabData();
+  render();
+}
+
+// ---------- location ----------
+function getPosition(timeoutMs){
+  return new Promise((resolve)=>{
+    if(!navigator.geolocation){ resolve({lat:null,lng:null}); return; }
+    const timer = setTimeout(()=>resolve({lat:lastPos.lat,lng:lastPos.lng}), timeoutMs||8000);
+    navigator.geolocation.getCurrentPosition(
+      (pos)=>{
+        clearTimeout(timer);
+        const p = {lat: pos.coords.latitude, lng: pos.coords.longitude};
+        lastPos = p; locationOk = true;
+        resolve(p);
+      },
+      ()=>{ clearTimeout(timer); locationOk = false; resolve({lat:lastPos.lat,lng:lastPos.lng}); },
+      {enableHighAccuracy:true, timeout:(timeoutMs||8000)-500, maximumAge:5000}
+    );
+  });
+}
+function startLocationPings(){
+  stopLocationPings();
+  pingTimer = setInterval(async ()=>{
+    if(!driverToken || !shift || shift.status==="closed") return;
+    const p = await getPosition(6000);
+    if(typeof p.lat!=="number" || typeof p.lng!=="number") return;
+    api("/driver-auth/location-ping", {method:"POST", body: JSON.stringify(p)}).catch(()=>{});
+  }, 10000);
+}
+function stopLocationPings(){ if(pingTimer){ clearInterval(pingTimer); pingTimer=null; } }
+
+// ---------- polling (keeps whichever tab is open fresh, catches auto-expiry) ----------
+// Runs the whole time the driver is logged in, including while
+// awaiting_odometer - the driver can now freely browse Upcoming Trips /
+// Profile / Documents during that 10-minute window instead of being stuck
+// on a blocking odometer screen, so this is what notices the server auto-
+// closing the shift if the window runs out while they're on another tab.
+// This used to skip awaiting_odometer to protect the odometer input from
+// being wiped by a re-render mid-type; that's now handled by odoOpenDraft
+// surviving any re-render, so it's safe to poll here too.
+function startPolling(){
+  stopPolling();
+  pollTimer = setInterval(refreshMe, 15000);
+}
+function stopPolling(){ if(pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
+async function refreshMe(){
+  if(!driverToken) return;
+  try{
+    const m = await api("/driver-auth/me");
+    driver = m.driver; shift = m.shift;
+    if(shift && shift.status!=="closed") await loadActiveTabData();
+    render();
+  }catch(e){ /* api() already resets session on 401 */ }
+}
+// Fetches whatever data the currently-visible driver-app tab needs. Called
+// both when switching tabs and by the 15s poll, so whichever tab is open
+// always has fresh data without re-fetching every tab on every poll.
+async function loadActiveTabData(){
+  if(driverTab==="upcoming") await Promise.all([fetchMonthTrips(), fetchMyLeaveRequests()]);
+  else if(driverTab==="profile") await Promise.all([fetchPayslip(), fetchAttendance()]);
+  else if(driverTab==="documents") await fetchDocuments();
+  else await Promise.all([fetchCurrentTrip(), fetchMyRepairRequests()]); // "current" tab, and the default
+}
+async function setDriverTab(tab){
+  driverTab = tab;
+  render(); // show a loading state immediately, then fill in once fetched
+  await loadActiveTabData();
+  render();
+}
+async function fetchCurrentTrip(){
+  try{ currentTrip = await api("/driver-auth/trips/current"); }catch(e){ currentTrip = null; }
+}
+async function fetchMonthTrips(){
+  try{ monthTrips = await api(`/driver-auth/trips?month=${tripsMonth}`); }catch(e){ monthTrips = {upcoming:[],completed:[]}; }
+}
+async function fetchMyLeaveRequests(){
+  try{ myLeaveRequests = await api("/driver-auth/leave-requests"); }catch(e){ myLeaveRequests = []; }
+}
+async function setTripsMonth(v){
+  tripsMonth = v || new Date().toISOString().slice(0,7);
+  await fetchMonthTrips();
+  render();
+}
+async function requestLeaveForTrip(tripId, date){
+  const reason = prompt("Reason for leave request (optional):", "");
+  if(reason===null) return;
+  try{
+    await api("/driver-auth/leave-request", {method:"POST", body: JSON.stringify({date, tripId, reason})});
+    await fetchMyLeaveRequests();
+    render();
+    alert("Leave request submitted - your Site Supervisor / Operations Manager will review it.");
+  }catch(e){ alert(e.message); }
+}
+async function fetchAttendance(){
+  try{ const r = await api(`/driver-auth/attendance?month=${attendanceMonth}`); attendanceRows = r.rows; }
+  catch(e){ attendanceRows = []; }
+}
+async function setAttendanceMonth(v){
+  attendanceMonth = v || new Date().toISOString().slice(0,7);
+  await fetchAttendance();
+  render();
+}
+async function fetchDocuments(){
+  try{ documentsData = await api("/driver-auth/documents"); }catch(e){ documentsData = null; }
+}
+
+// ---------- boot ----------
+async function boot(){
+  if(portalType === "workshop"){
+    if(!workshopToken){ render(); return; }
+    try{
+      const m = await workshopApi("/workshop-auth/me");
+      workshopUser = m.user;
+      workshopTab = WORKSHOP_MANAGER_ROLES.includes(workshopUser.role) ? "queue" : "myrepairs";
+      await loadWorkshopTabData();
+      render();
+    }catch(e){
+      resetWorkshopSession(); render();
+    }
+    return;
+  }
+  if(!driverToken){ render(); return; }
+  try{
+    const m = await api("/driver-auth/me");
+    driver = m.driver; shift = m.shift;
+    if(shift && shift.status!=="closed"){
+      // Land straight on the tab bar (Current Trip active) no matter which
+      // stage the shift is in - awaiting_odometer no longer blocks access
+      // to Upcoming Trips / Profile / Documents.
+      startLocationPings(); startPolling();
+      driverTab = "current";
+      await Promise.all([fetchCurrentTrip(), fetchMyRepairRequests()]);
+    }
+    render();
+  }catch(e){
+    resetSession(); render();
+  }
+}
+
+// ---------- image capture (matches the supervisor app's downscale pattern) ----------
+function downscaleImage(file, maxW, quality, cb){
+  const reader = new FileReader();
+  reader.onload = (ev)=>{
+    const img = new Image();
+    img.onload = ()=>{
+      const scale = Math.min(1, maxW/img.width);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width*scale; canvas.height = img.height*scale;
+      canvas.getContext("2d").drawImage(img,0,0,canvas.width,canvas.height);
+      cb(canvas.toDataURL("image/jpeg",quality));
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+function captureOpenPhoto(){ document.getElementById("odoOpenInput").click(); }
+function captureClosePhoto(){ document.getElementById("odoCloseInput").click(); }
+document.addEventListener("DOMContentLoaded", ()=>{
+  document.getElementById("odoOpenInput").addEventListener("change", (e)=>{
+    const f = e.target.files[0]; if(!f) return;
+    downscaleImage(f, 640, 0.7, (dataUrl)=>{ capturedOpenPhoto = dataUrl; render(); });
+    e.target.value = "";
+  });
+  document.getElementById("odoCloseInput").addEventListener("change", (e)=>{
+    const f = e.target.files[0]; if(!f) return;
+    downscaleImage(f, 640, 0.7, (dataUrl)=>{ capturedClosePhoto = dataUrl; render(); });
+    e.target.value = "";
+  });
+  boot();
+});
+
+// ---------- swipe-to-confirm control ----------
+// A simple slide-to-confirm gesture (pointer events, works for touch and
+// mouse) - deliberately the only way to log in/out, since a plain button
+// tap is too easy to fire by accident while the phone is being handled.
+function initSwipe(trackId, onConfirm){
+  const track = document.getElementById(trackId);
+  if(!track) return;
+  const thumb = track.querySelector(".swipe-thumb");
+  const maxX = track.clientWidth - thumb.clientWidth - 6;
+  let startX = 0, curX = 0, dragging = false;
+  function setX(x){ curX = Math.max(0, Math.min(maxX, x)); thumb.style.transform = `translateX(${curX}px)`; }
+  function onDown(e){
+    dragging = true;
+    startX = (e.touches? e.touches[0].clientX : e.clientX) - curX;
+    thumb.style.cursor = "grabbing";
+  }
+  function onMove(e){
+    if(!dragging) return;
+    const x = (e.touches? e.touches[0].clientX : e.clientX) - startX;
+    setX(x);
+  }
+  function onUp(){
+    if(!dragging) return;
+    dragging = false;
+    thumb.style.cursor = "grab";
+    if(curX >= maxX*0.82){
+      setX(maxX);
+      onConfirm();
+    } else {
+      setX(0);
+    }
+  }
+  thumb.addEventListener("mousedown", onDown);
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+  thumb.addEventListener("touchstart", onDown, {passive:true});
+  window.addEventListener("touchmove", onMove, {passive:true});
+  window.addEventListener("touchend", onUp);
+  setX(0);
+}
+
+// ---------- actions ----------
+// One combined login: try the Driver session first (the common case), then
+// fall back to Workshop staff - same phone+PIN form, no portal picker,
+// per the Owner's explicit choice to combine the two mobile logins.
+async function doPortalLogin(){
+  if(busy) return;
+  lastError = "";
+  const phone = (document.getElementById("driverPhone")||{}).value || "";
+  const pin = (document.getElementById("driverPin")||{}).value || "";
+  if(!phone.trim() || !pin.trim()){ lastError = "Enter your mobile number and PIN."; render(); return; }
+  busy = true; render();
+  const pos = await getPosition(6000);
+  try{
+    const r = await api("/driver-auth/login", {method:"POST", body: JSON.stringify({phone: phone.trim(), pin: pin.trim(), lat: pos.lat, lng: pos.lng})});
+    driverToken = r.token; driver = r.driver; shift = r.shift;
+    portalType = "driver";
+    localStorage.setItem("driverAuthToken", driverToken);
+    localStorage.setItem("portalType", "driver");
+    startLocationPings(); startPolling();
+    driverTab = "current";
+    await fetchCurrentTrip();
+    busy = false; render();
+    return;
+  }catch(driverErr){
+    // Not a driver (or wrong PIN) - try Workshop staff before giving up.
+  }
+  try{
+    const r2 = await workshopApi("/workshop-auth/login", {method:"POST", body: JSON.stringify({phone: phone.trim(), pin: pin.trim()})});
+    workshopToken = r2.token; workshopUser = r2.user;
+    portalType = "workshop";
+    localStorage.setItem("workshopAuthToken", workshopToken);
+    localStorage.setItem("portalType", "workshop");
+    workshopTab = WORKSHOP_MANAGER_ROLES.includes(workshopUser.role) ? "queue" : "myrepairs";
+    await loadWorkshopTabData();
+  }catch(workshopErr){
+    lastError = "Incorrect mobile number or PIN.";
+  }
+  busy = false; render();
+}
+async function submitOdometerOpen(){
+  if(busy) return;
+  lastError = "";
+  const odometer = (document.getElementById("odoOpenValue")||{}).value;
+  if(!odometer){ lastError = "Enter the opening odometer reading."; render(); return; }
+  if(!capturedOpenPhoto){ lastError = "Take a photo of the odometer reading first."; render(); return; }
+  busy = true; render();
+  try{
+    const pos = await getPosition(6000);
+    shift = await api("/driver-auth/odometer-open", {method:"POST", body: JSON.stringify({odometer:Number(odometer), photo:capturedOpenPhoto, lat:pos.lat, lng:pos.lng})});
+    capturedOpenPhoto = null;
+    odoOpenDraft = "";
+    driverTab = "current";
+    await fetchCurrentTrip();
+  }catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+// Used both by the Upcoming Trips tab ("Start Trip") and the Current Trip
+// tab ("Mark Trip Completed") - refreshes both after any status change so
+// whichever tab the driver switches to next is already up to date.
+async function markTripStatus(tripId, status){
+  if(busy) return;
+  busy = true; render();
+  try{
+    await api(`/driver-auth/trips/${tripId}/status`, {method:"POST", body: JSON.stringify({status})});
+    await Promise.all([fetchCurrentTrip(), fetchMonthTrips()]);
+  }catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+async function submitOdometerClose(){
+  if(busy) return;
+  lastError = "";
+  const odometer = (document.getElementById("odoCloseValue")||{}).value;
+  if(!odometer){ lastError = "Enter the closing odometer reading."; render(); return; }
+  if(!capturedClosePhoto){ lastError = "Take a photo of the odometer reading first."; render(); return; }
+  busy = true; render();
+  try{
+    shift = await api("/driver-auth/odometer-close", {method:"POST", body: JSON.stringify({odometer:Number(odometer), photo:capturedClosePhoto})});
+    capturedClosePhoto = null;
+    odoCloseDraft = "";
+  }catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+async function doDriverLogout(){
+  if(busy) return;
+  lastError = "";
+  busy = true; render();
+  try{
+    const pos = await getPosition(6000);
+    await api("/driver-auth/logout", {method:"POST", body: JSON.stringify(pos)});
+    resetSession();
+  }catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+async function setPayslipMonth(v){ payslipMonth = v; payslip = null; await fetchPayslip(); }
+async function fetchPayslip(){
+  payslipLoading = true; render();
+  try{ payslip = await api(`/driver-auth/payslip?month=${payslipMonth}`); }
+  catch(e){ payslip = null; }
+  payslipLoading = false; render();
+}
+async function downloadDriverPayslip(format){
+  try{
+    const headers = {};
+    if(driverToken) headers["Authorization"] = "Bearer " + driverToken;
+    const res = await fetch(`${API}/driver-auth/payslip/download?month=${payslipMonth}&format=${format}`, {headers});
+    if(!res.ok){ const d = await res.json().catch(()=>({})); throw new Error(d.error || "Download failed."); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `payslip_${payslipMonth}.${format==="xlsx"?"xlsx":format==="pdf"?"pdf":"csv"}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }catch(e){ alert(e.message); }
+}
+
+// ---------- rendering ----------
+function money(n){ return "₹" + Math.round(n||0).toLocaleString("en-IN"); }
+function fmtTime(iso){ if(!iso) return "-"; const d = new Date(iso); return d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"}); }
+function fmtDate(s){ if(!s) return "-"; const d = new Date(s+"T00:00:00"); return d.toLocaleDateString("en-IN",{day:"2-digit",month:"short"}); }
+
+function render(){
+  const app = document.getElementById("app");
+  app.innerHTML = topbarHtml() + `<main>${bodyHtml()}</main>` + footerHtml();
+  setTimeout(()=>{
+    if(!driverToken && !workshopToken) initSwipe("loginSwipe", doPortalLogin);
+    if(shift && shift.status==="ready_to_logout") initSwipe("logoutSwipe", doDriverLogout);
+  }, 0);
+}
+
+function topbarHtml(){
+  if(portalType==="workshop" && workshopUser){
+    return `<header class="topbar">
+      <div class="brand">Padmasri <span class="accent-script">Travels</span></div>
+      <div class="who">${workshopUser.name}<br/><span class="muted" style="color:#fff;opacity:.8;">${roleLabelClient(workshopUser.role)}</span></div>
+    </header>`;
+  }
+  const dot = locationOk ? "" : " off";
+  return `<header class="topbar">
+    <div class="brand">Padmasri <span class="accent-script">Travels</span></div>
+    ${driver ? `<div class="who">${driver.name}<br/><span class="status-pill"><span class="dot${dot}"></span>${locationOk?"Location on":"Location off"}</span></div>` : `<div class="who">Driver &amp; Workshop App</div>`}
+  </header>`;
+}
+
+function footerHtml(){
+  return `<div class="footer-note">Staff member? <a href="/">Go to the Supervisor App</a></div>`;
+}
+
+function errorBannerHtml(){
+  return lastError ? `<div class="banner error">${lastError}</div>` : "";
+}
+
+function bodyHtml(){
+  if(portalType==="workshop") return workshopBodyHtml();
+  if(!driverToken || !driver) return loginScreen();
+  if(!shift || shift.status==="closed") return loggedOutScreen();
+  // Every other stage (awaiting_odometer, on_trip, ready_to_logout) lands
+  // on the tab bar - odometer entry lives inside the Current Trip tab now,
+  // it no longer blocks Upcoming Trips / Profile / Documents.
+  return activeShiftScreen();
+}
+
+function loginScreen(){
+  return `
+  <h1 class="page-title">Login</h1>
+  ${errorBannerHtml()}
+  <div class="card">
+    <p class="muted" style="text-align:center;margin:-4px 0 14px;">Drivers &amp; Workshop staff (Manager, Supervisor, Mechanic, Helper, Electrician)</p>
+    <div class="field">
+      <label>Mobile Number</label>
+      <input type="tel" id="driverPhone" placeholder="10-digit mobile number" inputmode="numeric" maxlength="10" />
+    </div>
+    <div class="field">
+      <label>PIN</label>
+      <input type="password" id="driverPin" placeholder="4-digit PIN" inputmode="numeric" maxlength="4" />
+    </div>
+    <p class="muted" style="text-align:center;margin:4px 0 14px;">${busy? '<span class="spinner"></span>Logging in...' : "Slide the button all the way to log in"}</p>
+    <div class="swipe-track" id="loginSwipe">
+      <div class="swipe-label">Swipe to Login &rarr;</div>
+      <div class="swipe-thumb">&rarr;</div>
+    </div>
+  </div>`;
+}
+
+function workshopBodyHtml(){
+  if(!workshopToken || !workshopUser) return loginScreen();
+  return workshopActiveScreen();
+}
+
+function loggedOutScreen(){
+  // Session closed (either the driver logged out cleanly, or the 10-minute
+  // odometer window expired and the shift was auto-closed) - back to login.
+  const reasonHtml = (shift && shift.autoClosedReason) ? `<div class="banner error">${shift.autoClosedReason}</div>` : "";
+  driverToken = null; portalType = null;
+  localStorage.removeItem("driverAuthToken"); localStorage.removeItem("portalType");
+  return reasonHtml + loginScreen();
+}
+
+function odometerCountdownParts(){
+  const loginAt = new Date(shift.loginAt).getTime();
+  const remainMs = Math.max(0, loginAt + 10*60*1000 - Date.now());
+  const mm = String(Math.floor(remainMs/60000)).padStart(2,"0");
+  const ss = String(Math.floor((remainMs%60000)/1000)).padStart(2,"0");
+  return { remainMs, text: `${mm}:${ss}` };
+}
+function activeShiftScreen(){
+  return `
+  <h1 class="page-title">Welcome, <span class="accent-script">${driver.name}</span></h1>
+  ${errorBannerHtml()}
+  ${driverTabBarHtml()}
+  ${driverTabContentHtml()}
+  `;
+}
+
+// 4 tabs, deliberately - Attendance/Payroll/Settings are folded into one
+// "Profile" tab so the driver isn't choosing between 6 things.
+const DRIVER_TABS = [
+  ["current","Current Trip"], ["upcoming","Upcoming Trips"], ["profile","Profile"], ["documents","Documents"],
+];
+function driverTabBarHtml(){
+  return `<div class="driver-tabbar">${DRIVER_TABS.map(([k,l])=>
+    `<button class="${driverTab===k?'active':''}" onclick="setDriverTab('${k}')">${l}</button>`
+  ).join("")}</div>`;
+}
+function driverTabContentHtml(){
+  if(driverTab==="upcoming") return upcomingTripsTabHtml();
+  if(driverTab==="profile") return profileTabHtml();
+  if(driverTab==="documents") return documentsTabHtml();
+  return currentTripTabHtml();
+}
+
+// ---------- Current Trip tab ----------
+// This is the landing tab right after login. While the shift is still
+// awaiting_odometer, it's where the opening-odometer gate (with its
+// 10-minute countdown) lives now - it no longer blocks the other tabs,
+// so the driver can check Documents/Profile/Upcoming Trips while that
+// countdown is still running if they want to.
+function currentTripTabHtml(){
+  if(shift.status==="awaiting_odometer") return odometerOpenCardHtml() + repairRequestCardHtml() + vehicleHistoryCardHtml();
+  let tripHtml;
+  if(!currentTrip){
+    tripHtml = `<div class="card"><h2 class="section-title">Current Trip</h2><div class="empty">No trip currently running. Start one from the Upcoming Trips tab.</div></div>`;
+  } else {
+    const t = currentTrip;
+    tripHtml = `
+    <div class="card">
+      <h2 class="section-title">Current Trip</h2>
+      <p class="muted">${fmtDate(t.date)}${t.scheduledTime? " &middot; "+t.scheduledTime : ""}${t.vehicleReg? " &middot; "+t.vehicleReg : ""}</p>
+      ${(t.clientName || t.siteName || t.route) ? `
+      <div class="doc-row" style="display:block;">
+        ${t.clientName ? `<div><b>Client:</b> ${t.clientName}</div>` : ""}
+        ${t.siteName ? `<div><b>Site:</b> ${t.siteName}</div>` : ""}
+        ${t.route ? `<div><b>Route:</b> ${t.route}</div>` : ""}
+      </div>` : ""}
+      ${t.supervisorName ? `
+      <div class="doc-row" style="display:block;">
+        <div><b>Site Supervisor:</b> ${t.supervisorName}${t.supervisorPhone ? ` &middot; <a href="tel:${t.supervisorPhone}">${t.supervisorPhone}</a>` : ""}</div>
+      </div>` : ""}
+      <div class="trip-point">
+        <div class="trip-point-label">Pickup Point</div>
+        <div>${t.pickupPoint || "Not specified"}</div>
+        ${t.pickupPoint ? `<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(t.pickupPoint)}" target="_blank" rel="noopener">Open in Maps</a>` : ""}
+      </div>
+      <div class="trip-point">
+        <div class="trip-point-label">Drop Point</div>
+        <div>${t.dropPoint || "Not specified"}</div>
+        ${t.dropPoint ? `<a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(t.dropPoint)}" target="_blank" rel="noopener">Open in Maps</a>` : ""}
+      </div>
+      ${t.notes ? `<p class="muted" style="margin-top:10px;">Notes: ${t.notes}</p>` : ""}
+      <button class="big-btn" style="margin-top:14px;" ${busy?"disabled":""} onclick="markTripStatus('${t.id}','completed')">${busy?'<span class="spinner"></span>Saving...':"Mark Trip Completed"}</button>
+    </div>`;
+  }
+  const shiftHtml = shift.status==="ready_to_logout" ? logoutCardHtml() : closingOdometerCardHtml();
+  return tripHtml + shiftHtml + repairRequestCardHtml() + vehicleHistoryCardHtml();
+}
+// Report a vehicle problem straight to Workshop - lands with the Workshop
+// Manager, who assigns it to a Mechanic/Electrician/Helper. Available any
+// time there's an active shift, regardless of trip/odometer state.
+let repairRequestsMine = [];
+let repairSubmitting = false;
+function repairRequestCardHtml(){
+  const recent = repairRequestsMine.slice(0,5);
+  const statusLabel = {requested:"Requested", assigned:"Assigned", in_progress:"In Progress", completed:"Completed", cancelled:"Cancelled"};
+  return `
+  <div class="card">
+    <h2 class="section-title">Report a Vehicle Problem</h2>
+    <p class="muted">Raise a repair request for your vehicle - Workshop will pick it up and assign a mechanic.</p>
+    <div class="field">
+      <label>Urgency</label>
+      <select id="rrUrgencyDriver">
+        <option value="normal">Normal</option>
+        <option value="low">Low</option>
+        <option value="high">High</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>What's wrong?</label>
+      <input type="text" id="rrIssueDriver" placeholder="e.g. Brake noise, AC not cooling, Adblue low" />
+    </div>
+    <button class="big-btn secondary" ${repairSubmitting?"disabled":""} onclick="submitDriverRepairRequest()">${repairSubmitting?'<span class="spinner"></span>Sending...':"Send to Workshop"}</button>
+    ${recent.length ? `
+    <div style="margin-top:12px;">
+      <p class="muted" style="margin-bottom:6px;">Your recent requests:</p>
+      ${recent.map(r=>`<div class="doc-row" style="display:block;"><b>${r.issueDescription}</b><br/><span class="muted">${statusLabel[r.status]||r.status}${r.assignedToName? ' - '+r.assignedToName:''}</span></div>`).join("")}
+    </div>` : ""}
+  </div>`;
+}
+async function submitDriverRepairRequest(){
+  if(repairSubmitting) return;
+  const issueDescription = document.getElementById("rrIssueDriver").value;
+  const urgency = document.getElementById("rrUrgencyDriver").value;
+  if(!issueDescription || !issueDescription.trim()){ lastError = "Describe the problem before sending it to Workshop."; render(); return; }
+  lastError = "";
+  repairSubmitting = true; render();
+  try{
+    const r = await api("/driver-auth/repair-requests", {method:"POST", body: JSON.stringify({issueDescription, urgency})});
+    repairRequestsMine.unshift(r);
+  }catch(e){ lastError = e.message; }
+  repairSubmitting = false; render();
+}
+async function fetchMyRepairRequests(){
+  try{ repairRequestsMine = await api("/driver-auth/repair-requests"); }catch(e){}
+}
+// Full maintenance history for the driver's CURRENT vehicle - every repair
+// request ever raised for it by anyone, not just the driver's own. Loaded
+// on demand (not on every tab visit) since it's a "look this up when I
+// need it" reference, not something that needs to stay live-refreshed.
+let vehicleRepairHistory = null; // null = not loaded yet
+let vehicleRepairHistoryReg = "";
+let showVehicleHistory = false;
+const REPAIR_STATUS_BADGE_CLASS = {requested:"pending", assigned:"upcoming", in_progress:"in_progress", completed:"completed", cancelled:"rejected"};
+function vehicleHistoryCardHtml(){
+  const statusLabel = {requested:"Requested", assigned:"Assigned", in_progress:"In Progress", completed:"Completed", cancelled:"Cancelled"};
+  const rows = (vehicleRepairHistory||[]).map(r=>`
+    <div class="doc-row" style="display:block;">
+      <b>${r.issueDescription}</b> <span class="badge ${REPAIR_STATUS_BADGE_CLASS[r.status]||''}">${statusLabel[r.status]||r.status}</span><br/>
+      <span class="muted">Raised by ${r.raisedByName}${r.raisedByRole? ' ('+r.raisedByRole+')':''} on ${fmtDate((r.createdAt||'').slice(0,10))}</span>
+      ${r.status==='completed' ? `<br/><span class="muted">Fixed: ${r.workDone||'-'}${r.totalCost!=null? ' &middot; '+money(r.totalCost):''}</span>` : ''}
+    </div>`).join("");
+  return `
+  <div class="card">
+    <h2 class="section-title">Vehicle Maintenance History${vehicleRepairHistoryReg? ' - '+vehicleRepairHistoryReg:''}</h2>
+    <p class="muted">See what's gone wrong with this vehicle before, and how it was fixed - helps you recognize a repeat problem.</p>
+    <button class="big-btn secondary" ${busy?"disabled":""} onclick="toggleVehicleHistory()">${showVehicleHistory ? "Hide history" : "View maintenance history"}</button>
+    ${showVehicleHistory ? (rows || `<div class="empty" style="margin-top:10px;">No maintenance history recorded for this vehicle yet.</div>`) : ""}
+  </div>`;
+}
+async function toggleVehicleHistory(){
+  showVehicleHistory = !showVehicleHistory;
+  if(showVehicleHistory && vehicleRepairHistory===null){
+    render(); // show something immediately while it loads
+    try{
+      const r = await api("/driver-auth/vehicle-repair-history");
+      vehicleRepairHistory = r.requests;
+      vehicleRepairHistoryReg = r.vehicleReg;
+    }catch(e){ vehicleRepairHistory = []; lastError = e.message; }
+  }
+  render();
+}
+function odometerOpenCardHtml(){
+  const { remainMs, text } = odometerCountdownParts();
+  return `
+  <div class="card">
+    <h2 class="section-title">Enter Opening Odometer Reading</h2>
+    <p class="muted">You must enter this within 10 minutes of logging in, or you'll be logged out automatically. You can still check the other tabs while this counts down.</p>
+    <div class="countdown${remainMs<120000?" warn":""}" id="odoCountdown">${text}</div>
+    <div class="field">
+      <label>Odometer Reading (km)</label>
+      <input type="text" id="odoOpenValue" value="${odoOpenDraft}" placeholder="e.g. 45210" inputmode="numeric" pattern="[0-9]*" maxlength="7" autocomplete="off" oninput="odoOpenDraft=this.value=this.value.replace(/[^0-9]/g,'');" />
+    </div>
+    <div class="photo-box">
+      ${capturedOpenPhoto ? `<img src="${capturedOpenPhoto}"/><br/>` : ""}
+      <button type="button" class="big-btn secondary" style="margin-top:${capturedOpenPhoto?'10px':'0'};" onclick="captureOpenPhoto()">${capturedOpenPhoto? "📷 Retake Photo" : "📷 Take Odometer Photo"}</button>
+    </div>
+    <button class="big-btn" ${busy?"disabled":""} onclick="submitOdometerOpen()">${busy?'<span class="spinner"></span>Starting...':"Start Trip"}</button>
+  </div>
+  ${manualEntryCodeCardHtml()}`;
+}
+// If a driver genuinely can't enter a reading themselves, they generate this
+// short-lived 6-digit code here and read it out to their Supervisor, who
+// keys the reading in on their behalf after checking it. A ₹100 penalty is
+// applied automatically the moment the Supervisor uses the code, since it
+// means the driver didn't log the reading themselves.
+function manualEntryCodeCardHtml(){
+  const hasCode = shift.manualEntryPin && shift.manualEntryPinExpiresAt && new Date(shift.manualEntryPinExpiresAt).getTime() > Date.now();
+  return `
+  <div class="card">
+    <h2 class="section-title">Can't Enter This Yourself?</h2>
+    <p class="muted">If you genuinely can't enter the reading (phone trouble, injury, etc.), generate a code below and read it out to your Site Supervisor - they can enter it for you. Note: this applies a ₹100 penalty for the missed entry.</p>
+    ${hasCode ? `
+    <div class="countdown" id="manualCodeDisplay" style="letter-spacing:6px;">${shift.manualEntryPin}</div>
+    <p class="muted" style="text-align:center;">Valid until ${fmtTime(shift.manualEntryPinExpiresAt)} - share this with your Supervisor only.</p>
+    <button class="big-btn secondary" ${busy?"disabled":""} onclick="generateManualEntryCode()">Generate a New Code</button>
+    ` : `
+    <button class="big-btn secondary" ${busy?"disabled":""} onclick="generateManualEntryCode()">${busy?'<span class="spinner"></span>Generating...':"Generate Code for Supervisor"}</button>
+    `}
+  </div>`;
+}
+async function generateManualEntryCode(){
+  if(busy) return;
+  lastError = "";
+  busy = true; render();
+  try{
+    const res = await api("/driver-auth/manual-entry-code", {method:"POST"});
+    shift.manualEntryPin = res.code;
+    shift.manualEntryPinExpiresAt = res.expiresAt;
+  }catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+
+// ---------- Upcoming Trips tab ----------
+function upcomingTripsTabHtml(){
+  const up = monthTrips.upcoming || [];
+  const done = monthTrips.completed || [];
+  const rowHtml = (t) => `
+    <div class="trip-item">
+      <div class="date">${fmtDate(t.date)}${t.scheduledTime? " &middot; "+t.scheduledTime : ""}</div>
+      <div class="desc">${t.pickupPoint || "Pickup TBD"} &rarr; ${t.dropPoint || "Drop TBD"}</div>
+      <span class="badge ${t.status}">${t.status==="in_progress"?"In Progress":"Upcoming"}</span>
+      ${t.status==="upcoming" ? `
+      <div class="trip-actions">
+        <button ${busy?"disabled":""} onclick="markTripStatus('${t.id}','in_progress')">Start Trip</button>
+        <button ${busy?"disabled":""} onclick="requestLeaveForTrip('${t.id}','${t.date}')">Request Leave</button>
+      </div>` : ""}
+    </div>`;
+  const leaveRowHtml = (l) => `
+    <div class="trip-item">
+      <div class="date">${fmtDate(l.start)}</div>
+      <div class="desc">${l.reason || "Leave requested"}</div>
+      <span class="badge ${l.status}">${l.status.toUpperCase()}</span>
+    </div>`;
+  return `
+  <div class="card">
+    <h2 class="section-title">Upcoming Trips</h2>
+    <div class="month-picker"><input type="month" value="${tripsMonth}" onchange="setTripsMonth(this.value)" /></div>
+    ${up.length===0 ? `<div class="empty">No trips allocated for this month yet.</div>` : up.map(rowHtml).join("")}
+    ${done.length ? `<p class="muted" style="margin-top:10px;">Completed this month</p>` + done.map(rowHtml).join("") : ""}
+  </div>
+  <div class="card">
+    <h2 class="section-title">My Leave Requests</h2>
+    ${myLeaveRequests.length===0 ? `<div class="empty">No leave requests yet.</div>` : myLeaveRequests.map(leaveRowHtml).join("")}
+  </div>`;
+}
+
+// ---------- Profile tab (Attendance + Payroll + Settings combined) ----------
+function attendanceCardHtml(){
+  const rows = attendanceRows.map(r=>`
+    <tr>
+      <td>${fmtDate(r.date)}</td>
+      <td>${fmtTime(r.loginAt)}</td>
+      <td>${r.logoutAt ? fmtTime(r.logoutAt) : (r.autoClosedReason ? "Auto-closed" : "-")}</td>
+      <td>${r.hours!=null ? r.hours+" hrs" : "-"}</td>
+      <td>${r.distanceKm!=null ? r.distanceKm+" km" : "-"}</td>
+    </tr>`).join("");
+  return `
+  <div class="card">
+    <h2 class="section-title">Attendance</h2>
+    <div class="month-picker"><input type="month" value="${attendanceMonth}" onchange="setAttendanceMonth(this.value)" /></div>
+    ${attendanceRows.length===0 ? `<div class="empty">No attendance records for this month.</div>` : `
+    <table>
+      <tr><th>Date</th><th>Login</th><th>Logout</th><th>Hours</th><th>Distance</th></tr>
+      ${rows}
+    </table>`}
+  </div>`;
+}
+function accountInfoCardHtml(){
+  const dot = locationOk ? "" : " off";
+  const shiftOpen = shift && (shift.status==="awaiting_odometer" || shift.status==="on_trip");
+  const logoutNote = shift && shift.status==="ready_to_logout"
+    ? "Your closing odometer reading is saved - tap Log Out below to finish."
+    : shiftOpen
+      ? "Your shift is still open today (closing odometer reading not submitted yet). Tapping Log Out will sign you out of this device - your shift stays open so you (or the office) can finish closing it later. To fully end your day, go to the Current Trip tab and save your closing odometer reading first."
+      : "";
+  return `
+  <div class="card">
+    <h2 class="section-title">Account Info</h2>
+    <div class="doc-row"><div>Name</div><div>${driver.name}</div></div>
+    <div class="doc-row"><div>Mobile Number</div><div>${driver.phone || "-"}</div></div>
+    <div class="doc-row"><div>License Number</div><div>${driver.licenseNumber || "-"}</div></div>
+    <div class="doc-row"><div>Driving Level</div><div>${driver.drivingLevel || "-"}</div></div>
+    <div class="doc-row"><div>Location Tracking</div><div class="status-pill"><span class="dot${dot}"></span>${locationOk?"On":"Off"}</div></div>
+    ${logoutNote ? `<p class="muted" style="margin-top:12px;">${logoutNote}</p>` : ""}
+    <button class="big-btn danger" style="margin-top:14px;" ${busy?"disabled":""} onclick="handleAccountLogout()">${busy?'<span class="spinner"></span>Logging out...':"Log Out"}</button>
+  </div>`;
+}
+// Always-available Logout from the Profile tab. If the shift is already
+// closed out (or there's no shift), this fully signs the driver out via the
+// backend, same as the swipe control. If the shift is still open (odometer
+// not yet closed), we can't silently end it - the office needs that closing
+// reading for mileage/fuel tracking - so this just clears the session on
+// this device; the driver's shift stays active and boot() will pick right
+// back up where they left off next time they log in (any device).
+async function handleAccountLogout(){
+  if(busy) return;
+  if(shift && shift.status==="ready_to_logout"){ await doDriverLogout(); return; }
+  if(shift && (shift.status==="awaiting_odometer" || shift.status==="on_trip")){
+    const ok = confirm("Your shift is still open today (closing odometer reading not submitted). Sign out of this device now? Your shift will stay open so you can finish it later.");
+    if(!ok) return;
+  }
+  resetSession();
+  render();
+}
+function profileTabHtml(){
+  return payslipCardHtml() + attendanceCardHtml() + accountInfoCardHtml();
+}
+
+// ---------- Documents tab ----------
+function docRowHtml(label, number, url, date){
+  const meta = [number, date ? fmtDate(date) : ""].filter(Boolean).join(" - ");
+  return `
+  <div class="doc-row">
+    <div><b>${label}</b>${meta ? ` <span class="muted">(${meta})</span>` : ""}</div>
+    ${url ? `<a href="${url}" target="_blank" rel="noopener" class="dl-link">Download</a>` : `<span class="muted">Not uploaded yet</span>`}
+  </div>`;
+}
+function documentsTabHtml(){
+  if(!documentsData) return `<div class="card"><h2 class="section-title">Documents</h2><div class="empty"><span class="spinner"></span>Loading...</div></div>`;
+  const p = documentsData.personal;
+  const personalHtml = [
+    docRowHtml("Driving License", p.licenseNumber, p.licenseCopyUrl),
+    docRowHtml("Aadhar Card", p.aadharNumber, p.aadharCopyUrl),
+    docRowHtml("PAN Card", p.panNumber, p.panCopyUrl),
+    docRowHtml("Bank Cancelled Cheque", "", p.bankChequeUrl),
+    docRowHtml("UAN / PF Certificate", p.uanNumber, p.pfCertificateUrl),
+    docRowHtml("ESI Certificate", p.esiNumber, p.esiCertificateUrl),
+    docRowHtml("Health Record", p.healthRecordNumber, p.healthRecordCopyUrl, p.healthRecordDate),
+    docRowHtml("Driver Training Certificate", p.trainingCertNumber, p.trainingCertCopyUrl, p.trainingCertDate),
+    docRowHtml("Police Verification Certificate", p.policeVerificationNumber, p.policeVerificationCopyUrl, p.policeVerificationDate),
+  ].join("");
+  const bankHtml = (p.bankAccountNumber || p.bankIfsc || p.bankAccountHolderName) ? `
+    <div class="doc-row" style="display:block;">
+      <b>Account Details</b>
+      <div class="muted" style="margin-top:4px;">
+        ${p.bankAccountHolderName ? `Name: ${p.bankAccountHolderName}<br/>` : ""}
+        ${p.bankAccountNumber ? `A/C No: ${p.bankAccountNumber}<br/>` : ""}
+        ${p.bankIfsc ? `IFSC: ${p.bankIfsc}` : ""}
+      </div>
+    </div>` : "";
+  const v = documentsData.vehicle;
+  const vehicleHtml = v
+    ? Object.keys(v.docs).map(docType=>{
+        const doc = v.docs[docType];
+        return docRowHtml(DOC_TYPE_LABELS[docType] || docType, doc.number, doc.copyUrl) +
+          (doc.expiry ? `<div class="muted" style="margin:-6px 0 8px;">Expiry: ${doc.expiry}</div>` : "");
+      }).join("")
+    : `<div class="empty">You're not currently mapped to a vehicle.</div>`;
+  return `
+  <div class="card">
+    <h2 class="section-title">My Documents</h2>
+    ${personalHtml}
+    ${bankHtml}
+  </div>
+  <div class="card">
+    <h2 class="section-title">Vehicle Documents${v ? " - "+v.reg : ""}</h2>
+    <p class="muted">For RTA checks. View/download only.</p>
+    ${vehicleHtml}
+  </div>`;
+}
+
+function closingOdometerCardHtml(){
+  return `
+  <div class="card">
+    <h2 class="section-title">End Shift</h2>
+    <p class="muted">Opening reading: <strong>${shift.odometerOpen} km</strong> at ${fmtTime(shift.odometerOpenAt)}</p>
+    <p class="muted">Once your trip(s) are done, enter the closing odometer reading with a photo to finish your shift.</p>
+    <div class="field">
+      <label>Closing Odometer Reading (km)</label>
+      <input type="text" id="odoCloseValue" value="${odoCloseDraft}" placeholder="e.g. 45340" inputmode="numeric" pattern="[0-9]*" maxlength="7" autocomplete="off" oninput="odoCloseDraft=this.value=this.value.replace(/[^0-9]/g,'');" />
+    </div>
+    <div class="photo-box">
+      ${capturedClosePhoto ? `<img src="${capturedClosePhoto}"/><br/>` : ""}
+      <button type="button" class="big-btn secondary" style="margin-top:${capturedClosePhoto?'10px':'0'};" onclick="captureClosePhoto()">${capturedClosePhoto? "📷 Retake Photo" : "📷 Take Odometer Photo"}</button>
+    </div>
+    <button class="big-btn" ${busy?"disabled":""} onclick="submitOdometerClose()">${busy?'<span class="spinner"></span>Saving...':"Save Closing Reading"}</button>
+  </div>
+  ${manualEntryCodeCardHtml()}`;
+}
+
+function logoutCardHtml(){
+  return `
+  <div class="card">
+    <h2 class="section-title">Ready to Log Out</h2>
+    <p class="muted">Closing reading: <strong>${shift.odometerClose} km</strong> at ${fmtTime(shift.odometerCloseAt)}</p>
+    <p class="muted" style="text-align:center;margin:4px 0 14px;">${busy? '<span class="spinner"></span>Logging out...' : "Slide the button all the way to log out"}</p>
+    <div class="swipe-track logout" id="logoutSwipe">
+      <div class="swipe-label">Swipe to Log Out &rarr;</div>
+      <div class="swipe-thumb">&rarr;</div>
+    </div>
+  </div>`;
+}
+
+function payslipCardHtml(){
+  let inner;
+  if(payslipLoading) inner = `<div class="empty"><span class="spinner"></span>Loading...</div>`;
+  else if(!payslip || !payslip.approved) inner = `<div class="empty">Your payslip for this month hasn't been approved by HR yet.</div>`;
+  else {
+    const p = payslip.payslip;
+    inner = `
+      ${p.earnings.map(e=>`<div class="payslip-row"><span>${e.label}</span><span>${money(e.amount)}</span></div>`).join("")}
+      ${p.deductions.map(d=>`<div class="payslip-row"><span>${d.label}</span><span>-${money(d.amount)}</span></div>`).join("")}
+      <div class="payslip-row total"><span>Net Pay</span><span>${money(p.netPay)}</span></div>
+      <div class="dl-row">
+        <button class="big-btn secondary" onclick="downloadDriverPayslip('pdf')">Download PDF</button>
+        <button class="big-btn secondary" onclick="downloadDriverPayslip('csv')">Download CSV</button>
+        <button class="big-btn secondary" onclick="downloadDriverPayslip('xlsx')">Download Excel</button>
+      </div>`;
+  }
+  return `
+  <div class="card">
+    <h2 class="section-title">My Payslip</h2>
+    <div class="month-picker">
+      <input type="month" value="${payslipMonth}" onchange="setPayslipMonth(this.value)" />
+    </div>
+    ${inner}
+  </div>`;
+}
+
+// ---------- Workshop staff screens ----------
+// Manager/Supervisor get an Incoming Queue (assign to a Mechanic/Helper/
+// Electrician - matches the Owner's rule that only those two roles can
+// assign work). Everyone in Workshop gets My Repairs (start/complete
+// whatever's assigned to them) and Bulk Purchases. Deliberately simpler
+// than the staff app's version - a plain photo attachment for the invoice
+// rather than the OpenCV auto-scan-to-PDF flow, matching how much lighter
+// this mobile portal already is everywhere else (e.g. driver odometer
+// photos are a plain capture too).
+function workshopActiveScreen(){
+  return `
+  <h1 class="page-title">Welcome, <span class="accent-script">${workshopUser.name}</span></h1>
+  ${errorBannerHtml()}
+  ${workshopTabBarHtml()}
+  ${workshopTabContentHtml()}
+  `;
+}
+function workshopTabsFor(role){
+  const tabs = [];
+  if(WORKSHOP_MANAGER_ROLES.includes(role)) tabs.push(["queue","Incoming Queue"]);
+  tabs.push(["myrepairs","My Repairs"]);
+  tabs.push(["purchases","Bulk Purchases"]);
+  // Free, built-in Fleet Assistant - same zero-cost tool the main staff app
+  // offers every role, available here too so Workshop staff can ask it
+  // basic fleet questions (mileage, idle vehicles, a vehicle's cost, etc.).
+  tabs.push(["assistant","💡 Fleet Assistant"]);
+  tabs.push(["account","Account"]);
+  return tabs;
+}
+function workshopTabBarHtml(){
+  const tabs = workshopTabsFor(workshopUser.role);
+  return `<div class="driver-tabbar">${tabs.map(([k,l])=>
+    `<button class="${workshopTab===k?'active':''}" onclick="setWorkshopTab('${k}')">${l}</button>`
+  ).join("")}</div>`;
+}
+function workshopTabContentHtml(){
+  if(workshopTab==="queue") return workshopQueueTabHtml();
+  if(workshopTab==="purchases") return workshopPurchasesTabHtml();
+  if(workshopTab==="assistant") return workshopAssistantTabHtml();
+  if(workshopTab==="account") return workshopAccountTabHtml();
+  return workshopMyRepairsTabHtml();
+}
+
+// ---- Incoming Queue (Manager/Supervisor only) ----
+function workshopQueueTabHtml(){
+  const incoming = workshopRequests.filter(r=>r.status==="requested");
+  const rowHtml = (r) => `
+    <div class="trip-item">
+      <div class="date">${fmtDate(r.createdAt.slice(0,10))} &middot; ${r.vehicleReg}</div>
+      <div class="desc">${r.issueDescription}</div>
+      <div class="meta">Urgency: ${r.urgency} &middot; Raised by ${r.raisedByName}</div>
+      <div class="field left" style="margin-top:10px;margin-bottom:6px;">
+        <label>Assign to</label>
+        <select id="wsAssign_${r.id}">
+          <option value="">Select staff...</option>
+          ${workshopStaffList.map(s=>`<option value="${s.id}">${s.name} (${roleLabelClient(s.role)})</option>`).join("")}
+        </select>
+      </div>
+      <button class="big-btn secondary" ${workshopBusy?"disabled":""} onclick="assignWorkshopRequest('${r.id}')">Assign</button>
+    </div>`;
+  return `
+  <div class="card">
+    <h2 class="section-title">Incoming Queue ${incoming.length? `<span class="badge pending">${incoming.length}</span>`:''}</h2>
+    ${incoming.length===0 ? `<div class="empty">Nothing waiting on assignment.</div>` : incoming.map(rowHtml).join("")}
+  </div>`;
+}
+async function assignWorkshopRequest(id){
+  const sel = document.getElementById(`wsAssign_${id}`);
+  const assignedTo = sel ? sel.value : "";
+  if(!assignedTo){ alert("Select a staff member to assign this to."); return; }
+  if(workshopBusy) return;
+  lastError = "";
+  workshopBusy = true; render();
+  try{
+    await workshopApi(`/workshop-auth/repair-requests/${id}/assign`, {method:"PATCH", body: JSON.stringify({assignedTo})});
+    await loadWorkshopTabData();
+  }catch(e){ lastError = e.message; }
+  workshopBusy = false; render();
+}
+
+// ---- My Repairs (everyone in Workshop) ----
+function workshopMyRepairsTabHtml(){
+  const mine = workshopRequests.filter(r=>r.assignedTo===workshopUser.id && ["assigned","in_progress"].includes(r.status));
+  const doneMine = workshopRequests.filter(r=>r.assignedTo===workshopUser.id && r.status==="completed").slice(0,10);
+  return `
+  <div class="card">
+    <h2 class="section-title">My Assigned Repairs</h2>
+    ${mine.length===0 ? `<div class="empty">Nothing assigned to you right now.</div>` : mine.map(workshopRepairCardHtml).join("")}
+  </div>
+  ${doneMine.length ? `
+  <div class="card">
+    <h2 class="section-title">Recently Completed</h2>
+    ${doneMine.map(r=>`<div class="trip-item"><div class="date">${r.vehicleReg}</div><div class="desc">${r.issueDescription}</div><span class="badge completed">Completed</span>${r.totalCost!=null?` &middot; ${money(r.totalCost)}`:''}</div>`).join("")}
+  </div>` : ""}`;
+}
+function workshopRepairCardHtml(r){
+  return `
+  <div class="trip-item">
+    <div class="date">${r.vehicleReg}</div>
+    <div class="desc">${r.issueDescription}</div>
+    <div class="meta">Urgency: ${r.urgency} &middot; Raised by ${r.raisedByName}</div>
+    <span class="badge ${r.status}">${r.status==="in_progress"?"In Progress":"Assigned"}</span>
+    ${r.status==="assigned" ? `<div class="trip-actions"><button ${workshopBusy?"disabled":""} onclick="startWorkshopRequest('${r.id}')">Start Work</button></div>` : ""}
+    ${r.status==="in_progress" ? `<div id="wsCompleteForm_${r.id}" style="margin-top:10px;"><button class="big-btn secondary" ${workshopBusy?"disabled":""} onclick="openWorkshopCompleteForm('${r.id}')">Mark Complete</button></div>` : ""}
+  </div>`;
+}
+async function startWorkshopRequest(id){
+  if(workshopBusy) return;
+  lastError = "";
+  workshopBusy = true; render();
+  try{
+    await workshopApi(`/workshop-auth/repair-requests/${id}/start`, {method:"PATCH"});
+    await loadWorkshopTabData();
+  }catch(e){ lastError = e.message; }
+  workshopBusy = false; render();
+}
+function openWorkshopCompleteForm(id){
+  const el = document.getElementById(`wsCompleteForm_${id}`);
+  if(!el) return;
+  el.innerHTML = `
+    <div class="field left"><label>What was done</label><input type="text" id="wsWd_${id}" placeholder="e.g. Replaced brake pads" /></div>
+    <div id="wsParts_${id}">
+      <div class="field left"><label>Part/Consumable</label><input type="text" class="wsPartName" placeholder="e.g. Brake pads" /></div>
+      <div class="field left"><label>Qty</label><input type="number" step="0.1" class="wsPartQty" value="1" /></div>
+      <div class="field left"><label>Unit</label><input type="text" class="wsPartUnit" placeholder="e.g. set" /></div>
+      <div class="field left"><label>Cost (&#8377;)</label><input type="number" class="wsPartCost" /></div>
+    </div>
+    <button class="big-btn secondary" type="button" onclick="addWorkshopPartRow('${id}')">+ Add another part</button>
+    <button class="big-btn" style="margin-top:10px;" ${workshopBusy?"disabled":""} onclick="submitWorkshopComplete('${id}')">Submit &amp; Create Expense</button>`;
+}
+function addWorkshopPartRow(id){
+  const wrap = document.getElementById(`wsParts_${id}`);
+  const frag = document.createElement("div");
+  frag.innerHTML = `
+    <div class="field left"><label>Part/Consumable</label><input type="text" class="wsPartName" /></div>
+    <div class="field left"><label>Qty</label><input type="number" step="0.1" class="wsPartQty" value="1" /></div>
+    <div class="field left"><label>Unit</label><input type="text" class="wsPartUnit" /></div>
+    <div class="field left"><label>Cost (&#8377;)</label><input type="number" class="wsPartCost" /></div>`;
+  while(frag.firstChild) wrap.appendChild(frag.firstChild);
+}
+async function submitWorkshopComplete(id){
+  const workDone = (document.getElementById(`wsWd_${id}`)||{}).value || "";
+  const names = document.querySelectorAll(`#wsParts_${id} .wsPartName`);
+  const qtys = document.querySelectorAll(`#wsParts_${id} .wsPartQty`);
+  const units = document.querySelectorAll(`#wsParts_${id} .wsPartUnit`);
+  const costs = document.querySelectorAll(`#wsParts_${id} .wsPartCost`);
+  const partsUsed = [];
+  for(let i=0;i<names.length;i++){
+    const name = names[i].value, cost = Number(costs[i].value)||0;
+    if(name && cost>0) partsUsed.push({ name, qty: Number(qtys[i].value)||1, unit: units[i].value, cost });
+  }
+  if(!workDone.trim()){ alert("Describe the work that was done."); return; }
+  if(!partsUsed.length){ alert("Add at least one part/consumable with its cost."); return; }
+  if(workshopBusy) return;
+  lastError = "";
+  workshopBusy = true; render();
+  try{
+    await workshopApi(`/workshop-auth/repair-requests/${id}/complete`, {method:"PATCH", body: JSON.stringify({workDone, partsUsed})});
+    await loadWorkshopTabData();
+    workshopBusy = false; render();
+    alert("Repair marked complete. A vehicle expense has been created and sent for approval.");
+    return;
+  }catch(e){ lastError = e.message; }
+  workshopBusy = false; render();
+}
+
+// ---- Bulk Purchases (everyone in Workshop) ----
+function workshopPurchasesTabHtml(){
+  return `
+  <div class="card">
+    <h2 class="section-title">Log a Bulk Purchase</h2>
+    <p class="muted">Add each item you bought, the total amount, and a photo of the invoice.</p>
+    <div id="wsPurchaseItemsRows">
+      <div class="field left"><label>Item</label><input type="text" class="wsItemName" placeholder="e.g. Adblue" /></div>
+      <div class="field left"><label>Qty</label><input type="number" step="0.1" class="wsItemQty" placeholder="e.g. 4" /></div>
+      <div class="field left"><label>Unit</label><input type="text" class="wsItemUnit" placeholder="e.g. Litres" /></div>
+    </div>
+    <button class="big-btn secondary" type="button" onclick="addWorkshopPurchaseItemRow()">+ Add another item</button>
+    <div class="field left" style="margin-top:12px;"><label>Total Amount (&#8377;)</label><input type="number" id="wsTotalAmount" /></div>
+    <div class="field left"><label>Notes (optional)</label><input type="text" id="wsNotes" /></div>
+    <div class="photo-box">
+      ${pendingWorkshopInvoice ? `<img src="${pendingWorkshopInvoice}"/><br/>` : ""}
+      <input type="file" id="wsInvoiceFileInput" accept="image/*" capture="environment" style="display:none" onchange="handleWorkshopInvoicePhoto(event)" />
+      <button type="button" class="big-btn secondary" style="margin-top:${pendingWorkshopInvoice?'10px':'0'};" onclick="document.getElementById('wsInvoiceFileInput').click()">${pendingWorkshopInvoice? "📷 Retake Invoice Photo" : "📷 Attach Invoice Photo"}</button>
+    </div>
+    <button class="big-btn" ${workshopBusy?"disabled":""} onclick="submitWorkshopPurchaseMobile()">${workshopBusy?'<span class="spinner"></span>Saving...':"Log Purchase"}</button>
+  </div>
+  <div class="card">
+    <h2 class="section-title">Your Recent Bulk Purchases</h2>
+    ${workshopPurchases.length===0 ? `<div class="empty">No purchases logged yet.</div>` : workshopPurchases.slice(0,20).map(p=>`
+      <div class="trip-item">
+        <div class="date">${fmtDate(p.createdAt.slice(0,10))}</div>
+        <div class="desc">${p.items.map(i=>`${i.qty}${i.unit?' '+i.unit:''} ${i.name}`).join(", ")}</div>
+        <div class="meta">${money(p.totalAmount)}${p.invoiceUrl?` &middot; <a href="${p.invoiceUrl}" target="_blank">View invoice</a>`:''}</div>
+      </div>`).join("")}
+  </div>`;
+}
+function addWorkshopPurchaseItemRow(){
+  const wrap = document.getElementById("wsPurchaseItemsRows");
+  const frag = document.createElement("div");
+  frag.innerHTML = `
+    <div class="field left"><label>Item</label><input type="text" class="wsItemName" /></div>
+    <div class="field left"><label>Qty</label><input type="number" step="0.1" class="wsItemQty" /></div>
+    <div class="field left"><label>Unit</label><input type="text" class="wsItemUnit" /></div>`;
+  while(frag.firstChild) wrap.appendChild(frag.firstChild);
+}
+function handleWorkshopInvoicePhoto(e){
+  const file = e.target.files[0];
+  e.target.value = "";
+  if(!file) return;
+  downscaleImage(file, 900, 0.8, (dataUrl)=>{ pendingWorkshopInvoice = dataUrl; render(); });
+}
+async function submitWorkshopPurchaseMobile(){
+  const names = document.querySelectorAll("#wsPurchaseItemsRows .wsItemName");
+  const qtys = document.querySelectorAll("#wsPurchaseItemsRows .wsItemQty");
+  const units = document.querySelectorAll("#wsPurchaseItemsRows .wsItemUnit");
+  const items = [];
+  for(let i=0;i<names.length;i++){
+    if(names[i].value) items.push({ name: names[i].value, qty: Number(qtys[i].value)||1, unit: units[i].value });
+  }
+  const totalAmount = Number((document.getElementById("wsTotalAmount")||{}).value);
+  const notes = (document.getElementById("wsNotes")||{}).value || "";
+  if(!items.length){ alert("Add at least one item purchased."); return; }
+  if(!totalAmount || totalAmount<=0){ alert("Enter a valid total amount."); return; }
+  if(!pendingWorkshopInvoice){ alert("Attach a photo of the invoice."); return; }
+  if(workshopBusy) return;
+  lastError = "";
+  workshopBusy = true; render();
+  try{
+    await workshopApi("/workshop-auth/workshop-purchases", {method:"POST", body: JSON.stringify({items, totalAmount, invoice: pendingWorkshopInvoice, notes})});
+    pendingWorkshopInvoice = null;
+    await loadWorkshopTabData();
+    workshopBusy = false; render();
+    alert("Purchase logged.");
+    return;
+  }catch(e){ lastError = e.message; }
+  workshopBusy = false; render();
+}
+
+// ---- Fleet Assistant (everyone in Workshop, free - same backend as staff app) ----
+const WS_AI_SUGGESTED_PROMPTS = [
+  "Any idle vehicles right now?",
+  "Which vehicles have the worst mileage?",
+  "Any documents expiring soon?",
+];
+function workshopAssistantTabHtml(){
+  const messagesHtml = wsChatHistory.length
+    ? wsChatHistory.map(m => `
+      <div class="ws-ai-msg ${m.role}">
+        ${m.role==="assistant" ? '<span class="ws-ai-tag">Fleet Assistant</span>' : ''}${escapeHtmlWs(m.content)}
+        ${m.role==="assistant" && m.tool ? `<div class="ws-ai-tools-used">Checked: ${m.tool.replace(/_/g,' ')}</div>` : ''}
+      </div>`).join("")
+    : `<div class="empty">Ask a basic fleet question - mileage, idle vehicles, documents, costs. Free and built in.</div>`;
+  return `
+  <div class="ws-ai-hero">
+    <h1>💡 Fleet Assistant</h1>
+    <p>Free, built into the app - ask a basic question and it looks up the real numbers.</p>
+  </div>
+  <div class="card">
+    <div class="ws-ai-chat-window" id="wsAiChatWindow">${messagesHtml}${wsChatBusy ? '<div class="ws-ai-msg assistant"><span class="ws-ai-tag">Fleet Assistant</span><span class="spinner"></span> Checking the data...</div>' : ''}</div>
+    ${wsChatError ? `<div class="banner error">${wsChatError}</div>` : ''}
+    ${!wsChatHistory.length ? `<div class="ws-ai-suggest-row">${WS_AI_SUGGESTED_PROMPTS.map(p=>`<button type="button" class="ws-ai-suggest-chip" onclick="askWorkshopAiSuggested(${JSON.stringify(p)})">${p}</button>`).join("")}</div>` : ""}
+    <div class="ws-ai-input-row">
+      <textarea id="wsAiChatInputBox" placeholder="Ask about mileage, documents, idle vehicles..." ${wsChatBusy?"disabled":""} onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); sendWorkshopAiChatMessage();}"></textarea>
+      <button class="big-btn" ${wsChatBusy?"disabled":""} onclick="sendWorkshopAiChatMessage()">${wsChatBusy?'<span class="spinner"></span>':'Send'}</button>
+    </div>
+  </div>`;
+}
+function askWorkshopAiSuggested(text){
+  const box = document.getElementById("wsAiChatInputBox");
+  if(box) box.value = text;
+  sendWorkshopAiChatMessage();
+}
+async function sendWorkshopAiChatMessage(){
+  const box = document.getElementById("wsAiChatInputBox");
+  const text = (box && box.value || "").trim();
+  if(!text || wsChatBusy) return;
+  wsChatHistory.push({role:"user", content:text});
+  wsChatBusy = true; wsChatError = "";
+  render();
+  scrollWorkshopAiChatToBottom();
+  try{
+    const res = await workshopApi("/workshop-auth/smart-assistant/query", {method:"POST", body: JSON.stringify({message:text})});
+    wsChatHistory.push({role:"assistant", content: res.reply, tool: res.tool || ""});
+  }catch(e){
+    wsChatError = e.message;
+  }
+  wsChatBusy = false;
+  render();
+  scrollWorkshopAiChatToBottom();
+}
+function scrollWorkshopAiChatToBottom(){
+  const w = document.getElementById("wsAiChatWindow");
+  if(w) w.scrollTop = w.scrollHeight;
+}
+
+// ---- Account (everyone in Workshop) ----
+function workshopAccountTabHtml(){
+  return `
+  <div class="card">
+    <h2 class="section-title">Account Info</h2>
+    <div class="doc-row"><div>Name</div><div>${workshopUser.name}</div></div>
+    <div class="doc-row"><div>Role</div><div>${roleLabelClient(workshopUser.role)}</div></div>
+    <div class="doc-row"><div>Mobile Number</div><div>${workshopUser.phone || "-"}</div></div>
+    <button class="big-btn danger" style="margin-top:14px;" ${workshopBusy?"disabled":""} onclick="doWorkshopLogout()">${workshopBusy?'<span class="spinner"></span>Logging out...':"Log Out"}</button>
+  </div>`;
+}
+async function doWorkshopLogout(){
+  if(workshopBusy) return;
+  workshopBusy = true; render();
+  try{ await workshopApi("/workshop-auth/logout", {method:"POST"}); }catch(e){}
+  resetWorkshopSession();
+  workshopBusy = false; render();
+}
+
+// Ticks the 10-minute countdown once a second WITHOUT a full re-render -
+// updating the app's whole innerHTML every second was wiping out the
+// odometer input as the driver typed into it (a fresh <input> with no
+// value every tick left about one second to type before it reset). This
+// only touches the countdown's own text/class, so the input (and its
+// value, cursor position, focus) are never disturbed by the clock.
+let odoExpiryHandled = false;
+setInterval(()=>{
+  if(!shift || shift.status!=="awaiting_odometer"){ odoExpiryHandled = false; return; }
+  const el = document.getElementById("odoCountdown");
+  if(!el) return; // this screen isn't the one currently on-screen right now
+  const { remainMs, text } = odometerCountdownParts();
+  el.textContent = text;
+  el.classList.toggle("warn", remainMs < 120000);
+  if(remainMs <= 0 && !odoExpiryHandled){
+    odoExpiryHandled = true;
+    refreshMe(); // picks up the server's auto-close and switches screens
+  }
+}, 1000);
+</script>
+</body>
+</html>

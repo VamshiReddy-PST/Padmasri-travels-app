@@ -1,0 +1,294 @@
+// One-time generator: expands data/seed.json with a realistic vehicle +
+// route + driver for every client that doesn't have one yet, plus a
+// couple of sample Subvendors, so the app has representative data to
+// explore/test every feature against. Run once, then discard.
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+
+const PROJECT = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const SEED_PATH = path.join(PROJECT, "data/seed.json");
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = crypto.scryptSync(String(password), salt, 64).toString("hex");
+  return `${salt}:${hash}`;
+}
+function uid(prefix) {
+  return prefix + "_" + crypto.randomBytes(6).toString("hex");
+}
+
+const seed = JSON.parse(fs.readFileSync(SEED_PATH, "utf8"));
+
+const HYD_PLACES = [
+  "Alwal","ECIL","Balnagar","Miyapur","Kukatpally","Ameerpet","Begumpet","Secunderabad",
+  "Uppal","LB Nagar","Dilsukhnagar","Malakpet","Abids","Koti","Punjagutta","SR Nagar",
+  "Madhapur","Gachibowli","Kondapur","Hitech City","Jubilee Hills","Banjara Hills",
+  "Mehdipatnam","Tolichowki","Attapur","Rajendranagar","Shamshabad","Shamirpet","Bowenpally",
+  "Trimulgherry","Sainikpuri","Nagole","Vanasthalipuram","Chaitanyapuri","Moosapet",
+  "Erragadda","Sanathnagar","Bharat Nagar","Yousufguda","Somajiguda","Basheerbagh",
+  "Nampally","Barkatpura","Chikkadpally","Himayatnagar","Narayanguda","Kachiguda",
+  "Karkhana","Bolarum","Alugadda Bavi",
+];
+const MAKE_MODEL = [
+  ["Tata","Winger"],["Force","Traveller"],["Toyota","Innova"],["Mahindra","Bolero"],
+  ["Ashok Leyland","Cheetah"],["Eicher","Skyline"],["Maruti Suzuki","Ertiga"],
+  ["Tata","Marcopolo"],["Force","Urbania"],["Toyota","Etios"],
+];
+const DRIVER_FIRST = [
+  "Ramesh","Suresh","Ganesh","Srinivas","Venkatesh","Rajesh","Anand","Prakash","Krishna",
+  "Ravi","Kumar","Satish","Mahender","Narsimha","Ramulu","Yadav","Shankar","Balaji",
+  "Chandra","Sekhar","Nagesh","Rajender","Ashok","Vinod","Sudhakar","Vijay","Sagar",
+  "Ramana","Srikanth","Bhaskar","Mallesh","Yellaiah","Narender","Sathish","Ravinder",
+  "Laxman","Anji","Pandu","Sammaiah","Malla","Rajaiah","Chinna","Peddi","Veeraiah",
+  "Nageswara","Somaiah","Buchi","Krishnaiah","Ellaiah","Gopal",
+];
+const DRIVER_LAST = ["Reddy","Rao","Goud","Naidu","Yadav","Kumar","Sharma","Chary","Gowda","Naik"];
+
+function rcDateFor(idx){
+  const yearsAgo = 1 + (idx % 6);
+  const d = new Date(); d.setFullYear(d.getFullYear() - yearsAgo); d.setMonth(idx % 12); d.setDate(5 + (idx % 20));
+  return d.toISOString().slice(0,10);
+}
+function futureDate(monthsAhead){
+  const d = new Date(); d.setMonth(d.getMonth() + monthsAhead);
+  return d.toISOString().slice(0,10);
+}
+function pastDate(monthsAgo){
+  const d = new Date(); d.setMonth(d.getMonth() - monthsAgo);
+  return d.toISOString().slice(0,10);
+}
+
+let vehicleSeq = 100; // v100, v101, ... to avoid clashing with existing v1-v6
+let driverSeq = 100;
+let placeIdx = 0;
+function nextPlace(){ return HYD_PLACES[placeIdx++ % HYD_PLACES.length]; }
+
+const existingSupervisorIds = ["u_ravi","u_suresh"];
+const existingSiteIds = seed.sites.map(s=>s.id);
+
+let newVehiclesCount = 0;
+let newDriversCount = 0;
+let routesAdded = 0;
+
+// Map of clientId -> vehicles already present in seed (before this script runs)
+const vehiclesByClient = {};
+(seed.vehicles||[]).forEach(v => { if (v.clientId) { vehiclesByClient[v.clientId] = vehiclesByClient[v.clientId] || []; vehiclesByClient[v.clientId].push(v); } });
+
+seed.clients.forEach((client, idx) => {
+  // Give every client without a route catalog yet 2 routes: "<n>A"/"<n>B"
+  // (mirrors AIESL's existing real "6A/6B/6C/6D" numbering convention).
+  if (!client.routes || client.routes.length === 0) {
+    const num = idx + 1;
+    const r1 = { id: uid("rt"), name: nextPlace(), routeNumber: `${num}A` };
+    const r2 = { id: uid("rt"), name: nextPlace(), routeNumber: `${num}B` };
+    client.routes = [r1, r2];
+    client.routeCap = Math.max(client.routeCap || 0, 2);
+    routesAdded += 2;
+  }
+
+  const hasVehicle = vehiclesByClient[client.id] && vehiclesByClient[client.id].length > 0;
+  if (hasVehicle) {
+    // Retrofit: point its existing vehicle(s) at the client's first route
+    // now that a catalog exists, since Route ID is meant to be mandatory
+    // going forward.
+    vehiclesByClient[client.id].forEach(v => {
+      if (!v.routeId) {
+        v.routeId = client.routes[0].id;
+        v.route = client.routes[0].routeNumber;
+      }
+    });
+    return;
+  }
+
+  // No vehicle for this client yet - add one, with its own new driver.
+  const [make, model] = MAKE_MODEL[idx % MAKE_MODEL.length];
+  const isBus = idx % 3 === 0;
+  const vehicleType = isBus ? "Bus" : "Cab";
+  const fuelType = isBus ? "Diesel" : ["Diesel","Petrol","CNG","EV"][idx % 4];
+  const seating = isBus ? [13,17,25,32][idx % 4] : [4,6,7][idx % 3];
+  const route = client.routes[0];
+  const vId = `v${vehicleSeq++}`;
+  const dId = `d${driverSeq++}`;
+  const regLetters = String.fromCharCode(65 + (idx % 26)) + String.fromCharCode(65 + ((idx*3) % 26));
+  const reg = `TS 09 ${regLetters} ${2000 + idx}`;
+
+  const firstName = DRIVER_FIRST[idx % DRIVER_FIRST.length];
+  const lastName = DRIVER_LAST[idx % DRIVER_LAST.length];
+  const driverName = `${firstName} ${lastName}`;
+  const driverPhone = `90003${String(10000 + idx).slice(-5)}`;
+
+  // A handful of vehicles get a near-expiry or already-expired document, so
+  // the doc-expiry report has something real to show; the rest are safely
+  // far in the future.
+  const docStress = idx % 7 === 0 ? "expired" : idx % 5 === 0 ? "soon" : "ok";
+  const permitExpiry = docStress === "expired" ? pastDate(1) : docStress === "soon" ? futureDate(1) : futureDate(14);
+  const insuranceExpiry = docStress === "soon" ? futureDate(2) : futureDate(11);
+
+  const vehicle = {
+    id: vId,
+    reg,
+    route: route.routeNumber,
+    routeId: route.id,
+    usage: idx % 4 === 3 ? "client_on_demand" : "fixed_route",
+    clientId: client.id,
+    siteId: existingSiteIds[idx % existingSiteIds.length],
+    supervisorId: existingSupervisorIds[idx % existingSupervisorIds.length],
+    driverId: dId,
+    driverAssignedDate: pastDate(1 + (idx % 20)),
+    make, model,
+    engineNo: `ENG${2000+idx}`,
+    chassisNo: `CHS${2000+idx}`,
+    rcDate: rcDateFor(idx),
+    seatingCapacity: seating,
+    vehicleType, fuelType,
+    standardMileage: isBus ? 4.0 + (idx % 5) * 0.2 : 12 + (idx % 6),
+    lastOdometer: 30000 + idx * 733,
+    subvendorId: null,
+    billing: null,
+    docs: {
+      RC: { number: `RC${2000+idx}`, expiry: futureDate(180) },
+      Permit: { number: `PM${3000+idx}`, expiry: permitExpiry, isStatePermit: idx % 6 === 0, districtCount: idx % 6 === 0 ? 0 : (1 + (idx % 2)), districtNames: idx % 6 === 0 ? "" : "Hyderabad, Rangareddy" },
+      Insurance: { number: `INS${4000+idx}`, expiry: insuranceExpiry },
+      Fitness: { number: `FIT${5000+idx}`, expiry: futureDate(10) },
+      Tax: { number: `TAX${6000+idx}`, expiry: futureDate(9) },
+      PUC: { number: `PUC${7000+idx}`, expiry: docStress === "expired" ? pastDate(1) : futureDate(3) },
+    },
+  };
+  seed.vehicles.push(vehicle);
+  newVehiclesCount++;
+
+  const driver = {
+    id: dId,
+    name: driverName,
+    phone: driverPhone,
+    licenseNumber: `TS09${2018 + (idx % 7)}00${1000 + idx}`,
+    aadharNumber: `${234500000000 + idx * 7}`.slice(0,12),
+    esiNumber: `ESI-${4471200 + idx}`,
+    pfNumber: `TN/CHN/00${9000 + idx}/000/${1000000 + idx}`,
+    uanNumber: `${100234500000 + idx}`.slice(0,12),
+    esiCertificateUrl: null,
+    pfCertificateUrl: null,
+    dateOfJoining: pastDate(3 + (idx % 40)),
+    drivingLevel: idx % 3 === 0 ? "Senior" : "Junior",
+    performanceScore: null,
+    panNumber: idx % 3 === 0 ? `ABCDE${1000+idx}F` : "",
+    panCopyUrl: null,
+    licenseCopyUrl: null,
+    aadharCopyUrl: null,
+    bankAccountNumber: idx % 3 === 0 ? `5021${100000000 + idx}` : "",
+    bankIfsc: idx % 3 === 0 ? "SBIN0001234" : "",
+    bankAccountHolderName: idx % 3 === 0 ? driverName : "",
+    bankChequeUrl: null,
+    pin: "1234",
+  };
+  seed.drivers.push(driver);
+  newDriversCount++;
+});
+
+// ---- A couple of sample Subvendors, each with a linked vehicle + billing
+// contract, and one with an outstanding advance so the interest math is
+// visible from day one.
+if (!Array.isArray(seed.subvendors)) seed.subvendors = [];
+if (!Array.isArray(seed.subvendorPayments)) seed.subvendorPayments = [];
+if (!Array.isArray(seed.subvendorAdvances)) seed.subvendorAdvances = [];
+if (!Array.isArray(seed.subvendorIncomeEntries)) seed.subvendorIncomeEntries = [];
+
+function pickUnlinkedVehicle(){
+  return seed.vehicles.find(v => !v.subvendorId);
+}
+
+const sv1Id = uid("sv");
+seed.subvendors.push({
+  id: sv1Id,
+  name: "Ramesh Cabs & Travels",
+  contactPerson: "Ramesh Yadav",
+  email: "ramesh.cabs@example.com",
+  phone: "9199900001",
+  gstNumber: "36ABCDE1234F1Z5",
+  address: "Plot 12, Balanagar Industrial Area, Hyderabad",
+  passwordHash: hashPassword("Padmasri@0001"),
+  passwordHistory: [],
+  mustChangePassword: true,
+  active: true,
+  createdAt: new Date().toISOString(),
+});
+const sv1Vehicle = pickUnlinkedVehicle();
+if (sv1Vehicle) {
+  sv1Vehicle.subvendorId = sv1Id;
+  sv1Vehicle.billing = { mode: "per_trip", rate: 650, effectiveFrom: pastDate(4), lastPackageAccrualMonth: null, revisions: [] };
+}
+
+const sv2Id = uid("sv");
+seed.subvendors.push({
+  id: sv2Id,
+  name: "Venkatesh Transports",
+  contactPerson: "Venkatesh Goud",
+  email: "",
+  phone: "9199900002",
+  gstNumber: "",
+  address: "",
+  passwordHash: hashPassword("Padmasri@0002"),
+  passwordHistory: [],
+  mustChangePassword: true,
+  active: true,
+  createdAt: new Date().toISOString(),
+});
+const sv2Vehicle = seed.vehicles.filter(v => !v.subvendorId)[1] || pickUnlinkedVehicle();
+if (sv2Vehicle) {
+  sv2Vehicle.subvendorId = sv2Id;
+  sv2Vehicle.billing = { mode: "per_km", rate: 14, effectiveFrom: pastDate(2), lastPackageAccrualMonth: null, revisions: [] };
+}
+
+// A settled-looking advance for sv1 - paid 4 months ago, partially settled,
+// so both "outstanding" and interest math show real numbers immediately.
+const advPaymentId = uid("svpay");
+seed.subvendorPayments.push({
+  id: advPaymentId,
+  subvendorId: sv1Id,
+  vehicleId: sv1Vehicle ? sv1Vehicle.id : null,
+  type: "Advance",
+  amount: 15000,
+  date: pastDate(4),
+  note: "Emergency repair advance",
+  createdBy: "u_owner",
+  createdByName: "Vamshi Reddy",
+  createdAt: new Date(new Date().setMonth(new Date().getMonth()-4)).toISOString(),
+});
+seed.subvendorAdvances.push({
+  id: uid("svadv"),
+  subvendorId: sv1Id,
+  vehicleId: sv1Vehicle ? sv1Vehicle.id : null,
+  paymentId: advPaymentId,
+  principal: 15000,
+  outstandingPrincipal: 10000, // partially settled already, for realism
+  interestAccrued: 0, // will lazily accrue correctly once viewed, based on lastInterestAccrualMonth
+  status: "outstanding",
+  date: pastDate(4),
+  lastInterestAccrualMonth: pastDate(4).slice(0,7),
+  note: "Emergency repair advance",
+  createdAt: new Date().toISOString(),
+});
+seed.subvendorPayments.push({
+  id: uid("svpay"),
+  subvendorId: sv1Id,
+  vehicleId: sv1Vehicle ? sv1Vehicle.id : null,
+  type: "Diesel",
+  amount: 4000,
+  date: pastDate(1),
+  note: "Monthly diesel top-up",
+  createdBy: "u_owner",
+  createdByName: "Vamshi Reddy",
+  createdAt: new Date().toISOString(),
+});
+
+fs.writeFileSync(SEED_PATH, JSON.stringify(seed, null, 2));
+console.log(JSON.stringify({
+  clientsTotal: seed.clients.length,
+  routesAdded,
+  newVehiclesCount,
+  newDriversCount,
+  totalVehiclesNow: seed.vehicles.length,
+  totalDriversNow: seed.drivers.length,
+  subvendorsAdded: 2,
+}, null, 2));

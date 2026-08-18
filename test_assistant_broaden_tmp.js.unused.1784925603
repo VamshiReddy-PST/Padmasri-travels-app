@@ -1,0 +1,174 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const { JSDOM } = require("jsdom");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5931;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed for " + identifier + ": " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+function auth(token) { return { Authorization: "Bearer " + token, "Content-Type": "application/json" }; }
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  delete env.AI_TEST_STUB;
+  delete env.ANTHROPIC_API_KEY;
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+  const raviToken = await loginStaff("9000100001", "Padmasri@1111"); // site_supervisor
+  const hrToken = await loginStaff("9000100007", "Padmasri@6666"); // hr
+  const { data: vehData } = await jf(`${API}/api/vehicles`, { headers: auth(ownerToken) });
+  const someVehicle = vehData[0];
+
+  // ---------- 1. Role gating relaxed: a non-owner staff role can now use the free assistant ----------
+  const { res: raviRes, data: raviData } = await jf(`${API}/api/smart-assistant/query`, { method: "POST", headers: auth(raviToken), body: JSON.stringify({ message: "How is the fleet doing today?" }) });
+  check("site_supervisor (non-owner) can now query the Fleet Assistant", raviRes.ok && raviData.tool === "fleet_overview", raviData);
+
+  const { res: raviInsRes } = await jf(`${API}/api/smart-assistant/insights`, { headers: auth(raviToken) });
+  check("site_supervisor can now load Fleet Assistant insights", raviInsRes.ok, raviInsRes.status);
+
+  // ---------- 2. Salary-line privacy guardrail: non-owner/non-hr does NOT see Salary in vehicle_expenditure replies ----------
+  const { data: raviVehData } = await jf(`${API}/api/smart-assistant/query`, { method: "POST", headers: auth(raviToken), body: JSON.stringify({ message: `Why is ${someVehicle.reg} so expensive?` }) });
+  check("site_supervisor's vehicle cost breakdown OMITS the Salary line", raviVehData.tool === "vehicle_expenditure" && !/Salary:/.test(raviVehData.reply), raviVehData.reply);
+
+  // Owner and HR DO see the Salary line
+  const { data: ownerVehData } = await jf(`${API}/api/smart-assistant/query`, { method: "POST", headers: auth(ownerToken), body: JSON.stringify({ message: `Why is ${someVehicle.reg} so expensive?` }) });
+  check("owner's vehicle cost breakdown INCLUDES the Salary line", ownerVehData.tool === "vehicle_expenditure" && /Salary:/.test(ownerVehData.reply), ownerVehData.reply);
+
+  const { data: hrVehData } = await jf(`${API}/api/smart-assistant/query`, { method: "POST", headers: auth(hrToken), body: JSON.stringify({ message: `Why is ${someVehicle.reg} so expensive?` }) });
+  check("hr's vehicle cost breakdown INCLUDES the Salary line", hrVehData.tool === "vehicle_expenditure" && /Salary:/.test(hrVehData.reply), hrVehData.reply);
+
+  // ---------- 3. Create a Workshop-role staff member (via HR) and log them into the workshop portal ----------
+  const wsPhone = "9812340001";
+  const { res: createRes, data: createData } = await jf(`${API}/api/users`, {
+    method: "POST", headers: auth(hrToken),
+    body: JSON.stringify({ name: "Kiran Mechanic", role: "mechanic", password: "TempPass!1234x", phone: wsPhone }),
+  });
+  check("HR can create a mechanic (Workshop role) account", createRes.ok, createData);
+
+  const { res: wsLoginRes, data: wsLoginData } = await jf(`${API}/api/workshop-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: wsPhone, pin: "1234" }),
+  });
+  check("Workshop mechanic can log in via workshop-auth (phone+PIN)", wsLoginRes.ok, wsLoginData);
+  const wsToken = wsLoginData.token;
+
+  // ---------- 4. Workshop-auth-gated Fleet Assistant endpoints work ----------
+  const { res: wsQueryRes, data: wsQueryData } = await jf(`${API}/api/workshop-auth/smart-assistant/query`, {
+    method: "POST", headers: { Authorization: "Bearer " + wsToken, "Content-Type": "application/json" },
+    body: JSON.stringify({ message: "Any idle vehicles right now?" }),
+  });
+  check("Workshop mechanic can query the Fleet Assistant via workshop-auth", wsQueryRes.ok && wsQueryData.tool === "idle_vehicles_today", wsQueryData);
+
+  const { res: wsInsRes, data: wsInsData } = await jf(`${API}/api/workshop-auth/smart-assistant/insights`, { headers: { Authorization: "Bearer " + wsToken } });
+  check("Workshop mechanic can load Fleet Assistant insights via workshop-auth", wsInsRes.ok && Array.isArray(wsInsData.insights) && wsInsData.insights.length > 0, wsInsData);
+
+  // Salary line must ALSO be omitted for a workshop role
+  const { data: wsVehData } = await jf(`${API}/api/workshop-auth/smart-assistant/query`, {
+    method: "POST", headers: { Authorization: "Bearer " + wsToken, "Content-Type": "application/json" },
+    body: JSON.stringify({ message: `Why is ${someVehicle.reg} so expensive?` }),
+  });
+  check("Workshop mechanic's vehicle cost breakdown OMITS the Salary line too", wsVehData.tool === "vehicle_expenditure" && !/Salary:/.test(wsVehData.reply), wsVehData.reply);
+
+  // Empty message + no token still rejected correctly
+  const { res: wsEmptyRes } = await jf(`${API}/api/workshop-auth/smart-assistant/query`, { method: "POST", headers: { Authorization: "Bearer " + wsToken, "Content-Type": "application/json" }, body: JSON.stringify({ message: "" }) });
+  check("empty message rejected with 400 on workshop-auth route too", wsEmptyRes.status === 400, wsEmptyRes.status);
+  const { res: wsNoAuthRes } = await jf(`${API}/api/workshop-auth/smart-assistant/query`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: "hi" }) });
+  check("no-token request rejected with 401 on workshop-auth route", wsNoAuthRes.status === 401, wsNoAuthRes.status);
+
+  // ---------- 5. Frontend: staff app (index.html) - Fleet Assistant tab visible for a non-owner role ----------
+  const html = await (await fetch(`${API}/`)).text();
+  async function newAppWindow(token) {
+    const dom = new JSDOM(html, {
+      url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+      beforeParse(win) {
+        win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+        win.localStorage.setItem("fleetAuthToken", token);
+      },
+    });
+    await wait(900);
+    return dom.window;
+  }
+  const winRavi = await newAppWindow(raviToken);
+  const errs = [];
+  winRavi.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+  const raviTabLabels = () => Array.from(winRavi.document.querySelectorAll("nav.tabbar > button, nav.tabbar details.nav-group > summary, nav.tabbar .nav-group-menu button")).map(b => b.textContent.trim());
+  check("site_supervisor's nav includes the Fleet Assistant tab", raviTabLabels().some(t => t.includes("Fleet Assistant")), raviTabLabels());
+
+  await winRavi.eval(`switchTab('smart_assistant')`);
+  await wait(700);
+  const raviHero = Array.from(winRavi.document.querySelectorAll(".ai-hero h1")).map(h => h.textContent.trim());
+  check("site_supervisor can open the Fleet Assistant screen", raviHero.some(t => t.includes("Fleet Assistant")), raviHero);
+  await winRavi.eval(`askAiSuggested("How is the fleet doing today?")`);
+  await wait(700);
+  const raviMsgs = Array.from(winRavi.document.querySelectorAll(".ai-msg.assistant")).map(m => m.textContent.trim());
+  check("site_supervisor gets a real chat reply", raviMsgs.some(t => t.includes("Fleet snapshot")), raviMsgs);
+  check("no runtime JS errors in site_supervisor's Fleet Assistant flow", errs.length === 0, errs);
+
+  // ---------- 6. Frontend: driver.html - Workshop portal Fleet Assistant tab ----------
+  const driverHtml = await (await fetch(`${API}/driver.html`)).text();
+  const wsErrs = [];
+  const wsDom = new JSDOM(driverHtml, {
+    url: `${API}/driver.html`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+    beforeParse(win) {
+      win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+      win.localStorage.setItem("workshopAuthToken", wsToken);
+      win.localStorage.setItem("portalType", "workshop");
+    },
+  });
+  const wsWin = wsDom.window;
+  wsWin.addEventListener("error", (e) => wsErrs.push(e.error ? e.error.stack || e.error.message : e.message));
+  await wait(1200);
+
+  const wsTabLabels = () => Array.from(wsWin.document.querySelectorAll(".driver-tabbar button")).map(b => b.textContent.trim());
+  check("Workshop portal tab bar shows the Fleet Assistant tab", wsTabLabels().some(t => t.includes("Fleet Assistant")), wsTabLabels());
+
+  await wsWin.eval(`setWorkshopTab('assistant')`);
+  await wait(700);
+  const wsHero = Array.from(wsWin.document.querySelectorAll(".ws-ai-hero h1")).map(h => h.textContent.trim());
+  check("Workshop portal Fleet Assistant screen renders", wsHero.some(t => t.includes("Fleet Assistant")), wsHero);
+
+  await wsWin.eval(`askWorkshopAiSuggested("Any idle vehicles right now?")`);
+  await wait(700);
+  const wsMsgs = Array.from(wsWin.document.querySelectorAll(".ws-ai-msg.assistant")).map(m => m.textContent.trim());
+  check("Workshop portal chat gets a real reply with no API key configured", wsMsgs.length > 0, wsMsgs);
+  check("no runtime JS errors in Workshop portal Fleet Assistant flow", wsErrs.length === 0, wsErrs);
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

@@ -1,0 +1,128 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const { JSDOM } = require("jsdom");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5929;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed: " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+function auth(token) { return { Authorization: "Bearer " + token, "Content-Type": "application/json" }; }
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  // Deliberately NO AI_TEST_STUB and NO ANTHROPIC_API_KEY - the whole point
+  // of the free assistant is that it works with neither.
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  delete env.AI_TEST_STUB;
+  delete env.ANTHROPIC_API_KEY;
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+  const raviToken = await loginStaff("9000100001", "Padmasri@1111");
+  const { data: vehData } = await jf(`${API}/api/vehicles`, { headers: auth(ownerToken) });
+  const someVehicle = vehData[0];
+
+  // ---------- Role gating still applies ----------
+  const { res: forbiddenRes } = await jf(`${API}/api/smart-assistant/query`, { method: "POST", headers: auth(raviToken), body: JSON.stringify({ message: "hi" }) });
+  check("non-owner is forbidden from the free Fleet Assistant", forbiddenRes.status === 403, forbiddenRes.status);
+
+  // ---------- Empty message rejected ----------
+  const { res: emptyRes } = await jf(`${API}/api/smart-assistant/query`, { method: "POST", headers: auth(ownerToken), body: JSON.stringify({ message: "  " }) });
+  check("empty message rejected with 400", emptyRes.status === 400, emptyRes.status);
+
+  // ---------- Intent routing, all with ZERO external calls (no key set) ----------
+  const cases = [
+    { msg: "How is the fleet doing today?", tool: "fleet_overview" },
+    { msg: "Which vehicles cost the most this month?", tool: "top_expense_vehicles" },
+    { msg: "Any documents expiring soon?", tool: "document_expiry_alerts" },
+    { msg: "Which vehicles have the worst mileage?", tool: "mileage_leaderboard" },
+    { msg: "Any idle vehicles right now?", tool: "idle_vehicles_today" },
+    { msg: "Any temporary driver usage lately?", tool: "temporary_driver_usage" },
+    { msg: `Why is ${someVehicle.reg} so expensive?`, tool: "vehicle_expenditure" },
+  ];
+  for (const c of cases) {
+    const { res, data } = await jf(`${API}/api/smart-assistant/query`, { method: "POST", headers: auth(ownerToken), body: JSON.stringify({ message: c.msg }) });
+    check(`"${c.msg}" responds 200 and routes to ${c.tool}`, res.ok && data.tool === c.tool && typeof data.reply === "string" && data.reply.length > 0, data);
+  }
+
+  // ---------- Insights endpoint, also zero external calls ----------
+  const { res: insRes, data: insData } = await jf(`${API}/api/smart-assistant/insights`, { headers: auth(ownerToken) });
+  check("free insights endpoint responds 200", insRes.ok, insData);
+  check("free insights returns a non-empty array", Array.isArray(insData.insights) && insData.insights.length > 0, insData);
+  check("every insight has severity/title/detail", insData.insights.every(i => i.severity && i.title && i.detail), insData.insights);
+
+  // ---------- Frontend: nav no longer offers the paid AI Assistant, offers the free one instead ----------
+  const html = await (await fetch(`${API}/`)).text();
+  const dom = new JSDOM(html, {
+    url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+    beforeParse(win) {
+      win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+      win.localStorage.setItem("fleetAuthToken", ownerToken);
+    },
+  });
+  const win = dom.window;
+  const errs = [];
+  win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+  await wait(900);
+  await win.eval(`switchTab('dashboard')`);
+  await wait(900);
+
+  const tabLabels = () => Array.from(win.document.querySelectorAll("nav.tabbar > button, nav.tabbar details.nav-group > summary")).map(b => b.textContent.trim());
+  check("nav shows the free Fleet Assistant tab", tabLabels().some(t => t.includes("Fleet Assistant")), tabLabels());
+  check("nav does NOT show the old paid AI Assistant label", !tabLabels().some(t => t === "✨ AI Assistant"), tabLabels());
+
+  const sectionTitles = () => Array.from(win.document.querySelectorAll(".section-title")).map(s => s.textContent.trim());
+  check("dashboard shows Fleet Insights (not AI Insights)", sectionTitles().some(t => t.includes("Fleet Insights")) && !sectionTitles().some(t => t.includes("AI Insights")), sectionTitles());
+  await wait(400);
+  const insightCards = win.document.querySelectorAll(".ai-insight-card");
+  check("dashboard's Fleet Insights card actually renders real insights (no API key needed)", insightCards.length > 0, insightCards.length);
+
+  await win.eval(`switchTab('smart_assistant')`);
+  await wait(600);
+  const heroTitles = () => Array.from(win.document.querySelectorAll(".ai-hero h1")).map(h => h.textContent.trim());
+  check("Fleet Assistant screen loads", heroTitles().some(t => t.includes("Fleet Assistant")), heroTitles());
+
+  await win.eval(`askAiSuggested("Which vehicles cost the most this month?")`);
+  await wait(700);
+  const assistantMsgs = () => Array.from(win.document.querySelectorAll(".ai-msg.assistant")).map(m => m.textContent.trim());
+  check("chat gets a real reply with no API key configured", assistantMsgs().some(t => t.includes("Checked: top expense vehicles")), assistantMsgs());
+
+  check("no runtime JS errors anywhere in the free-assistant flow", errs.length === 0, errs);
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

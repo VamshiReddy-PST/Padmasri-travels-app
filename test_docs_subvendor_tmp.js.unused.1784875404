@@ -1,0 +1,157 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5903;
+const API = `http://127.0.0.1:${PORT}/api`;
+const TINY_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed: " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  // ---------- Part 1: driver documents ----------
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+  check("owner login works", !!ownerToken);
+
+  const patchBody = {
+    healthRecordNumber: "HR-2026-001",
+    healthRecordDate: "2026-06-01",
+    healthRecordCopy: TINY_PNG,
+    trainingCertNumber: "TC-2026-045",
+    trainingCertDate: "2026-05-15",
+    trainingCertCopy: TINY_PNG,
+    policeVerificationNumber: "PV-2026-078",
+    policeVerificationDate: "2026-04-10",
+    policeVerificationCopy: TINY_PNG,
+  };
+  let { res: patchRes, data: patchData } = await jf(`${API}/drivers/d_mahesh`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify(patchBody),
+  });
+  check("owner can PATCH driver's new doc fields", patchRes.ok, patchData && patchData.error);
+  check("PATCH response includes healthRecordNumber", patchData && patchData.healthRecordNumber === "HR-2026-001");
+  check("PATCH response includes healthRecordCopyUrl", patchData && !!patchData.healthRecordCopyUrl);
+  check("PATCH response includes trainingCertNumber", patchData && patchData.trainingCertNumber === "TC-2026-045");
+  check("PATCH response includes policeVerificationNumber", patchData && patchData.policeVerificationNumber === "PV-2026-078");
+  check("pin is stripped from staff-facing driver object", patchData && patchData.pin === undefined);
+
+  // driver-side view
+  let { data: driverLoginData } = await jf(`${API}/driver-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: "9000000001", pin: "1234" }),
+  });
+  const driverToken = driverLoginData.token;
+  check("driver login works", !!driverToken);
+  let { data: docsData } = await jf(`${API}/driver-auth/documents`, { headers: { Authorization: "Bearer " + driverToken } });
+  check("driver documents endpoint returns healthRecordNumber", docsData.personal.healthRecordNumber === "HR-2026-001");
+  check("driver documents endpoint returns healthRecordDate", docsData.personal.healthRecordDate === "2026-06-01");
+  check("driver documents endpoint returns healthRecordCopyUrl", !!docsData.personal.healthRecordCopyUrl);
+  check("driver documents endpoint returns trainingCertNumber", docsData.personal.trainingCertNumber === "TC-2026-045");
+  check("driver documents endpoint returns policeVerificationNumber", docsData.personal.policeVerificationNumber === "PV-2026-078");
+
+  // ---------- Part 2: subvendor payments by site supervisor ----------
+  const supToken = await loginStaff("9000100001", "Padmasri@1111");
+  check("site supervisor login works", !!supToken);
+
+  let { res: svListRes, data: svList } = await jf(`${API}/subvendors`, { headers: { Authorization: "Bearer " + supToken } });
+  check("site supervisor can GET /subvendors (scoped)", svListRes.ok, svList);
+  // Ravi supervises 2 vehicles that are each linked to a different
+  // subvendor (v1 -> sv_6a9b2193c620, TS 09 CT 1003 -> sv_375bf870d8b5) -
+  // both should show up, and nothing beyond those two.
+  check("scoped subvendor list has exactly the 2 subvendors tied to Ravi's own vehicles", Array.isArray(svList) && svList.length === 2 && svList.every(s => ["sv_6a9b2193c620", "sv_375bf870d8b5"].includes(s.id)), svList);
+  const svId = "sv_6a9b2193c620";
+
+  // record a valid payment for their own vehicle v1
+  let { res: payRes, data: payData } = await jf(`${API}/subvendors/${svId}/payments`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + supToken },
+    body: JSON.stringify({ vehicleId: "v1", type: "Diesel", amount: 1500, date: "2026-07-24", note: "Filled at Gachibowli site" }),
+  });
+  check("site supervisor can record a Diesel payment for their own subvendor vehicle", payRes.ok, payData && payData.error);
+
+  // try without vehicleId - should be rejected (can't scope it)
+  let { res: noVehRes, data: noVehData } = await jf(`${API}/subvendors/${svId}/payments`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + supToken },
+    body: JSON.stringify({ type: "Diesel", amount: 500, date: "2026-07-24" }),
+  });
+  check("site supervisor blocked from filing a payment with no vehicleId", noVehRes.status === 400, noVehData);
+
+  // try with a vehicle that isn't theirs (v2, if it exists and belongs to someone else)
+  let { res: vehiclesRes, data: allVehiclesForOwner } = await jf(`${API}/vehicles`, { headers: { Authorization: "Bearer " + ownerToken } });
+  const notMyVehicle = allVehiclesForOwner.find(v => v.id !== "v1" && v.supervisorId !== "u_ravi");
+  if (notMyVehicle) {
+    let { res: wrongVehRes, data: wrongVehData } = await jf(`${API}/subvendors/${svId}/payments`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + supToken },
+      body: JSON.stringify({ vehicleId: notMyVehicle.id, type: "Diesel", amount: 500, date: "2026-07-24" }),
+    });
+    check("site supervisor blocked from filing a payment for a vehicle that isn't theirs", wrongVehRes.status === 403, { status: wrongVehRes.status, wrongVehData });
+  } else {
+    console.log("SKIP - no other vehicle found to test cross-vehicle block");
+  }
+
+  // GET payments list scoped
+  let { res: payListRes, data: payList } = await jf(`${API}/subvendors/${svId}/payments`, { headers: { Authorization: "Bearer " + supToken } });
+  check("site supervisor can GET scoped payments list", payListRes.ok, payList);
+  check("scoped payments list only includes their own vehicle's payment(s)", Array.isArray(payList) && payList.every(p => p.vehicleId === "v1"), payList);
+
+  // site supervisor should NOT be able to create/edit a subvendor account or link vehicles
+  let { res: createSvRes } = await jf(`${API}/subvendors`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + supToken },
+    body: JSON.stringify({ name: "Should Not Work", phone: "9999999999", password: "Whatever!123" }),
+  });
+  check("site supervisor blocked from creating a subvendor account", createSvRes.status === 403);
+
+  let { res: summaryRes } = await jf(`${API}/subvendors/${svId}/summary`, { headers: { Authorization: "Bearer " + supToken } });
+  check("site supervisor blocked from full subvendor summary (financials)", summaryRes.status === 403);
+
+  // ops_manager / owner still fully unaffected
+  let { res: opsPayRes } = await jf(`${API}/subvendors/${svId}/payments`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ type: "Repair", amount: 2200, date: "2026-07-24", note: "Owner-filed, no vehicle" }),
+  });
+  check("owner can still record a blanket payment with no vehicleId (unaffected)", opsPayRes.ok);
+
+  let { res: ownerSvListRes, data: ownerSvList } = await jf(`${API}/subvendors`, { headers: { Authorization: "Bearer " + ownerToken } });
+  check("owner still sees the FULL subvendor list (not scoped)", ownerSvListRes.ok && Array.isArray(ownerSvList) && ownerSvList.length >= 1);
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

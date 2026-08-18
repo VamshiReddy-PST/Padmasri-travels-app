@@ -1,0 +1,249 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const { JSDOM } = require("jsdom");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5921;
+const API = `http://127.0.0.1:${PORT}`;
+const TINY_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+function daysAgo(n) { const d = new Date(Date.now() - n * 86400000); return d.toISOString().slice(0, 10); }
+// DOM-structured helpers, deliberately NOT raw body.innerHTML.includes() checks:
+// document.body.innerHTML includes the <script> tag's own raw JS source text
+// (e.g. literal strings like "Fuel - Fill-up History" or the FUEL_STATIONS
+// list containing "IOCL" both live in the JS source itself), so a naive
+// substring check on body.innerHTML can match the SOURCE CODE rather than
+// actually-rendered content, producing false positives/negatives regardless
+// of real DOM state. querySelectorAll only matches real parsed elements, so
+// it can't accidentally match text sitting inside a <script> node.
+function h2Texts(win) { return Array.from(win.document.querySelectorAll(".section-title, h2")).map(h => h.textContent.trim()); }
+function cellTexts(win) { return Array.from(win.document.querySelectorAll("td")).map(td => td.textContent.trim()); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed: " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+function auth(token) { return { Authorization: "Bearer " + token, "Content-Type": "application/json" }; }
+async function submitAndApproveExpense(token, ownerToken, body) {
+  const { data: e } = await jf(`${API}/api/expenses`, { method: "POST", headers: auth(token), body: JSON.stringify(Object.assign({ bill: TINY_PNG }, body)) });
+  await jf(`${API}/api/expenses/${e.id}/decide`, { method: "PATCH", headers: auth(ownerToken), body: JSON.stringify({ status: "approved" }) });
+  return e;
+}
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+  const raviToken = await loginStaff("9000100001", "Padmasri@1111"); // u_ravi, site_supervisor
+  const hrToken = await loginStaff("9000100007", "Padmasri@6666"); // u_hr, Divya Prasad - only role allowed to edit payroll profiles
+
+  // ---------- Vehicle + driver assignment history ----------
+  const { data: vehicle } = await jf(`${API}/api/vehicles`, {
+    method: "POST", headers: auth(ownerToken),
+    body: JSON.stringify({ reg: "TS EXP TEST 01", make: "Tata", model: "Winger", engineNo: "ENGEXP001", chassisNo: "CHSEXP001", rcDate: "2022-01-01", seatingCapacity: 12, usage: "fixed_route", vehicleType: "Cab", fuelType: "Diesel" }),
+  });
+  check("test vehicle created", !!vehicle && !!vehicle.id, vehicle);
+  check("new vehicle starts with empty driverAssignmentHistory", Array.isArray(vehicle.driverAssignmentHistory) && vehicle.driverAssignmentHistory.length === 0);
+
+  const { data: meta } = await jf(`${API}/api/meta`, { headers: auth(ownerToken) });
+  const siteId = meta.sites[0].id;
+  await jf(`${API}/api/vehicles/${vehicle.id}/assign`, {
+    method: "PATCH", headers: auth(ownerToken),
+    body: JSON.stringify({ siteId, supervisorId: "u_ravi", driverId: "d_mahesh", driverAssignedDate: daysAgo(10) }),
+  });
+  let { data: allVehicles } = await jf(`${API}/api/vehicles`, { headers: auth(ownerToken) });
+  let veh = allVehicles.find(v => v.id === vehicle.id);
+  check("after assigning d_mahesh, history has 1 open stint", veh.driverAssignmentHistory.length === 1 && veh.driverAssignmentHistory[0].assignedTo === null && veh.driverAssignmentHistory[0].driverId === "d_mahesh", veh.driverAssignmentHistory);
+
+  const { data: meta2 } = await jf(`${API}/api/meta`, { headers: auth(ownerToken) });
+  // Every seed driver already has a regular vehicle, so instead of requiring
+  // a free one, pick any second driver and explicitly clear them from
+  // whatever OTHER vehicle currently holds them first. Otherwise the
+  // driver-side "my vehicle" lookup (which finds the first vehicle matching
+  // driverId in array order) could resolve to the wrong vehicle once we
+  // reassign them to our test vehicle below.
+  const secondDriver = meta2.drivers.find(d => d.id !== "d_mahesh" && d.active !== false);
+  check("a second active driver exists for reassignment", !!secondDriver, secondDriver && secondDriver.id);
+  const otherVehicleWithSecondDriver = allVehicles.find(v => v.driverId === secondDriver.id);
+  if (otherVehicleWithSecondDriver) {
+    await jf(`${API}/api/vehicles/${otherVehicleWithSecondDriver.id}/assign`, {
+      method: "PATCH", headers: auth(ownerToken),
+      body: JSON.stringify({ driverId: null }),
+    });
+  }
+  await jf(`${API}/api/vehicles/${vehicle.id}/assign`, {
+    method: "PATCH", headers: auth(ownerToken),
+    body: JSON.stringify({ driverId: secondDriver.id, driverAssignedDate: daysAgo(5) }),
+  });
+  ({ data: allVehicles } = await jf(`${API}/api/vehicles`, { headers: auth(ownerToken) }));
+  veh = allVehicles.find(v => v.id === vehicle.id);
+  check("after reassigning, history now has 2 stints", veh.driverAssignmentHistory.length === 2, veh.driverAssignmentHistory);
+  check("first stint (d_mahesh) is now closed", veh.driverAssignmentHistory[0].assignedTo !== null, veh.driverAssignmentHistory[0]);
+  check("second stint is open for the new driver", veh.driverAssignmentHistory[1].assignedTo === null && veh.driverAssignmentHistory[1].driverId === secondDriver.id, veh.driverAssignmentHistory[1]);
+
+  const { res: payrollRes } = await jf(`${API}/api/payroll/profile/driver/${secondDriver.id}`, {
+    method: "PATCH", headers: auth(hrToken),
+    body: JSON.stringify({ baseSalary: 30000, components: [] }),
+  });
+  check("payroll profile PATCH (as HR) succeeds", payrollRes.ok, payrollRes.status);
+
+  // ---------- Fuel: submit a daily record as Ravi ----------
+  const { data: fuelRecord } = await jf(`${API}/api/records`, {
+    method: "POST", headers: auth(raviToken),
+    body: JSON.stringify({
+      vehicleId: vehicle.id, date: "2026-01-10",
+      fuel: { odometer: 1200, litres: 20, fuelPrice: 95, station: "IOCL", paymentMode: "UPI", fillLevel: "full" },
+      photoTags: { fuelReceipt: [TINY_PNG] },
+    }),
+  });
+  check("fuel record submitted with correct totalCost (20L x Rs95)", !!fuelRecord && fuelRecord.fuel.totalCost === 1900, fuelRecord && fuelRecord.fuel);
+
+  // A brand-new vehicle's FIRST-ever fuel submission always computes
+  // distance=0/mileage=0 server-side (no prior lastOdometer baseline to
+  // measure from), so a second, later fill with a higher odometer reading
+  // is needed to actually exercise a positive mileage value.
+  const { data: fuelRecord2 } = await jf(`${API}/api/records`, {
+    method: "POST", headers: auth(raviToken),
+    body: JSON.stringify({
+      vehicleId: vehicle.id, date: "2026-01-15",
+      fuel: { odometer: 1350, litres: 15, fuelPrice: 95, station: "IOCL", paymentMode: "UPI", fillLevel: "full" },
+      photoTags: { fuelReceipt: [TINY_PNG] },
+    }),
+  });
+  check("second fuel record submitted with correct totalCost (15L x Rs95)", !!fuelRecord2 && fuelRecord2.fuel.totalCost === 1425, fuelRecord2 && fuelRecord2.fuel);
+  check("second fuel record has a positive mileage (distance from the first fill's odometer)", fuelRecord2 && fuelRecord2.fuel.mileage > 0, fuelRecord2 && fuelRecord2.fuel);
+
+  // ---------- Named expense categories, each submitted + approved ----------
+  await submitAndApproveExpense(raviToken, ownerToken, { amount: 3500, category: "Workshop / Maintenance", description: "Brake pad replacement", vehicleId: vehicle.id });
+  await submitAndApproveExpense(raviToken, ownerToken, { amount: 1200, category: "Road Tax", description: "Quarterly road tax", vehicleId: vehicle.id });
+  await submitAndApproveExpense(raviToken, ownerToken, { amount: 8000, category: "Insurance Amount", description: "Annual premium", vehicleId: vehicle.id });
+  await submitAndApproveExpense(raviToken, ownerToken, { amount: 15000, category: "EMI", description: "Monthly EMI", vehicleId: vehicle.id });
+  await submitAndApproveExpense(raviToken, ownerToken, { amount: 100, category: "Toll", description: "Highway toll", vehicleId: vehicle.id }); // should land in Office Expenses catch-all
+  await submitAndApproveExpense(raviToken, ownerToken, { amount: 250, category: "Office Expenses", description: "RTO paperwork fee", vehicleId: vehicle.id });
+  // A pending (NOT approved) expense - should show in items but not count toward the total.
+  await jf(`${API}/api/expenses`, { method: "POST", headers: auth(raviToken), body: JSON.stringify({ amount: 999, category: "Road Tax", description: "Still pending", vehicleId: vehicle.id, bill: TINY_PNG }) });
+
+  // Temporary driver cost (Salary bucket, real logged expense) - directly via
+  // the expense endpoint for test simplicity (the real app auto-generates
+  // this same category from a daily record's temp-driver flow).
+  await submitAndApproveExpense(raviToken, ownerToken, { amount: 700, category: "Temporary Driver", description: "Stand-in driver for a day", vehicleId: vehicle.id });
+
+  // ---------- Maintenance history: a repair request raised by Ravi (not the driver) ----------
+  const { data: rr } = await jf(`${API}/api/repair-requests`, {
+    method: "POST", headers: auth(raviToken),
+    body: JSON.stringify({ vehicleId: vehicle.id, issueDescription: "Steering noise (expenditure/history test)", urgency: "normal" }),
+  });
+  check("repair request raised by supervisor for the vehicle", !!rr && !!rr.id, rr);
+
+  // ---------- Fetch the expenditure-history endpoint and verify the math ----------
+  const { res: expRes, data: exp } = await jf(`${API}/api/vehicles/${vehicle.id}/expenditure-history`, { headers: auth(ownerToken) });
+  check("expenditure-history endpoint responds 200", expRes.ok, exp);
+  const b = exp.buckets;
+  check("fuel bucket total = 3325 (1900 + 1425 across 2 fills)", b.fuel.total === 3325, b.fuel.total);
+  check("fuel bucket has 2 itemized rows", b.fuel.items.length === 2, b.fuel.items);
+  check("maintenance bucket total = 3500", b.maintenance.total === 3500, b.maintenance.total);
+  check("roadTax bucket total = 1200 (pending one excluded)", b.roadTax.total === 1200, b.roadTax.total);
+  check("roadTax bucket items include the pending one too (2 items)", b.roadTax.items.length === 2, b.roadTax.items);
+  check("insurance bucket total = 8000", b.insurance.total === 8000, b.insurance.total);
+  check("emi bucket total = 15000", b.emi.total === 15000, b.emi.total);
+  check("officeExpenses catch-all bucket total = 350 (Toll 100 + Office Expenses 250)", b.officeExpenses.total === 350, b.officeExpenses.total);
+  check("salary bucket includes the 700 temp-driver cost", b.salary.tempDriverTotal === 700, b.salary.tempDriverTotal);
+  check("salary bucket has driver history with 2 stints", b.salary.driverHistory.length === 2, b.salary.driverHistory);
+  const openStint = b.salary.driverHistory.find(s => s.assignedTo === null);
+  check("salary bucket's open stint has a positive estimated cost (driver has a payroll profile, 5 backdated days elapsed)", openStint && openStint.estimatedCost > 0, openStint);
+  check("salary bucket's open stint estimated cost = 5 days worth of the 30000 base salary", openStint && openStint.estimatedCost === Math.round((30000 / 30) * 5 * 100) / 100, openStint);
+  check("salary bucket grand total = tempDriverTotal + estimatedDriverSalaryTotal", b.salary.total === Math.round((b.salary.tempDriverTotal + b.salary.estimatedDriverSalaryTotal) * 100) / 100, b.salary);
+  check("mileage bucket reports 1 fill (the 2nd fill; the 1st has no prior baseline so mileage=0)", b.mileage.fillCount === 1, b.mileage);
+  check("mileage bucket has a positive average mileage", b.mileage.avgMileage > 0, b.mileage);
+
+  // ---------- Driver-side maintenance history: the CURRENTLY assigned driver (not who raised it) sees it ----------
+  const { data: driverLogin } = await jf(`${API}/api/driver-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: secondDriver.phone, pin: "1234" }),
+  });
+  check("current driver can log in", !!driverLogin.token, driverLogin);
+  const { res: histRes, data: hist } = await jf(`${API}/api/driver-auth/vehicle-repair-history`, { headers: { Authorization: "Bearer " + driverLogin.token } });
+  check("driver history endpoint responds 200", histRes.ok, hist);
+  check("driver sees the repair request Ravi raised (not the driver's own)", hist.requests.some(r => r.issueDescription === "Steering noise (expenditure/history test)" && r.raisedByRole === "site_supervisor"), hist.requests);
+  check("driver history returns the correct vehicle reg", hist.vehicleReg === "TS EXP TEST 01", hist.vehicleReg);
+
+  // ---------- Frontend: Owner Cost Analysis -> click vehicle -> expenditure screen ----------
+  const html = await (await fetch(`${API}/`)).text();
+  const dom = new JSDOM(html, {
+    url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+    beforeParse(win) {
+      win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+      win.localStorage.setItem("fleetAuthToken", ownerToken);
+    },
+  });
+  const win = dom.window;
+  const errs = [];
+  win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+  await wait(900);
+  await win.eval(`switchTab('reports')`);
+  await wait(400);
+  await win.eval(`goto('cost_analysis')`);
+  await wait(600);
+  let body = win.document.body.innerHTML;
+  check("Cost Analysis screen loaded, shows the test vehicle", body.includes("TS EXP TEST 01"));
+
+  const vid = win.eval(`meta ? null : null`); // no-op, meta not directly holding vehicleId list here
+  await win.eval(`goto('vehicle_detail',{vehicleId:'${vehicle.id}'})`);
+  await wait(700);
+  body = win.document.body.innerHTML;
+  check("Vehicle Expenditure screen shows the vehicle reg in the title", body.includes("TS EXP TEST 01 - Expenditure History"));
+  ["Fuel","Salary","Road Tax","Insurance Amount","Maintenance","Office Expenses","EMI","Mileage"].forEach(label=>{
+    check(`expenditure screen has a "${label}" button`, body.includes(`>${label}<`));
+  });
+  check("no runtime JS errors loading the expenditure screen", errs.length === 0, errs);
+
+  await win.eval(`toggleExpenditureBucket('${vehicle.id}','fuel')`);
+  await wait(500);
+  check("clicking Fuel expands the itemized fill-up history",
+    h2Texts(win).some(h => h.includes("Fuel - Fill-up History")) && cellTexts(win).includes("IOCL"));
+
+  await win.eval(`toggleExpenditureBucket('${vehicle.id}','fuel')`);
+  await wait(500);
+  check("clicking Fuel again collapses it",
+    !h2Texts(win).some(h => h.includes("Fuel - Fill-up History")) && !cellTexts(win).includes("IOCL"));
+
+  await win.eval(`toggleExpenditureBucket('${vehicle.id}','salary')`);
+  await wait(500);
+  check("clicking Salary expands driver cost history + temp driver costs",
+    h2Texts(win).some(h => h.includes("Salary - Driver Cost History")) && cellTexts(win).some(t => t.includes("Stand-in driver for a day")));
+  check("no runtime JS errors across the whole expenditure screen flow", errs.length === 0, errs);
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

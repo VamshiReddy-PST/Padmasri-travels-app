@@ -1,0 +1,23 @@
+const path = require('path');
+const { spawn } = require('child_process');
+const fetch = require('/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app/node_modules/node-fetch');
+const APPDIR = '/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app';
+const PORT = 5918;
+const API = `http://127.0.0.1:${PORT}`;
+function wait(ms){ return new Promise(r=>setTimeout(r,ms)); }
+(async()=>{
+  const env = Object.assign({}, process.env, {PORT:String(PORT)});
+  const server = spawn('node',[path.join(APPDIR,'server.js')],{cwd:APPDIR, env});
+  await wait(1500);
+  const ownerLogin = await (await fetch(API+'/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({identifier:'vamshi.reddy@padmasritravels.in',password:'Padmasri@9999'})})).json();
+  let ownerToken = ownerLogin.token;
+  if(ownerLogin.user && ownerLogin.user.mustChangePassword){
+    await (await fetch(API+'/api/change-password',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+ownerToken},body:JSON.stringify({currentPassword:'Padmasri@9999',newPassword:'NewPass!12345'})})).json();
+  }
+  const createRes = await fetch(API+'/api/users',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+ownerToken},body:JSON.stringify({name:'Dbg Mech2',role:'mechanic',phone:'9000700099',password:'TempPass!123'})});
+  console.log('create status', createRes.status, JSON.stringify(await createRes.json()));
+  const loginRes = await fetch(API+'/api/workshop-auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:'9000700099',pin:'1234'})});
+  console.log('workshop login status', loginRes.status, JSON.stringify(await loginRes.json()));
+  server.kill('SIGKILL');
+  process.exit(0);
+})();

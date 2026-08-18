@@ -1,0 +1,182 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const { JSDOM } = require("jsdom");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5937;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed for " + identifier + ": " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+function auth(token) { return { Authorization: "Bearer " + token, "Content-Type": "application/json" }; }
+const TINY_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  delete env.AI_TEST_STUB;
+  delete env.ANTHROPIC_API_KEY;
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+  const priyaToken = await loginStaff("9000100003", "Padmasri@3333"); // area_supervisor, supervises u_ravi + u_suresh
+  const dataTeamToken = await loginStaff("9000100005", "Padmasri@5555"); // data_team
+
+  const { data: allVehicles } = await jf(`${API}/api/vehicles`, { headers: auth(ownerToken) });
+  // Seed data only has Ravi/Suresh as site supervisors (both of whom Priya
+  // already oversees), so every vehicle starts out as a "team" vehicle from
+  // her perspective. Pick one to become her directly-held "site" (reassign
+  // its supervisorId to her below), and a DIFFERENT one that stays under
+  // Ravi as the still-actually-supervised comparison case.
+  const raviVehicles = allVehicles.filter(v => v.supervisorId === "u_ravi");
+  const directVehicle = raviVehicles[0];
+  const teamVehicle = raviVehicles[1];
+  check("found a candidate vehicle to directly assign to Priya", !!directVehicle, directVehicle && directVehicle.reg);
+  check("found a different vehicle under Priya's supervised Site Supervisor (Ravi) to use as the comparison case", !!teamVehicle && teamVehicle.id !== directVehicle.id, teamVehicle && teamVehicle.reg);
+
+  // ---------- 1. Owner directly assigns a vehicle's supervisorId to the Area Supervisor herself ----------
+  const { res: assignRes } = await jf(`${API}/api/vehicles/${directVehicle.id}/assign`, {
+    method: "PATCH", headers: auth(ownerToken), body: JSON.stringify({ supervisorId: "u_priya" }),
+  });
+  check("owner can directly assign a vehicle's supervisorId to an Area Supervisor", assignRes.ok, assignRes.status);
+
+  // ---------- 2. visibleVehiclesFor: Priya now sees this vehicle AND her supervised team's vehicles ----------
+  const { data: priyaVehicles } = await jf(`${API}/api/vehicles`, { headers: auth(priyaToken) });
+  check("Priya's vehicle list includes her directly-held vehicle", priyaVehicles.some(v => v.id === directVehicle.id), priyaVehicles.length);
+  check("Priya's vehicle list still includes her supervised team's vehicles (Ravi's)", priyaVehicles.some(v => v.id === teamVehicle.id), priyaVehicles.length);
+
+  // ---------- 3. Priya can submit a daily record for her directly-held vehicle, same as a Site Supervisor would ----------
+  const today = new Date().toISOString().slice(0, 10);
+  const recordBody = {
+    vehicleId: directVehicle.id, date: today,
+    breathalyzer: { driver: "Test Driver", reading: 0 },
+    attendance: { status: "present", uniform: "compliant" },
+    safety: { fireExtinguisher: { present: true, expiry: "2027-01-01" }, firstAid: { present: true }, stepney: { present: true }, jack: { present: true }, jackRod: { present: true }, wheelSpanner: { present: true }, chargingSockets: { present: true } },
+    condition: { suspension: "ok", seatCovers: "ok", curtains: "ok", seatPushBack: "ok", batteryWater: "ok", engineOil: "ok", coolant: "ok", airPressure: "ok", tyreWear: "ok" },
+    fuel: { odometer: (directVehicle.lastOdometer || 10000) + 50, litres: 0, fuelPrice: 0, fillLevel: "half" },
+    photoTags: {},
+  };
+  const { res: recRes, data: recData } = await jf(`${API}/api/records`, { method: "POST", headers: auth(priyaToken), body: JSON.stringify(recordBody) });
+  check("Priya (area_supervisor) can submit a daily record for her directly-held vehicle", recRes.ok, recData);
+
+  // ---------- 4. Priya CANNOT verify her own directly-held vehicle's record - 403 ----------
+  const { res: selfVerifyRes, data: selfVerifyData } = await jf(`${API}/api/records/${directVehicle.id}/${today}/verify`, {
+    method: "PATCH", headers: auth(priyaToken), body: JSON.stringify({ status: "approved" }),
+  });
+  check("Priya CANNOT verify her own directly-held vehicle's record (403)", selfVerifyRes.status === 403, selfVerifyData);
+
+  // ---------- 5. Data Team CAN verify Priya's directly-held vehicle's record ----------
+  const { res: dtVerifyRes, data: dtVerifyData } = await jf(`${API}/api/records/${directVehicle.id}/${today}/verify`, {
+    method: "PATCH", headers: auth(dataTeamToken), body: JSON.stringify({ status: "approved" }),
+  });
+  check("Data Team CAN verify Priya's directly-held vehicle's record", dtVerifyRes.ok && dtVerifyData.verification.status === "approved", dtVerifyData);
+
+  // ---------- 6. Priya CAN still verify records for her actually-supervised team (Ravi's vehicle) ----------
+  const teamRecordBody = Object.assign({}, recordBody, { vehicleId: teamVehicle.id, fuel: Object.assign({}, recordBody.fuel, { odometer: (teamVehicle.lastOdometer || 10000) + 50 }) });
+  // Ravi (site_supervisor) submits it, as he normally would.
+  const raviToken = await loginStaff("9000100001", "Padmasri@1111");
+  const { res: teamRecRes } = await jf(`${API}/api/records`, { method: "POST", headers: auth(raviToken), body: JSON.stringify(teamRecordBody) });
+  check("Ravi (site_supervisor) can submit a record for his own vehicle", teamRecRes.ok, teamRecRes.status);
+  const { res: teamVerifyRes, data: teamVerifyData } = await jf(`${API}/api/records/${teamVehicle.id}/${today}/verify`, {
+    method: "PATCH", headers: auth(priyaToken), body: JSON.stringify({ status: "approved" }),
+  });
+  check("Priya CAN verify her supervised Site Supervisor's (Ravi's) vehicle record", teamVerifyRes.ok && teamVerifyData.verification.status === "approved", teamVerifyData);
+
+  // ---------- 7. Odometer day-start/close entry: Priya can log it for her directly-held vehicle ----------
+  const { res: odoRes } = await jf(`${API}/api/odometer/${directVehicle.id}/start`, { method: "POST", headers: auth(priyaToken), body: JSON.stringify({ value: (directVehicle.lastOdometer || 10000) }) });
+  check("Priya can log a day-start odometer reading for her directly-held vehicle", odoRes.ok, odoRes.status);
+
+  // ---------- 8. Vehicle-docs edit: Priya can edit docs for her directly-held vehicle ----------
+  // Skip RC - it has its own special rule (expiry is auto-calculated from
+  // RC Date, can't be set directly here) unrelated to what's being tested.
+  const docType = Object.keys(directVehicle.docs || {}).find(k => k !== "RC");
+  if (docType) {
+    const { res: docRes } = await jf(`${API}/api/vehicles/${directVehicle.id}/docs`, { method: "PATCH", headers: auth(priyaToken), body: JSON.stringify({ docType, expiry: "2028-05-05" }) });
+    check("Priya can edit a document expiry for her directly-held vehicle", docRes.ok, docRes.status);
+  } else {
+    console.log("OK  - no doc types on this vehicle to test (skipped, not a failure)");
+  }
+
+  // ---------- 9. Priya cannot submit a record for a vehicle she does NOT directly hold (only oversees) ----------
+  const { res: wrongSubmitRes } = await jf(`${API}/api/records`, { method: "POST", headers: auth(priyaToken), body: JSON.stringify(Object.assign({}, recordBody, { vehicleId: teamVehicle.id })) });
+  check("Priya CANNOT submit a daily record for a vehicle she only oversees (not directly hers) - 403", wrongSubmitRes.status === 403, wrongSubmitRes.status);
+
+  // ---------- 10. Expenses visibility: Priya sees her own directly-submitted expenses too ----------
+  const { data: newExpense } = await jf(`${API}/api/expenses`, {
+    method: "POST", headers: auth(priyaToken),
+    body: JSON.stringify({ amount: 250, category: "Fuel", description: "Test expense by area supervisor directly", vehicleId: directVehicle.id, bill: TINY_PNG }),
+  });
+  const { data: priyaExpenses } = await jf(`${API}/api/expenses`, { headers: auth(priyaToken) });
+  check("Priya's Team Expenses view includes her own directly-submitted expense", priyaExpenses.some(e => e.id === newExpense.id), priyaExpenses.length);
+
+  // ---------- 11. Frontend: index.html - 'My Vehicles' tab renders for Area Supervisor, scoped to directly-held only ----------
+  const html = await (await fetch(`${API}/`)).text();
+  const dom = new JSDOM(html, {
+    url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+    beforeParse(win) {
+      win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+      win.localStorage.setItem("fleetAuthToken", priyaToken);
+    },
+  });
+  const win = dom.window;
+  const errs = [];
+  win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+  await wait(1000);
+  const tabLabels = () => Array.from(win.document.querySelectorAll("nav.tabbar > button, nav.tabbar details.nav-group > summary, nav.tabbar .nav-group-menu button")).map(b => b.textContent.trim());
+  check("Area Supervisor's nav includes the My Vehicles tab", tabLabels().some(t => t.includes("My Vehicles")), tabLabels());
+
+  await win.eval(`switchTab('my_vehicles')`);
+  await wait(600);
+  const pageTitle = win.document.querySelector("h1.page-title").textContent;
+  check("My Vehicles screen renders for Area Supervisor", /My Vehicles/.test(pageTitle), pageTitle);
+  const cardRegs = Array.from(win.document.querySelectorAll(".vehicle-card .reg")).map(e => e.textContent.trim());
+  check("My Vehicles shows the directly-held vehicle", cardRegs.includes(directVehicle.reg), cardRegs);
+  check("My Vehicles does NOT show a vehicle only overseen via a Site Supervisor (Ravi's)", !cardRegs.includes(teamVehicle.reg), cardRegs);
+
+  await win.eval(`goto('vehicle_detail',{vehicleId:'${directVehicle.id}'})`);
+  await wait(600);
+  const checklistTitle = win.document.querySelector("h1.page-title").textContent;
+  check("Clicking into the directly-held vehicle opens its checklist screen", checklistTitle.includes(directVehicle.reg), checklistTitle);
+
+  await win.eval(`switchTab('queue')`);
+  await wait(600);
+  const queueBody = win.document.body.textContent;
+  check("Verification Queue banner mentions the self-held pending record needing Data Team/Owner", /Data Team or the Owner/.test(queueBody), queueBody.slice(0, 400));
+
+  check("no runtime JS errors in Area Supervisor's My Vehicles / Verification Queue flow", errs.length === 0, errs);
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

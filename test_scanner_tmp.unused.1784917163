@@ -1,0 +1,163 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const { JSDOM } = require("jsdom");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5911;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed: " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+
+// A fake, fully-mocked OpenCV.js + jsPDF surface. This lets us exercise the
+// real orchestration code in autoScanImageToCanvas/canvasToPdfDataUrl/the
+// scanner modal state machine without needing a real browser's WASM/canvas
+// pixel pipeline (not available in this headless sandbox). We deliberately
+// return zero contours from findContours, forcing the code down its
+// "no confident document edge found -> fall back to the whole photo"
+// branch - an important real code path that must not throw.
+const FAKE_CV_SETUP = `
+  function FakeMat(){ this.delete = function(){}; }
+  window.cv = {
+    Mat: FakeMat,
+    MatVector: function(){ this._items = []; this.size = function(){return this._items.length;}; this.get = function(i){return this._items[i];}; this.delete = function(){}; },
+    Size: function(w,h){ this.width=w; this.height=h; },
+    imread: function(){ return { cols: 100, rows: 140, delete: function(){} }; },
+    resize: function(src, dst, size){ dst.cols = size.width; dst.rows = size.height; },
+    cvtColor: function(){}, GaussianBlur: function(){}, Canny: function(){}, dilate: function(){},
+    findContours: function(){ /* leaves contours empty -> fallback path */ },
+    arcLength: function(){ return 10; },
+    approxPolyDP: function(){},
+    contourArea: function(){ return 0; },
+    matFromArray: function(){ return { delete: function(){} }; },
+    getPerspectiveTransform: function(){ return { delete: function(){} }; },
+    warpPerspective: function(){},
+    imshow: function(){ /* pretend the canvas now holds the corrected image */ },
+    CV_8U: 0, RETR_LIST: 0, CHAIN_APPROX_SIMPLE: 0, COLOR_RGBA2GRAY: 0, INTER_AREA: 0, CV_32FC2: 0,
+  };
+  window.cv.Mat.ones = function(){ return { delete: function(){} }; };
+  window.jspdf = {
+    jsPDF: function(opts){
+      this._opts = opts;
+      this.addImage = function(){};
+      this.output = function(fmt){ return "data:application/pdf;base64,ZmFrZXNjYW5uZWRwZGY="; };
+    }
+  };
+`;
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+  const { data: mechData } = await jf(`${API}/api/users`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ name: "Scanner Test Mechanic", role: "mechanic", email: "scantest@padmasritravels.in", phone: "9000300001", password: "TempPass!123" }),
+  });
+  const mechToken = await loginStaff("scantest@padmasritravels.in", "TempPass!123");
+
+  const html = await (await fetch(`${API}/`)).text();
+  const dom = new JSDOM(html, {
+    url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+    beforeParse(win) {
+      win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+      win.URL.createObjectURL = () => "blob:mock";
+      win.URL.revokeObjectURL = () => {};
+      win.localStorage.setItem("fleetAuthToken", mechToken);
+    },
+  });
+  const win = dom.window;
+  const errs = [];
+  win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+  await wait(900);
+  check("mechanic boot: no runtime JS errors", errs.length === 0, errs);
+
+  let body = win.document.body.innerHTML;
+  check("Workshop screen shows the Scan Document button", body.includes("Scan Document"));
+  check("Workshop screen shows the Recent Bulk Purchases card", body.includes("Log a Bulk Purchase"));
+
+  // Install the fully-mocked cv/jsPDF surface (standing in for the real
+  // CDN-loaded libraries, which need a real browser to execute).
+  await win.eval(FAKE_CV_SETUP);
+
+  // Wire up the scanner exactly like clicking "Scan Document" would.
+  await win.eval(`openDocumentScanner(onWorkshopInvoiceScanned); window.__scannerWired = (typeof scannerOnConfirm === "function");`);
+  check("openDocumentScanner wires up the confirm callback", win.eval("window.__scannerWired") === true);
+
+  // Run the real auto-scan pipeline (with the mocked cv) - this exercises
+  // the "no edges confidently detected -> fall back to the whole photo"
+  // branch, which must complete without throwing.
+  let scanErr = null;
+  await win.eval(`
+    window.__scanOk = false;
+    try{
+      scannerCanvas = autoScanImageToCanvas({});
+      renderScannerModal("preview");
+      window.__scanOk = true;
+    }catch(e){ window.__scanErr = e.message; }
+  `);
+  check("autoScanImageToCanvas completes without throwing (fallback-to-full-image path)", win.eval("window.__scanOk") === true, win.eval("window.__scanErr"));
+  let overlayHtml = win.document.getElementById("scannerOverlay").innerHTML;
+  check("preview modal shows 'Does this look right?' confirmation UI", overlayHtml.includes("Does this look right"));
+
+  // Confirm the scan - this should run canvasToPdfDataUrl (via the mocked
+  // jsPDF), fire the onWorkshopInvoiceScanned callback, and close the modal.
+  await win.eval(`confirmScan()`);
+  await wait(300);
+  const pendingInvoice = win.eval("pendingWorkshopInvoice");
+  check("confirming the scan sets pendingWorkshopInvoice to the generated PDF data URL", pendingInvoice === "data:application/pdf;base64,ZmFrZXNjYW5uZWRwZGY=", pendingInvoice);
+  overlayHtml = win.document.getElementById("scannerOverlay").innerHTML;
+  check("scanner modal closes after confirming", overlayHtml.trim() === "", overlayHtml);
+  check("after confirming: no runtime JS errors", errs.length === 0, errs);
+
+  // Fill in the rest of the bulk-purchase form and submit - this should
+  // reach the real server with the scanned PDF as the invoice.
+  win.document.querySelector("#purchaseItemsRows .wpItemName").value = "Scanned Test Item";
+  win.document.querySelector("#purchaseItemsRows .wpItemQty").value = "5";
+  win.document.querySelector("#purchaseItemsRows .wpItemUnit").value = "pcs";
+  win.document.getElementById("wpTotalAmount").value = "999";
+  await win.eval(`submitWorkshopPurchase()`);
+  await wait(700);
+  check("submitting after a scan: no runtime JS errors", errs.length === 0, errs);
+
+  const { data: purchases } = await jf(`${API}/api/workshop-purchases`, { headers: { Authorization: "Bearer " + ownerToken } });
+  const found = (purchases || []).find(p => p.items.some(i => i.name === "Scanned Test Item"));
+  check("bulk purchase with the scanned PDF invoice reached the server", !!found, found);
+  check("stored invoice is a .pdf file (server accepted the scanned PDF data URL)", found && found.invoiceUrl && found.invoiceUrl.endsWith(".pdf"), found && found.invoiceUrl);
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

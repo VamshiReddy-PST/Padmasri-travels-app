@@ -1,0 +1,198 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5905;
+const API = `http://127.0.0.1:${PORT}/api`;
+const TINY_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed: " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+  const ravi = await loginStaff("9000100001", "Padmasri@1111"); // site_supervisor, supervises v1 (driver d_mahesh)
+
+  // find a data_team user in seed
+  let { data: users } = await jf(`${API}/reports/none`, {}); // dummy, ignore
+  // find data_team login from seed by looking at users list via owner-only endpoint if exists; otherwise use known seed convention
+  // We know from earlier seed dumps u_owner and u_ravi exist; look up data_team similarly via /api/payroll/people won't give role.
+  // Use the vehicles running report or similar as owner to find a data_team account phone/pin - simplest: check seed.json directly.
+  const seed = require(path.join(APPDIR, "data", "seed.json"));
+  const dataTeamUser = seed.users.find(u => u.role === "data_team");
+  check("seed has a data_team user", !!dataTeamUser, dataTeamUser);
+  const dataTeamToken = dataTeamUser ? await loginStaff(dataTeamUser.phone, `Padmasri@${dataTeamUser.pin}`) : null;
+
+  // another site supervisor who does NOT supervise v1
+  const otherSup = seed.users.find(u => u.role === "site_supervisor" && u.id !== "u_ravi");
+  check("seed has another site_supervisor besides u_ravi", !!otherSup, otherSup && otherSup.id);
+  const otherSupToken = otherSup ? await loginStaff(otherSup.phone, `Padmasri@${otherSup.pin}`) : null;
+
+  // ---------- Step 1: driver logs in and enters opening reading normally ----------
+  let { data: loginData } = await jf(`${API}/driver-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: "9000000001", pin: "1234" }), // d_mahesh, drives v1, supervised by u_ravi
+  });
+  const driverToken = loginData.token;
+  check("driver login works", !!driverToken);
+
+  let { res: openRes, data: openData } = await jf(`${API}/driver-auth/odometer-open`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + driverToken },
+    body: JSON.stringify({ odometer: 50000, photo: TINY_PNG }),
+  });
+  check("driver submits opening odometer normally", openRes.ok, openData);
+  const shiftId = openData.id;
+
+  // ---------- Step 2: GET /driver-shifts as u_ravi (the actual supervisor) ----------
+  let { res: raviListRes, data: raviList } = await jf(`${API}/driver-shifts`, { headers: { Authorization: "Bearer " + ravi } });
+  check("u_ravi can GET /driver-shifts", raviListRes.ok);
+  const raviRow = raviList.find(r => r.id === shiftId);
+  check("u_ravi's list includes this shift", !!raviRow, raviRow);
+  check("u_ravi sees full open reading (odometer=50000)", raviRow && raviRow.open.odometer === 50000);
+  check("u_ravi sees the photo URL", raviRow && !!raviRow.open.photoUrl);
+  check("u_ravi's row shows canAct=true", raviRow && raviRow.canAct === true);
+  check("open not yet verified", raviRow && raviRow.open.verified === false);
+
+  // ---------- Step 3: a DIFFERENT site supervisor should NOT see this shift at all ----------
+  if (otherSupToken) {
+    let { data: otherList } = await jf(`${API}/driver-shifts`, { headers: { Authorization: "Bearer " + otherSupToken } });
+    const found = otherList.find(r => r.id === shiftId);
+    check("a different site_supervisor does NOT see this shift in their list", !found, found);
+  }
+
+  // ---------- Step 4: data_team sees this shift STATUS-ONLY (has a supervisor) ----------
+  if (dataTeamToken) {
+    let { data: dtList } = await jf(`${API}/driver-shifts`, { headers: { Authorization: "Bearer " + dataTeamToken } });
+    const dtRow = dtList.find(r => r.id === shiftId);
+    check("data_team sees this shift (status-only) in their list", !!dtRow, dtRow);
+    check("data_team does NOT see the odometer value (redacted)", dtRow && dtRow.open.odometer === undefined, dtRow && dtRow.open);
+    check("data_team does NOT see the photo URL (redacted)", dtRow && dtRow.open.photoUrl === undefined);
+    check("data_team's canAct is false for a supervised vehicle", dtRow && dtRow.canAct === false);
+    // data_team should be blocked from verifying/manual-entry on this shift too
+    let { res: dtVerifyRes } = await jf(`${API}/driver-shifts/${shiftId}/verify`, {
+      method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + dataTeamToken },
+      body: JSON.stringify({ point: "open" }),
+    });
+    check("data_team blocked from verifying a supervised vehicle's reading (403)", dtVerifyRes.status === 403, dtVerifyRes.status);
+  }
+
+  // ---------- Step 5: a different site_supervisor blocked from verifying ----------
+  if (otherSupToken) {
+    let { res: wrongVerifyRes } = await jf(`${API}/driver-shifts/${shiftId}/verify`, {
+      method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + otherSupToken },
+      body: JSON.stringify({ point: "open" }),
+    });
+    check("a different site_supervisor blocked from verifying (403)", wrongVerifyRes.status === 403, wrongVerifyRes.status);
+  }
+
+  // ---------- Step 6: u_ravi (the real supervisor) approves the opening reading ----------
+  let { res: verifyRes, data: verifyData } = await jf(`${API}/driver-shifts/${shiftId}/verify`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ravi },
+    body: JSON.stringify({ point: "open" }),
+  });
+  check("u_ravi can verify the opening reading", verifyRes.ok, verifyData);
+  check("verified flag now true", verifyData && verifyData.open.verified === true);
+  check("verifiedByName is Ravi Kumar", verifyData && verifyData.open.verifiedByName === "Ravi Kumar");
+
+  // ---------- Step 7: cannot verify the same reading twice (locked) ----------
+  let { res: doubleVerifyRes, data: doubleVerifyData } = await jf(`${API}/driver-shifts/${shiftId}/verify`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ravi },
+    body: JSON.stringify({ point: "open" }),
+  });
+  check("cannot verify an already-verified reading", doubleVerifyRes.status === 400, doubleVerifyData);
+
+  // ---------- Step 8: data_team NOW sees it as VERIFIED (status visible, still no number) ----------
+  if (dataTeamToken) {
+    let { data: dtList2 } = await jf(`${API}/driver-shifts`, { headers: { Authorization: "Bearer " + dataTeamToken } });
+    const dtRow2 = dtList2.find(r => r.id === shiftId);
+    check("data_team now sees VERIFIED status for the (still redacted) opening reading", dtRow2 && dtRow2.open.verified === true && dtRow2.open.verifiedByName === "Ravi Kumar", dtRow2 && dtRow2.open);
+  }
+
+  // ---------- Step 9: manual entry flow for the CLOSING reading ----------
+  // Driver generates a code
+  let { data: codeData } = await jf(`${API}/driver-auth/manual-entry-code`, {
+    method: "POST", headers: { Authorization: "Bearer " + driverToken },
+  });
+  check("driver generated a 6-digit code", codeData && /^\d{6}$/.test(codeData.code), codeData);
+  const code = codeData.code;
+
+  // Wrong PIN rejected
+  let { res: wrongPinRes, data: wrongPinData } = await jf(`${API}/driver-shifts/${shiftId}/manual-odometer`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ravi },
+    body: JSON.stringify({ point: "close", odometer: 50100, pin: "000000" }),
+  });
+  check("wrong PIN rejected", wrongPinRes.status === 400, wrongPinData);
+
+  // Correct PIN succeeds - u_ravi manually enters the closing reading
+  let { res: manualRes, data: manualData } = await jf(`${API}/driver-shifts/${shiftId}/manual-odometer`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ravi },
+    body: JSON.stringify({ point: "close", odometer: 50100, pin: code }),
+  });
+  check("supervisor manual entry succeeds with correct code", manualRes.ok, manualData);
+  check("manual entry auto-verified", manualData && manualData.shift.close.verified === true);
+  check("manual entry marks enteredBy=supervisor", manualData && manualData.shift.close.enteredBy === "supervisor");
+  check("₹100 penalty auto-created", manualData && manualData.penalty && manualData.penalty.amount === 100 && manualData.penalty.category === "missed_odometer_entry", manualData && manualData.penalty);
+  check("penalty attributed to the correct driver", manualData && manualData.penalty.personId === "d_mahesh");
+
+  // Code is single-use - reusing it should now fail
+  let { res: reuseRes } = await jf(`${API}/driver-shifts/${shiftId}/manual-odometer`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ravi },
+    body: JSON.stringify({ point: "open", odometer: 99999, pin: code }),
+  });
+  check("reusing the same code fails (already consumed)", reuseRes.status === 400);
+
+  // Shift should now be ready_to_logout (close reading transitioned status)
+  let { data: meCheck } = await jf(`${API}/driver-auth/me`, { headers: { Authorization: "Bearer " + driverToken } });
+  check("shift status is now ready_to_logout after manual close entry", meCheck.shift && meCheck.shift.status === "ready_to_logout", meCheck.shift && meCheck.shift.status);
+
+  // Verify the penalty actually shows up in the driver's payslip for this month
+  const month = new Date().toISOString().slice(0, 7);
+  let { data: payslip } = await jf(`${API}/payroll/payslip/driver/d_mahesh?month=${month}`, { headers: { Authorization: "Bearer " + ownerToken } });
+  const penaltyLine = payslip && payslip.deductions && payslip.deductions.find(d => d.category === "missed_odometer_entry");
+  check("penalty appears as a deduction on the driver's payslip", !!penaltyLine, payslip);
+
+  // ---------- Step 10: owner sees everything, full access ----------
+  let { data: ownerList } = await jf(`${API}/driver-shifts`, { headers: { Authorization: "Bearer " + ownerToken } });
+  const ownerRow = ownerList.find(r => r.id === shiftId);
+  check("owner sees this shift with full detail", ownerRow && ownerRow.open.odometer === 50000 && ownerRow.close.odometer === 50100, ownerRow);
+  check("owner canAct=true", ownerRow && ownerRow.canAct === true);
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

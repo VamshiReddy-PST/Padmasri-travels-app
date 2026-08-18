@@ -1,0 +1,109 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const { JSDOM } = require("jsdom");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5927;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed: " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT), AI_TEST_STUB: "1" });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+
+  async function newAppWindow(token) {
+    const html = await (await fetch(`${API}/`)).text();
+    const dom = new JSDOM(html, {
+      url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+      beforeParse(win) {
+        win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+        win.localStorage.setItem("fleetAuthToken", token);
+      },
+    });
+    await wait(900);
+    return dom.window;
+  }
+
+  // ---------- Owner: nav is now short (standalone tabs + group dropdowns) ----------
+  let win = await newAppWindow(ownerToken);
+  const errs = [];
+  win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+  await win.eval(`switchTab('dashboard')`);
+  await wait(700);
+
+  const topLevelButtons = () => Array.from(win.document.querySelectorAll("nav.tabbar > button")).map(b => b.textContent.trim());
+  const groupSummaries = () => Array.from(win.document.querySelectorAll("nav.tabbar details.nav-group > summary")).map(s => s.textContent.trim());
+  check("owner header has few standalone buttons (Dashboard + AI Assistant only)", topLevelButtons().length === 2, topLevelButtons());
+  check("owner header groups the rest into 5 dropdowns", groupSummaries().length === 5, groupSummaries());
+  const totalTopLevel = topLevelButtons().length + groupSummaries().length;
+  check("owner header total top-level items is way down from 15 flat tabs", totalTopLevel === 7, totalTopLevel);
+
+  // Every tab still reachable: count buttons across all group menus + standalone == original 15
+  const allReachable = topLevelButtons().length + Array.from(win.document.querySelectorAll("nav.tabbar .nav-group-menu button")).length;
+  check("every one of the owner's 15 tabs is still reachable somewhere in the nav", allReachable === 15, allReachable);
+
+  // ---------- Opening a group reveals its tabs (native <details> open attribute) ----------
+  const moneyGroup = Array.from(win.document.querySelectorAll("nav.tabbar details.nav-group")).find(d => d.querySelector("summary").textContent.includes("Money"));
+  check("found the Money group", !!moneyGroup);
+  moneyGroup.setAttribute("open", "");
+  const moneyItems = Array.from(moneyGroup.querySelectorAll(".nav-group-menu button")).map(b => b.textContent.trim());
+  check("Money group contains Expenses, Payroll, Subvendors, Reports, Backup", ["Expenses","Payroll","Subvendors","Reports","Backup"].every(l => moneyItems.includes(l)), moneyItems);
+
+  // ---------- Clicking a tab inside a group actually navigates there ----------
+  await win.eval(`switchTab('payroll')`);
+  await wait(500);
+  const h1AfterPayroll = (win.document.querySelector("h1.page-title") || {}).textContent || "";
+  check("clicking through to a grouped tab (payroll) actually renders that screen", /payroll/i.test(h1AfterPayroll) || win.document.body.innerHTML.toLowerCase().includes("payroll"), h1AfterPayroll);
+  const activeSummaries = Array.from(win.document.querySelectorAll("nav.tabbar details.nav-group > summary.active")).map(s=>s.textContent.trim());
+  check("the Money group's summary shows active state when payroll is selected", activeSummaries.some(t=>t.includes("Money")), activeSummaries);
+
+  check("no runtime JS errors in owner nav flow", errs.length === 0, errs);
+
+  // ---------- A short-tab-list role (HR, 3 tabs) still renders correctly ----------
+  const hrToken = await loginStaff("9000100007", "Padmasri@6666");
+  const winHr = await newAppWindow(hrToken);
+  await wait(700);
+  const hrTopLevel = Array.from(winHr.document.querySelectorAll("nav.tabbar > button, nav.tabbar details.nav-group > summary")).map(b=>b.textContent.trim());
+  const hrReachable = Array.from(winHr.document.querySelectorAll("nav.tabbar > button")).length + Array.from(winHr.document.querySelectorAll("nav.tabbar .nav-group-menu button")).length;
+  check("HR's 3 tabs are all still reachable", hrReachable === 3, { hrTopLevel, hrReachable });
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

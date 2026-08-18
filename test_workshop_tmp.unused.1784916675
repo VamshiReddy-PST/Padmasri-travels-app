@@ -1,0 +1,223 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const { JSDOM } = require("jsdom");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5909;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed for " + identifier + ": " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return { token, user: data.user };
+}
+const TEST_BILL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const { token: ownerToken } = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+
+  // ---------- Create two Workshop staff accounts: a Workshop Manager + a Mechanic ----------
+  const { res: wmRes, data: wmData } = await jf(`${API}/api/users`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ name: "Test Workshop Manager", role: "workshop_manager", email: "testwm@padmasritravels.in", phone: "9000200001", password: "TempPass!123" }),
+  });
+  check("workshop_manager account created", wmRes.ok, wmData);
+  const { res: mechRes, data: mechData } = await jf(`${API}/api/users`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ name: "Test Mechanic", role: "mechanic", email: "testmech@padmasritravels.in", phone: "9000200002", password: "TempPass!123" }),
+  });
+  check("mechanic account created", mechRes.ok, mechData);
+
+  const { token: wmToken } = await loginStaff("testwm@padmasritravels.in", "TempPass!123");
+  const { token: mechToken } = await loginStaff("testmech@padmasritravels.in", "TempPass!123");
+
+  // ---------- Site Supervisor Ravi raises a repair request ----------
+  const { token: raviToken } = await loginStaff("9000100001", "Padmasri@1111");
+  const vehiclesResp = await jf(`${API}/api/vehicles`, { headers: { Authorization: "Bearer " + raviToken } });
+  const raviVehicle = vehiclesResp.data[0];
+  check("Ravi has at least one visible vehicle to raise a request for", !!raviVehicle);
+  const { res: rrRes, data: rrData } = await jf(`${API}/api/repair-requests`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + raviToken },
+    body: JSON.stringify({ vehicleId: raviVehicle.id, issueDescription: "AC not cooling", urgency: "high" }),
+  });
+  check("repair request created by site_supervisor", rrRes.ok, rrData);
+  check("repair request starts in 'requested' status", rrData.status === "requested", rrData.status);
+
+  // A random staff role (e.g. data_team) should NOT be able to raise one
+  // (skipped - data_team login not readily available in this seed without more lookups)
+
+  // ---------- Workshop Manager sees it in the incoming queue and assigns it ----------
+  const { res: listRes, data: listData } = await jf(`${API}/api/repair-requests`, { headers: { Authorization: "Bearer " + wmToken } });
+  check("workshop_manager can list repair requests", listRes.ok);
+  const seenRequest = (listData || []).find(r => r.id === rrData.id);
+  check("workshop_manager sees the newly raised request", !!seenRequest, seenRequest);
+
+  const { res: assignRes, data: assignData } = await jf(`${API}/api/repair-requests/${rrData.id}/assign`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + wmToken },
+    body: JSON.stringify({ assignedTo: mechData.id }),
+  });
+  check("workshop_manager assigns request to the mechanic", assignRes.ok, assignData);
+  check("status is now 'assigned'", assignData.status === "assigned", assignData.status);
+
+  // A mechanic should NOT be able to assign requests (only workshop_manager/owner)
+  const { res: badAssignRes } = await jf(`${API}/api/repair-requests/${rrData.id}/assign`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + mechToken },
+    body: JSON.stringify({ assignedTo: mechData.id }),
+  });
+  check("mechanic is forbidden from assigning (workshop_manager/owner only)", badAssignRes.status === 403, badAssignRes.status);
+
+  // ---------- Mechanic starts and completes the repair ----------
+  const { res: startRes, data: startData } = await jf(`${API}/api/repair-requests/${rrData.id}/start`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + mechToken },
+  });
+  check("mechanic starts the assigned repair", startRes.ok && startData.status === "in_progress", startData);
+
+  const { res: completeRes, data: completeData } = await jf(`${API}/api/repair-requests/${rrData.id}/complete`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + mechToken },
+    body: JSON.stringify({
+      workDone: "Recharged AC gas and cleaned condenser",
+      partsUsed: [{ name: "AC Gas R134a", qty: 1, unit: "Kg", cost: 1200 }, { name: "Labour", qty: 1, unit: "", cost: 300 }],
+    }),
+  });
+  check("mechanic completes the repair", completeRes.ok, completeData);
+  check("completed repair totalCost = 1500", completeData.repairRequest.totalCost === 1500, completeData.repairRequest.totalCost);
+  check("completing the repair auto-created a vehicle expense", !!completeData.expense && completeData.expense.vehicleId === raviVehicle.id && completeData.expense.amount === 1500, completeData.expense);
+  check("auto-created expense is pending approval (like every other expense)", completeData.expense.status === "pending", completeData.expense.status);
+
+  // The vehicle-cost report should now pick up this repair expense once approved
+  await jf(`${API}/api/expenses/${completeData.expense.id}/decide`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ status: "approved" }),
+  });
+  const { data: oca } = await jf(`${API}/api/reports/operational-cost-analysis`, { headers: { Authorization: "Bearer " + ownerToken } });
+  const vehRow = (oca.vehicles || []).find(v => v.vehicleId === raviVehicle.id);
+  check("approved repair expense shows up in the vehicle-wise cost report", vehRow && vehRow.total >= 1500, vehRow);
+
+  // ---------- Bulk purchase + invoice upload ----------
+  const { res: purchaseRes, data: purchaseData } = await jf(`${API}/api/workshop-purchases`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + mechToken },
+    body: JSON.stringify({
+      items: [{ name: "Adblue", qty: 20, unit: "Litres" }, { name: "Brake Liners", qty: 10, unit: "sets" }],
+      totalAmount: 8500,
+      notes: "Monthly stock top-up",
+      invoice: TEST_BILL,
+    }),
+  });
+  check("mechanic logs a bulk purchase with invoice", purchaseRes.ok, purchaseData);
+  const { res: purchListRes, data: purchListData } = await jf(`${API}/api/workshop-purchases`, { headers: { Authorization: "Bearer " + ownerToken } });
+  check("owner (Finance) can see the bulk purchase for printing", purchListRes.ok && purchListData.some(p => p.id === purchaseData.id));
+
+  // site_supervisor should NOT be able to log a workshop purchase
+  const { res: badPurchaseRes } = await jf(`${API}/api/workshop-purchases`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + raviToken },
+    body: JSON.stringify({ items: [{ name: "X", qty: 1 }], totalAmount: 100, invoice: TEST_BILL }),
+  });
+  check("site_supervisor is forbidden from logging workshop purchases", badPurchaseRes.status === 403, badPurchaseRes.status);
+
+  // ---------- Frontend: staff app renders the Repair Requests + Workshop screens ----------
+  const html = await (await fetch(`${API}/`)).text();
+
+  // Site Supervisor's Repair Requests screen
+  {
+    const dom = new JSDOM(html, {
+      url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+      beforeParse(win) {
+        win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+        win.URL.createObjectURL = () => "blob:mock";
+        win.URL.revokeObjectURL = () => {};
+        win.localStorage.setItem("fleetAuthToken", raviToken);
+      },
+    });
+    const win = dom.window;
+    const errs = [];
+    win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+    await wait(800);
+    check("site_supervisor sees 'Repair Requests' tab button", win.document.body.innerHTML.includes("Repair Requests"));
+    await win.eval(`switchTab('repairs')`);
+    await wait(700);
+    const body = win.document.body.innerHTML;
+    check("Repair Requests screen: no runtime JS errors", errs.length === 0, errs);
+    check("Repair Requests screen shows the Raise a Repair Request form", body.includes("Raise a Repair Request"));
+    check("Repair Requests screen lists the AC issue we raised", body.includes("AC not cooling"));
+    check("Repair Requests screen shows COMPLETED status badge", body.includes("COMPLETED"));
+  }
+
+  // Workshop Manager's queue screen
+  {
+    const dom = new JSDOM(html, {
+      url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+      beforeParse(win) {
+        win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+        win.URL.createObjectURL = () => "blob:mock";
+        win.URL.revokeObjectURL = () => {};
+        win.localStorage.setItem("fleetAuthToken", wmToken);
+      },
+    });
+    const win = dom.window;
+    const errs = [];
+    win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+    await wait(800);
+    const body1 = win.document.body.innerHTML;
+    check("workshop_manager default tab is Workshop (no crash on boot)", body1.includes("Workshop"));
+    check("workshop_manager boot: no runtime JS errors", errs.length === 0, errs);
+    check("workshop_manager sees All Requests section with our completed repair", body1.includes("All Requests") && body1.includes("AC not cooling"));
+  }
+
+  // Mechanic's My Repairs + bulk purchase screen
+  {
+    const dom = new JSDOM(html, {
+      url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+      beforeParse(win) {
+        win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+        win.URL.createObjectURL = () => "blob:mock";
+        win.URL.revokeObjectURL = () => {};
+        win.localStorage.setItem("fleetAuthToken", mechToken);
+      },
+    });
+    const win = dom.window;
+    const errs = [];
+    win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+    await wait(800);
+    const body = win.document.body.innerHTML;
+    check("mechanic boot: no runtime JS errors", errs.length === 0, errs);
+    check("mechanic sees Log a Bulk Purchase form", body.includes("Log a Bulk Purchase"));
+    check("mechanic sees the bulk purchase they logged in Recent Bulk Purchases", body.includes("Adblue") && body.includes("Brake Liners"));
+    check("mechanic sees My Attendance tab (attendance clock-in works for workshop roles too)", body.includes("My Attendance"));
+  }
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

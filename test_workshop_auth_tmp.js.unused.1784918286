@@ -1,0 +1,185 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5912;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed: " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+
+  // Create a Workshop Manager and a Mechanic via the normal staff endpoint -
+  // this should now auto-set pin:"1234" for both since they're WORKSHOP_STAFF_ROLES.
+  const { res: wmRes, data: wmData } = await jf(`${API}/api/users`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ name: "Auth Test Manager", role: "workshop_manager", phone: "9000400001", password: "TempPass!123" }),
+  });
+  check("workshop_manager user created", wmRes.ok, wmData);
+  const { res: mechRes, data: mechData } = await jf(`${API}/api/users`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ name: "Auth Test Mechanic", role: "mechanic", phone: "9000400002", password: "TempPass!123" }),
+  });
+  check("mechanic user created", mechRes.ok, mechData);
+  const { res: helperRes, data: helperData } = await jf(`${API}/api/users`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ name: "Auth Test Helper", role: "helper", phone: "9000400003", password: "TempPass!123" }),
+  });
+  check("helper user created", helperRes.ok, helperData);
+
+  // Wrong PIN should fail
+  const { res: badRes } = await jf(`${API}/api/workshop-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: "9000400001", pin: "9999" }),
+  });
+  check("wrong PIN rejected", badRes.status === 401);
+
+  // Correct default PIN should work
+  const { res: wmLoginRes, data: wmLoginData } = await jf(`${API}/api/workshop-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: "9000400001", pin: "1234" }),
+  });
+  check("workshop_manager logs in with default PIN", wmLoginRes.ok, wmLoginData);
+  check("login response has no passwordHash/pin leaked", wmLoginData.user && wmLoginData.user.passwordHash === undefined && wmLoginData.user.pin === undefined, wmLoginData.user);
+  const wmToken = wmLoginData.token;
+
+  const { res: mechLoginRes, data: mechLoginData } = await jf(`${API}/api/workshop-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: "9000400002", pin: "1234" }),
+  });
+  check("mechanic logs in with default PIN", mechLoginRes.ok, mechLoginData);
+  const mechToken = mechLoginData.token;
+
+  const { res: helperLoginRes, data: helperLoginData } = await jf(`${API}/api/workshop-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: "9000400003", pin: "1234" }),
+  });
+  const helperToken = helperLoginData.token;
+
+  // /me works
+  const { res: meRes, data: meData } = await jf(`${API}/api/workshop-auth/me`, { headers: { Authorization: "Bearer " + wmToken } });
+  check("workshop-auth/me returns manager", meRes.ok && meData.user.role === "workshop_manager", meData);
+
+  // A driver raises a repair request (reuse existing seed driver login)
+  const { data: driverLogin } = await jf(`${API}/api/driver-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: "9000000001", pin: "1234" }),
+  });
+  const { res: rrRes, data: rrData } = await jf(`${API}/api/driver-auth/repair-requests`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + driverLogin.token },
+    body: JSON.stringify({ issueDescription: "Brake pads worn (workshop-auth test)", urgency: "high" }),
+  });
+  check("driver raised repair request", rrRes.ok, rrData);
+  const rrId = rrData.id;
+
+  // Workshop staff can list it via workshop-auth
+  const { res: listRes, data: listData } = await jf(`${API}/api/workshop-auth/repair-requests`, { headers: { Authorization: "Bearer " + mechToken } });
+  check("mechanic sees the request via workshop-auth", listRes.ok && listData.some(r => r.id === rrId), listData && listData.length);
+
+  // Mechanic (not manager/supervisor) cannot assign
+  const { res: badAssignRes, data: badAssignData } = await jf(`${API}/api/workshop-auth/repair-requests/${rrId}/assign`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + mechToken },
+    body: JSON.stringify({ assignedTo: mechData.id }),
+  });
+  check("mechanic blocked from assigning", badAssignRes.status === 403, badAssignData);
+
+  // Manager assigns it to the mechanic
+  const { res: assignRes, data: assignData } = await jf(`${API}/api/workshop-auth/repair-requests/${rrId}/assign`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + wmToken },
+    body: JSON.stringify({ assignedTo: mechData.id }),
+  });
+  check("manager assigns request to mechanic via workshop-auth", assignRes.ok && assignData.status === "assigned", assignData);
+
+  // Helper (not assigned) cannot start it
+  const { res: helperStartRes } = await jf(`${API}/api/workshop-auth/repair-requests/${rrId}/start`, {
+    method: "PATCH", headers: { Authorization: "Bearer " + helperToken },
+  });
+  check("unassigned helper blocked from starting", helperStartRes.status === 403);
+
+  // Mechanic starts and completes it
+  const { res: startRes, data: startData } = await jf(`${API}/api/workshop-auth/repair-requests/${rrId}/start`, {
+    method: "PATCH", headers: { Authorization: "Bearer " + mechToken },
+  });
+  check("mechanic starts assigned request", startRes.ok && startData.status === "in_progress", startData);
+
+  const { res: completeRes, data: completeData } = await jf(`${API}/api/workshop-auth/repair-requests/${rrId}/complete`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + mechToken },
+    body: JSON.stringify({ workDone: "Replaced brake pads", partsUsed: [{ name: "Brake pads", qty: 1, unit: "set", cost: 1500 }] }),
+  });
+  check("mechanic completes request via workshop-auth", completeRes.ok && completeData.repairRequest.status === "completed", completeData);
+
+  // Bulk purchase via workshop-auth (base64 tiny PNG as invoice)
+  const tinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+  const { res: purchRes, data: purchData } = await jf(`${API}/api/workshop-auth/workshop-purchases`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + mechToken },
+    body: JSON.stringify({ items: [{ name: "Engine oil", qty: 10, unit: "L" }], totalAmount: 3500, invoice: tinyPng, notes: "workshop-auth test" }),
+  });
+  check("mechanic logs bulk purchase via workshop-auth", purchRes.ok, purchData);
+
+  const { res: myPurchRes, data: myPurchData } = await jf(`${API}/api/workshop-auth/workshop-purchases`, { headers: { Authorization: "Bearer " + mechToken } });
+  check("mechanic sees own purchase in workshop-auth list", myPurchRes.ok && myPurchData.some(p => p.id === purchData.id), myPurchData && myPurchData.length);
+
+  // Reset PIN (HR/Owner only) then confirm old session for that user still resolves (session unaffected) but a fresh login still works with reset PIN
+  const { res: resetRes, data: resetData } = await jf(`${API}/api/users/${mechData.id}/reset-workshop-pin`, {
+    method: "PATCH", headers: { Authorization: "Bearer " + ownerToken },
+  });
+  check("owner resets mechanic's PIN", resetRes.ok, resetData);
+  const { res: reLoginRes } = await jf(`${API}/api/workshop-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: "9000400002", pin: "1234" }),
+  });
+  check("mechanic can still log in with default PIN after reset", reLoginRes.ok);
+
+  // Logout invalidates the session
+  await jf(`${API}/api/workshop-auth/logout`, { method: "POST", headers: { Authorization: "Bearer " + wmToken } });
+  const { res: afterLogoutRes } = await jf(`${API}/api/workshop-auth/me`, { headers: { Authorization: "Bearer " + wmToken } });
+  check("token invalid after logout", afterLogoutRes.status === 401);
+
+  // A staff (email/password) role, e.g. Owner, cannot use workshop-auth/login at all (not in WORKSHOP_STAFF_ROLES)
+  const { res: ownerAsWorkshopRes } = await jf(`${API}/api/workshop-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: "9999999999", pin: "1234" }),
+  });
+  check("non-workshop phone rejected from workshop-auth login", ownerAsWorkshopRes.status === 401);
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

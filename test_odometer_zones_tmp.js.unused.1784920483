@@ -1,0 +1,148 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const { JSDOM } = require("jsdom");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5919;
+const API = `http://127.0.0.1:${PORT}`;
+const TINY_PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed: " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+// Figures out which zone section a piece of marker text physically falls
+// under in the rendered HTML, by comparing string offsets of the section
+// headers vs. the marker - avoids needing dedicated per-zone DOM containers.
+function zoneOf(html, marker) {
+  const markerIdx = html.indexOf(marker);
+  if (markerIdx === -1) return null;
+  const headers = [
+    ["pending", html.indexOf("Pending Verification")],
+    ["approved", html.indexOf("Approved - Awaiting Closing Reading")],
+    ["completed_toggle", html.indexOf("Show completed shifts")],
+    ["completed", html.lastIndexOf("Completed <span")], // the actual Completed section header (Completed zone), distinct from the toggle line above it
+  ].filter(([, i]) => i !== -1).sort((a, b) => a[1] - b[1]);
+  let zone = null;
+  for (const [name, idx] of headers) {
+    if (idx <= markerIdx) zone = name; else break;
+  }
+  return zone;
+}
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const ravi = await loginStaff("9000100001", "Padmasri@1111"); // site_supervisor, supervises v1 (driver d_mahesh)
+
+  // Driver logs in and submits the opening reading (not verified yet).
+  const { data: driverLogin } = await jf(`${API}/api/driver-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: "9000000001", pin: "1234" }),
+  });
+  const driverToken = driverLogin.token;
+  const { data: openData } = await jf(`${API}/api/driver-auth/odometer-open`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + driverToken },
+    body: JSON.stringify({ odometer: 61000, photo: TINY_PNG }),
+  });
+  const shiftId = openData.id;
+  const marker = "Mahesh"; // driver name, unique enough for this single-shift test
+
+  async function newAppWindow() {
+    const html = await (await fetch(`${API}/`)).text();
+    const dom = new JSDOM(html, {
+      url: `${API}/`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+      beforeParse(win) {
+        win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+        win.localStorage.setItem("fleetAuthToken", ravi);
+      },
+    });
+    await wait(700);
+    return dom.window;
+  }
+
+  // ---------- Stage 1: opening reading entered, NOT verified -> Pending ----------
+  let win = await newAppWindow();
+  const errs1 = [];
+  win.addEventListener("error", (e) => errs1.push(e.error ? e.error.stack || e.error.message : e.message));
+  await win.eval(`switchTab('odometer_verify')`);
+  await wait(600);
+  let body = win.document.body.innerHTML;
+  check("stage 1: shift with unverified opening reading is in the Pending zone", zoneOf(body, marker) === "pending", zoneOf(body, marker));
+  check("stage 1: no runtime JS errors", errs1.length === 0, errs1);
+
+  // Approve the opening reading through the real UI function (stub confirm()).
+  win.confirm = () => true;
+  await win.eval(`verifyOdometerReading('${shiftId}','open')`);
+  await wait(700);
+
+  // ---------- Stage 2: opening verified, closing not yet -> Approved (NOT Completed) ----------
+  body = win.document.body.innerHTML;
+  check("stage 2: shift with opening verified but closing outstanding is in the Approved zone", zoneOf(body, marker) === "approved", zoneOf(body, marker));
+
+  // Sanity-check directly against the API too.
+  const { data: afterOpenList } = await jf(`${API}/api/driver-shifts`, { headers: { Authorization: "Bearer " + ravi } });
+  const rowAfterOpen = afterOpenList.find(r => r.id === shiftId);
+  check("backend: open.verified=true, close.verified=false after only opening approved", rowAfterOpen && rowAfterOpen.open.verified === true && rowAfterOpen.close.verified === false, rowAfterOpen);
+
+  // Now submit + verify the closing reading too.
+  await jf(`${API}/api/driver-auth/odometer-close`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + driverToken },
+    body: JSON.stringify({ odometer: 61120, photo: TINY_PNG }),
+  });
+  await jf(`${API}/api/driver-shifts/${shiftId}/verify`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ravi },
+    body: JSON.stringify({ point: "close" }),
+  });
+
+  // ---------- Stage 3: BOTH verified -> Completed (hidden by default, shown via toggle) ----------
+  win = await newAppWindow();
+  const errs3 = [];
+  win.addEventListener("error", (e) => errs3.push(e.error ? e.error.stack || e.error.message : e.message));
+  await win.eval(`switchTab('odometer_verify')`);
+  await wait(600);
+  body = win.document.body.innerHTML;
+  check("stage 3: with Completed hidden by default, the now-fully-verified shift shows in neither Pending nor Approved", !zoneOf(body.split("Show completed shifts")[0], marker));
+  check("stage 3: 'Show completed shifts' toggle count reflects 1 completed shift", /Show completed shifts \(1 -/.test(body), body.match(/Show completed shifts \([^)]*\)/));
+
+  await win.eval(`toggleOdometerVerifyShowCompleted(true)`);
+  await wait(600);
+  body = win.document.body.innerHTML;
+  check("stage 3: after toggling on, the shift now appears under the Completed zone", zoneOf(body, marker) === "completed", zoneOf(body, marker));
+  check("stage 3: no runtime JS errors across the whole flow", errs3.length === 0, errs3);
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

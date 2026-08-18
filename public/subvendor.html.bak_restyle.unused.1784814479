@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Padmasri Travels - Subvendor Portal</title>
+<meta name="theme-color" content="#1f3864" />
+<style>
+  :root{
+    --navy:#1f3864; --accent:#2e74b5; --accent-light:#eaf2fb; --green:#1e8e3e;
+    --amber:#b8860b; --red:#c0392b; --grey:#666; --bg:#f4f6f9; --card:#ffffff;
+    --border:#e1e6ec;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;}
+  #app{max-width:1080px;margin:0 auto;min-height:100vh;background:var(--bg);}
+  header.topbar{background:var(--navy);color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;}
+  header.topbar .brand{font-weight:700;font-size:17px;}
+  header.topbar .who{font-size:12.5px;opacity:.9;text-align:right;}
+  header.topbar button.logout{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35);color:#fff;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;margin-left:10px;}
+  main{padding:18px 20px 60px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px 18px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.03);}
+  h1.page-title{font-size:20px;margin:4px 0 16px;color:var(--navy);}
+  h2.section-title{font-size:15px;margin:0 0 10px;color:var(--navy);border-bottom:2px solid var(--accent-light);padding-bottom:6px;}
+  .grid{display:grid;gap:14px;}
+  .grid.cols-4{grid-template-columns:repeat(4,1fr);}
+  @media(max-width:900px){.grid.cols-4{grid-template-columns:repeat(2,1fr);}}
+  @media(max-width:520px){.grid.cols-4{grid-template-columns:1fr;}}
+  .kpi{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;}
+  .kpi .num{font-size:24px;font-weight:700;color:var(--navy);}
+  .kpi .label{font-size:12px;color:var(--grey);margin-top:2px;}
+  .kpi.good .num{color:var(--green);}
+  .kpi.bad .num{color:var(--red);}
+  .kpi.warn .num{color:var(--amber);}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  table th{text-align:left;background:var(--accent-light);color:var(--navy);padding:8px 10px;font-size:12px;}
+  table td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;}
+  .badge.trip{background:#eaf2fb;color:var(--accent);}
+  .badge.km{background:#fff4d6;color:var(--amber);}
+  .badge.package{background:#e2f4e6;color:var(--green);}
+  .badge.outstanding{background:#fbe4e1;color:var(--red);}
+  .badge.settled{background:#e2f4e6;color:var(--green);}
+  .login-wrap{max-width:420px;margin:60px auto;}
+  .login-wrap .logo{text-align:center;font-size:22px;font-weight:800;color:var(--navy);margin-bottom:4px;}
+  .login-wrap .sub{text-align:center;color:var(--grey);font-size:13px;margin-bottom:22px;}
+  .field{margin-bottom:12px;}
+  .field label{display:block;font-size:12px;color:var(--grey);margin-bottom:4px;}
+  .field input{width:100%;padding:9px 10px;border:1px solid #ccd3db;border-radius:6px;font-size:14px;}
+  .btn{background:var(--accent);color:#fff;border:none;padding:9px 16px;border-radius:6px;font-size:13.5px;cursor:pointer;font-weight:600;}
+  .btn:hover{background:var(--navy);}
+  .btn.secondary{background:#fff;color:var(--accent);border:1px solid var(--accent);}
+  .btn:disabled{opacity:.5;cursor:not-allowed;}
+  .banner{background:#fff8e6;border:1px solid #f0dca0;color:#7a5a00;padding:10px 14px;border-radius:8px;font-size:12.5px;margin-bottom:16px;}
+  .banner.error{background:#fbe4e1;border-color:#eab3ab;color:#7a2115;}
+  .muted{color:var(--grey);font-size:12px;}
+  .empty{text-align:center;color:var(--grey);padding:30px 10px;font-size:13px;}
+  .footer-note{font-size:11px;color:#9aa4b2;text-align:center;padding:20px;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const API = "/api/subvendor-auth";
+let svToken = localStorage.getItem("fleetSubvendorToken") || null;
+let subvendor = null;
+let dashboard = null;
+let lastError = "";
+let pwChangeError = "";
+
+async function api(path, opts){
+  opts = opts || {};
+  opts.headers = Object.assign({"Content-Type":"application/json"}, opts.headers||{}, svToken ? {Authorization:"Bearer "+svToken} : {});
+  const res = await fetch(API+path, opts);
+  const data = await res.json().catch(()=>({}));
+  if(res.status===401){ doLogout(true); throw new Error("Session expired - please log in again."); }
+  if(!res.ok) throw new Error(data.error || "Something went wrong.");
+  return data;
+}
+
+async function boot(){
+  if(!svToken){ renderLogin(); return; }
+  try{
+    subvendor = await api("/me");
+    if(subvendor.mustChangePassword){ renderForcedPasswordChange(); return; }
+    dashboard = await api("/dashboard");
+    render();
+  }catch(e){ doLogout(true); }
+}
+
+function doLogout(silent){
+  svToken = null; subvendor = null; dashboard = null;
+  localStorage.removeItem("fleetSubvendorToken");
+  if(!silent) api("/logout", {method:"POST"}).catch(()=>{});
+  renderLogin();
+}
+
+function renderLogin(){
+  const app = document.getElementById("app");
+  app.innerHTML = `
+  <div class="login-wrap">
+    <div class="logo">🧭 Padmasri Travels</div>
+    <div class="sub">Subvendor / Vehicle Owner Portal</div>
+    <div class="card">
+      ${lastError ? `<div class="banner error">${lastError}</div>` : ""}
+      <div class="field">
+        <label>Email or Mobile Number</label>
+        <input type="text" id="loginIdentifier" placeholder="you@company.com or your mobile number" autocomplete="username" />
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="loginPassword" placeholder="Your password" autocomplete="current-password" />
+      </div>
+      <button class="btn" style="width:100%" onclick="doLogin()" id="loginBtn">Sign in</button>
+      <div class="muted" style="margin-top:14px;text-align:center;border-top:1px solid var(--border);padding-top:14px;">Not a subvendor? <a href="/">Go to the Staff / Driver login</a></div>
+    </div>
+  </div>`;
+}
+async function doLogin(){
+  lastError = "";
+  const identifier = document.getElementById("loginIdentifier").value.trim();
+  const password = document.getElementById("loginPassword").value;
+  if(!identifier || !password){ lastError = "Enter your email/mobile number and password."; renderLogin(); return; }
+  const btn = document.getElementById("loginBtn");
+  btn.disabled = true; btn.textContent = "Signing in...";
+  try{
+    const res = await fetch(API+"/login", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({identifier, password})});
+    const data = await res.json();
+    if(!res.ok) throw new Error(data.error || "Login failed");
+    svToken = data.token;
+    localStorage.setItem("fleetSubvendorToken", svToken);
+    await boot();
+  }catch(e){ lastError = e.message; renderLogin(); }
+}
+
+const PASSWORD_MIN_LENGTH = 9;
+function passwordPolicyError(password){
+  if(!password || password.length < PASSWORD_MIN_LENGTH) return `Password must be more than 8 characters (at least ${PASSWORD_MIN_LENGTH}).`;
+  if(!/[a-zA-Z]/.test(password)) return "Password must include at least one letter.";
+  if(!/[0-9]/.test(password)) return "Password must include at least one number.";
+  if(!/[^a-zA-Z0-9]/.test(password)) return "Password must include at least one symbol (e.g. ! @ # $ %).";
+  return null;
+}
+function renderForcedPasswordChange(){
+  const app = document.getElementById("app");
+  app.innerHTML = `
+  <div class="login-wrap">
+    <div class="logo">🧭 Padmasri Travels</div>
+    <div class="sub">Set a new password to continue</div>
+    <div class="card">
+      <div class="banner">For security, you need to set your own password before you can use the portal${subvendor && subvendor.name ? ", " + subvendor.name : ""}.</div>
+      ${pwChangeError ? `<div class="banner error">${pwChangeError}</div>` : ""}
+      <div class="field"><label>Current (Temporary) Password</label><input type="password" id="pwCurrent" autocomplete="current-password" /></div>
+      <div class="field"><label>New Password</label><input type="password" id="pwNew" autocomplete="new-password" /></div>
+      <div class="field"><label>Confirm New Password</label><input type="password" id="pwConfirm" autocomplete="new-password" /></div>
+      <div class="muted" style="margin-bottom:10px;">Strong password: more than 8 characters, with letters, numbers and symbols.</div>
+      <button class="btn" style="width:100%" onclick="submitForcedPasswordChange()" id="pwBtn">Set New Password</button>
+      <button class="btn secondary" style="width:100%;margin-top:8px;" onclick="doLogout()">Log out instead</button>
+    </div>
+  </div>`;
+}
+async function submitForcedPasswordChange(){
+  pwChangeError = "";
+  const currentPassword = document.getElementById("pwCurrent").value;
+  const newPassword = document.getElementById("pwNew").value;
+  const confirm = document.getElementById("pwConfirm").value;
+  if(newPassword !== confirm){ pwChangeError = "New password and confirmation don't match."; renderForcedPasswordChange(); return; }
+  const policyErr = passwordPolicyError(newPassword);
+  if(policyErr){ pwChangeError = policyErr; renderForcedPasswordChange(); return; }
+  const btn = document.getElementById("pwBtn");
+  btn.disabled = true; btn.textContent = "Saving...";
+  try{
+    await api("/change-password", {method:"POST", body: JSON.stringify({currentPassword, newPassword})});
+    await boot();
+  }catch(e){ pwChangeError = e.message; renderForcedPasswordChange(); }
+}
+
+function billingLabel(b){
+  if(!b) return "-";
+  if(b.mode==="per_trip") return `₹${b.rate} / trip`;
+  if(b.mode==="per_km") return `₹${b.rate} / km`;
+  if(b.mode==="per_package") return `₹${b.rate} / month (package)`;
+  return "-";
+}
+function sourceBadge(source){
+  const labels = {trip:"PER TRIP", km:"PER KM", package:"PACKAGE"};
+  return `<span class="badge ${source}">${labels[source]||source.toUpperCase()}</span>`;
+}
+function render(){
+  const app = document.getElementById("app");
+  const d = dashboard || {vehicles:[],totalTrips:0,completedTrips:0,totalIncome:0,incomeEntries:[],payments:[],paymentsByType:{},totalPaid:0,advances:[],totalOutstandingPrincipal:0,totalInterestAccrued:0,netPayableToSubvendor:0};
+  const vehicleRows = d.vehicles.map(v=>`
+    <tr>
+      <td><b>${v.reg}</b></td>
+      <td>${v.clientName || "-"}</td>
+      <td>${v.route || "-"}${v.routeStartingPoint ? " ("+v.routeStartingPoint+")" : ""}</td>
+      <td>${v.driverName || "-"}</td>
+      <td>${billingLabel(v.billing)}</td>
+    </tr>`).join("");
+  const incomeRows = d.incomeEntries.map(e=>`
+    <tr>
+      <td>${e.date}</td>
+      <td>${sourceBadge(e.source)}</td>
+      <td>₹${e.amount}</td>
+      <td>${e.note||""}</td>
+    </tr>`).join("");
+  const paymentRows = d.payments.map(p=>`
+    <tr>
+      <td>${p.date}</td>
+      <td>${p.type}</td>
+      <td>₹${p.amount}</td>
+      <td>${p.note||""}</td>
+    </tr>`).join("");
+  const advanceRows = d.advances.map(a=>`
+    <tr>
+      <td>${a.date}</td>
+      <td>₹${a.principal}</td>
+      <td>₹${a.outstandingPrincipal}</td>
+      <td>₹${a.interestAccrued} <span class="muted">(3%/mo simple)</span></td>
+      <td><span class="badge ${a.status}">${a.status.toUpperCase()}</span></td>
+    </tr>`).join("");
+  const paymentTypeCards = Object.entries(d.paymentsByType).map(([type,amt])=>
+    `<div class="kpi"><div class="num">₹${amt}</div><div class="label">${type} paid</div></div>`
+  ).join("");
+
+  app.innerHTML = `
+  <header class="topbar">
+    <div class="brand">🧭 Padmasri Travels - Subvendor Portal</div>
+    <div>
+      <span class="who">${subvendor ? subvendor.name : ""}</span>
+      <button class="logout" onclick="doLogout()">Log out</button>
+    </div>
+  </header>
+  <main>
+    <h1 class="page-title">Welcome, ${subvendor ? subvendor.name : ""}</h1>
+    <div class="grid cols-4">
+      <div class="kpi"><div class="num">${d.vehicles.length}</div><div class="label">Your vehicles</div></div>
+      <div class="kpi"><div class="num">${d.completedTrips} / ${d.totalTrips}</div><div class="label">Completed / total trips</div></div>
+      <div class="kpi good"><div class="num">₹${d.totalIncome}</div><div class="label">Total income earned</div></div>
+      <div class="kpi ${d.netPayableToSubvendor<0?'bad':'good'}"><div class="num">₹${d.netPayableToSubvendor}</div><div class="label">Net payable to you</div></div>
+    </div>
+
+    <div class="card">
+      <h2 class="section-title">Your Vehicles</h2>
+      <table><tr><th>Vehicle</th><th>Client</th><th>Route</th><th>Driver</th><th>Billing</th></tr>
+      ${vehicleRows || "<tr><td colspan='5' class='empty'>No vehicles linked to your account yet.</td></tr>"}</table>
+    </div>
+
+    <div class="card">
+      <h2 class="section-title">Income Earned (most recent 200 entries)</h2>
+      <table><tr><th>Date</th><th>Source</th><th>Amount</th><th>Note</th></tr>
+      ${incomeRows || "<tr><td colspan='4' class='empty'>No income recorded yet.</td></tr>"}</table>
+    </div>
+
+    <div class="card">
+      <h2 class="section-title">Payments Received From Us</h2>
+      ${paymentTypeCards ? `<div class="grid cols-4" style="margin-bottom:14px;">${paymentTypeCards}<div class="kpi"><div class="num">₹${d.totalPaid}</div><div class="label">Total paid</div></div></div>` : ""}
+      <table><tr><th>Date</th><th>Type</th><th>Amount</th><th>Note</th></tr>
+      ${paymentRows || "<tr><td colspan='4' class='empty'>No payments recorded yet.</td></tr>"}</table>
+    </div>
+
+    <div class="card">
+      <h2 class="section-title">Advances &amp; Interest</h2>
+      <div class="banner">Any advance we pay you accrues simple interest at 36% per annum (3% per month) on the outstanding balance until it's settled.</div>
+      <div class="grid cols-4" style="margin-bottom:14px;">
+        <div class="kpi bad"><div class="num">₹${d.totalOutstandingPrincipal}</div><div class="label">Outstanding principal</div></div>
+        <div class="kpi warn"><div class="num">₹${d.totalInterestAccrued}</div><div class="label">Interest accrued</div></div>
+      </div>
+      <table><tr><th>Date</th><th>Principal</th><th>Outstanding</th><th>Interest</th><th>Status</th></tr>
+      ${advanceRows || "<tr><td colspan='5' class='empty'>No advances recorded yet.</td></tr>"}</table>
+    </div>
+
+    <div class="footer-note">Padmasri Travels &middot; Subvendor Portal</div>
+  </main>`;
+}
+
+Object.assign(window, {doLogin, doLogout, submitForcedPasswordChange});
+boot();
+</script>
+</body>
+</html>

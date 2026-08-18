@@ -1,0 +1,82 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const { JSDOM } = require("jsdom");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5910;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const { data: loginData } = await jf(`${API}/api/driver-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: "9000000001", pin: "1234" }),
+  });
+  const driverToken = loginData.token;
+  check("driver logged in", !!driverToken, loginData);
+
+  const dHtml = await (await fetch(`${API}/driver.html`)).text();
+  const dom = new JSDOM(dHtml, {
+    url: `${API}/driver.html`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+    beforeParse(win) {
+      win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+      win.URL.createObjectURL = () => "blob:mock";
+      win.URL.revokeObjectURL = () => {};
+      win.localStorage.setItem("driverAuthToken", driverToken);
+      win.navigator.geolocation = { getCurrentPosition: (ok) => ok({ coords: { latitude: 17.0, longitude: 78.0 } }) };
+    },
+  });
+  const win = dom.window;
+  const errs = [];
+  win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+  await wait(900);
+  let body = win.document.body.innerHTML;
+  check("driver.html boot: no runtime JS errors", errs.length === 0, errs);
+  check("Current Trip tab shows 'Report a Vehicle Problem' card", body.includes("Report a Vehicle Problem"));
+
+  win.document.getElementById("rrIssueDriver").value = "Steering making noise";
+  win.document.getElementById("rrUrgencyDriver").value = "high";
+  await win.eval(`submitDriverRepairRequest()`);
+  await wait(700);
+  body = win.document.body.innerHTML;
+  check("after submit: no runtime JS errors", errs.length === 0, errs);
+  check("driver sees their own request listed as 'Requested'", body.includes("Steering making noise") && body.includes("Requested"));
+
+  // Confirm it actually landed server-side, tagged to the driver's assigned vehicle
+  const { data: ownerLogin } = await jf(`${API}/api/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ identifier: "vamshi.reddy@padmasritravels.in", password: "Padmasri@9999" }) });
+  let ownerToken = ownerLogin.token;
+  if (ownerLogin.user && ownerLogin.user.mustChangePassword) {
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+      body: JSON.stringify({ currentPassword: "Padmasri@9999", newPassword: "NewPass!12345" }),
+    });
+    if (!cp.res.ok) throw new Error("owner change-password failed: " + JSON.stringify(cp.data));
+  }
+  const { data: rrList } = await jf(`${API}/api/repair-requests`, { headers: { Authorization: "Bearer " + ownerToken } });
+  const found = (rrList || []).find(r => r.issueDescription === "Steering making noise" && r.raisedByRole === "driver");
+  check("repair request raised via driver app is visible to staff with raisedByRole='driver'", !!found, found);
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

@@ -1,0 +1,218 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5912;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed: " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+function monthsAgo(n) {
+  const d = new Date();
+  d.setMonth(d.getMonth() - n);
+  return d.toISOString().slice(0, 10);
+}
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+  const hrLogin = await jf(`${API}/api/users`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ name: "Test HR", role: "hr", email: "testhr@padmasritravels.in", phone: "9000400001", password: "TempPass!123" }),
+  });
+  check("HR account created for testing", hrLogin.res.ok, hrLogin.data);
+  const hrToken = await loginStaff("testhr@padmasritravels.in", "TempPass!123");
+
+  // ---------- Vehicle uniqueness ----------
+  const v1 = await jf(`${API}/api/vehicles`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ reg: "TS 07 UT 9001", make: "Tata", model: "Winger", engineNo: "UNIQ-ENG-1", chassisNo: "UNIQ-CHS-1", rcDate: "2023-01-01", seatingCapacity: 12, usage: "fixed_route", vehicleType: "Bus", fuelType: "Diesel" }),
+  });
+  check("first vehicle created", v1.res.ok, v1.data);
+
+  const v2dupReg = await jf(`${API}/api/vehicles`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ reg: "ts07ut9001", make: "Tata", model: "Winger", engineNo: "UNIQ-ENG-2", chassisNo: "UNIQ-CHS-2", rcDate: "2023-01-01", seatingCapacity: 12, usage: "fixed_route", vehicleType: "Bus", fuelType: "Diesel" }),
+  });
+  check("duplicate reg (different case/spacing) rejected", v2dupReg.res.status === 400, v2dupReg.data);
+
+  const v2dupEngine = await jf(`${API}/api/vehicles`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ reg: "TS 07 UT 9002", make: "Tata", model: "Winger", engineNo: "UNIQ-ENG-1", chassisNo: "UNIQ-CHS-3", rcDate: "2023-01-01", seatingCapacity: 12, usage: "fixed_route", vehicleType: "Bus", fuelType: "Diesel" }),
+  });
+  check("duplicate engine number rejected", v2dupEngine.res.status === 400, v2dupEngine.data);
+
+  const v3 = await jf(`${API}/api/vehicles`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ reg: "TS 07 UT 9003", make: "Tata", model: "Winger", engineNo: "UNIQ-ENG-3", chassisNo: "UNIQ-CHS-3B", rcDate: "2023-01-01", seatingCapacity: 12, usage: "fixed_route", vehicleType: "Bus", fuelType: "Diesel" }),
+  });
+  check("third vehicle (distinct) created", v3.res.ok, v3.data);
+  const editClash = await jf(`${API}/api/vehicles/${v3.data.id}/details`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ chassisNo: "UNIQ-CHS-1" }),
+  });
+  check("editing chassis number into a clash is rejected", editClash.res.status === 400, editClash.data);
+
+  // ---------- Driver phone uniqueness ----------
+  const dA = await jf(`${API}/api/drivers`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+    body: JSON.stringify({ name: "Uniq Driver A", phone: "9111100001", dateOfJoining: "2024-01-01" }),
+  });
+  check("driver A created", dA.res.ok, dA.data);
+  const dBdup = await jf(`${API}/api/drivers`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+    body: JSON.stringify({ name: "Uniq Driver B", phone: "9111100001", dateOfJoining: "2024-01-01" }),
+  });
+  check("driver with duplicate phone rejected on create", dBdup.res.status === 400, dBdup.data);
+  const dC = await jf(`${API}/api/drivers`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+    body: JSON.stringify({ name: "Uniq Driver C", phone: "9111100002", dateOfJoining: "2024-01-01" }),
+  });
+  check("driver C created", dC.res.ok, dC.data);
+  const editPhoneClash = await jf(`${API}/api/drivers/${dC.data.id}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+    body: JSON.stringify({ phone: "9111100001" }),
+  });
+  check("editing a driver's phone into a clash is rejected", editPhoneClash.res.status === 400, editPhoneClash.data);
+
+  // ---------- Uniform deduction math ----------
+  const cases = [
+    { months: 1, expected: 2200 },
+    { months: 2, expected: 2000 },
+    { months: 10, expected: 400 },
+    { months: 13, expected: 0 },
+  ];
+  for (const c of cases) {
+    const d = await jf(`${API}/api/drivers`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+      body: JSON.stringify({ name: `Uniform Test ${c.months}mo`, phone: `92${String(c.months).padStart(8, "0")}`, dateOfJoining: "2023-01-01" }),
+    });
+    const driverId = d.data.id;
+    const issue = await jf(`${API}/api/drivers/${driverId}/uniform/issue`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+      body: JSON.stringify({ issuedDate: monthsAgo(c.months) }),
+    });
+    check(`uniform issued for ${c.months}-month case`, issue.res.ok, issue.data);
+    const leave = await jf(`${API}/api/drivers/${driverId}/mark-left`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+      body: JSON.stringify({ exitReason: "Test exit", rehireEligible: true }),
+    });
+    check(`mark-left succeeds for ${c.months}-month case`, leave.res.ok, leave.data);
+    if (c.expected > 0) {
+      check(`${c.months}-month uniform deduction = ₹${c.expected}`, leave.data.uniformDeduction && leave.data.uniformDeduction.amount === c.expected, leave.data.uniformDeduction);
+    } else {
+      check(`${c.months}-month case has no deduction (fully depreciated)`, leave.data.uniformDeduction === null, leave.data.uniformDeduction);
+    }
+  }
+
+  // Verify the 2-month-case deduction actually landed in payrollAdhocEntries
+  const payslip2mo = await jf(`${API}/api/drivers`, { headers: { Authorization: "Bearer " + ownerToken } }).catch(() => null);
+
+  // ---------- Rehire gating: bad conduct blocks, good conduct allows ----------
+  const badDriver = await jf(`${API}/api/drivers`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+    body: JSON.stringify({ name: "Bad Conduct Driver", phone: "9333300001", dateOfJoining: "2023-01-01" }),
+  });
+  const badId = badDriver.data.id;
+  await jf(`${API}/api/drivers/${badId}/mark-left`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+    body: JSON.stringify({ exitReason: "Rash driving, multiple complaints", rehireEligible: false }),
+  });
+
+  // Trying to re-add the SAME phone as a brand-new driver should be blocked (guides toward reactivation)
+  const reAddAttempt = await jf(`${API}/api/drivers`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+    body: JSON.stringify({ name: "Bad Conduct Driver Again", phone: "9333300001", dateOfJoining: "2026-01-01" }),
+  });
+  check("re-adding a left driver's phone as a NEW record is blocked", reAddAttempt.res.status === 400, reAddAttempt.data);
+
+  const hrReactivateAttempt = await jf(`${API}/api/drivers/${badId}/reactivate`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+    body: JSON.stringify({}),
+  });
+  check("HR reactivating a not-eligible-for-rehire driver is blocked (403)", hrReactivateAttempt.res.status === 403 && hrReactivateAttempt.data.blockedByConduct === true, hrReactivateAttempt.data);
+
+  const ownerForceReactivate = await jf(`${API}/api/drivers/${badId}/reactivate`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ force: true }),
+  });
+  check("Owner CAN force-reactivate with override", ownerForceReactivate.res.ok && ownerForceReactivate.data.active === true, ownerForceReactivate.data);
+  check("forced reactivation preserves the original driver ID (same person, same record)", ownerForceReactivate.data.id === badId);
+  check("reactivation adds a new employment stint (history preserved)", ownerForceReactivate.data.employmentHistory.length === 2, ownerForceReactivate.data.employmentHistory);
+
+  // Good-conduct driver: HR should be able to reactivate directly, no force needed
+  const goodDriver = await jf(`${API}/api/drivers`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+    body: JSON.stringify({ name: "Good Conduct Driver", phone: "9333300002", dateOfJoining: "2023-01-01" }),
+  });
+  const goodId = goodDriver.data.id;
+  await jf(`${API}/api/drivers/${goodId}/mark-left`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+    body: JSON.stringify({ exitReason: "Relocated to another city", rehireEligible: true }),
+  });
+  const hrReactivateGood = await jf(`${API}/api/drivers/${goodId}/reactivate`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+    body: JSON.stringify({}),
+  });
+  check("HR can directly reactivate a good-conduct (rehire-eligible) driver, no force needed", hrReactivateGood.res.ok && hrReactivateGood.data.active === true, hrReactivateGood.data);
+
+  // ---------- A left driver cannot log in to the driver app ----------
+  const loginAttempt = await jf(`${API}/api/driver-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: "9111100001", pin: "1234" }),
+  });
+  // driver A never left, should succeed - sanity check the login path still works normally
+  check("an active driver can still log in normally", loginAttempt.res.ok, loginAttempt.data);
+
+  const leftDriverForLoginTest = await jf(`${API}/api/drivers`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+    body: JSON.stringify({ name: "Login Block Test", phone: "9333300003", dateOfJoining: "2023-01-01" }),
+  });
+  await jf(`${API}/api/drivers/${leftDriverForLoginTest.data.id}/mark-left`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + hrToken },
+    body: JSON.stringify({ exitReason: "Test", rehireEligible: true }),
+  });
+  const blockedLogin = await jf(`${API}/api/driver-auth/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ phone: "9333300003", pin: "1234" }),
+  });
+  check("a driver who has left CANNOT log in to the driver app", !blockedLogin.res.ok, blockedLogin.data);
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();

@@ -1,0 +1,242 @@
+const path = require("path");
+const { spawn } = require("child_process");
+const { JSDOM } = require("jsdom");
+const fetch = require("node-fetch");
+
+const APPDIR = "/sessions/sweet-ecstatic-clarke/mnt/PadmasriTravels_Supervisor_app";
+const PORT = 5915;
+const API = `http://127.0.0.1:${PORT}`;
+
+function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+let allOk = true;
+function check(label, cond, extra) {
+  console.log((cond ? "OK  " : "FAIL") + " - " + label + (extra ? " :: " + JSON.stringify(extra) : ""));
+  if (!cond) allOk = false;
+}
+async function jf(url, opts) {
+  const res = await fetch(url, opts);
+  let data = null;
+  try { data = await res.json(); } catch (e) {}
+  return { res, data };
+}
+async function loginStaff(identifier, tempPassword) {
+  let { res, data } = await jf(`${API}/api/login`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ identifier, password: tempPassword }),
+  });
+  if (!res.ok) throw new Error("login failed: " + JSON.stringify(data));
+  let token = data.token;
+  if (data.user && data.user.mustChangePassword) {
+    const newPw = "NewPass!" + Math.floor(Math.random() * 100000) + "9";
+    const cp = await jf(`${API}/api/change-password`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+      body: JSON.stringify({ currentPassword: tempPassword, newPassword: newPw }),
+    });
+    if (!cp.res.ok) throw new Error("change-password failed: " + JSON.stringify(cp.data));
+  }
+  return token;
+}
+function newDom(beforeParse){
+  return async () => {
+    const html = await (await fetch(`${API}/driver.html`)).text();
+    return new JSDOM(html, {
+      url: `${API}/driver.html`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+      beforeParse,
+    });
+  };
+}
+
+(async () => {
+  const dataFile = path.join(APPDIR, "data", "data.json");
+  try { require("fs").renameSync(dataFile, dataFile + ".away." + Date.now()); } catch (e) {}
+  const env = Object.assign({}, process.env, { PORT: String(PORT) });
+  const server = spawn("node", [path.join(APPDIR, "server.js")], { cwd: APPDIR, env });
+  server.stderr.on("data", (d) => console.error("SERVER ERR:", d.toString()));
+  await wait(1500);
+
+  const ownerToken = await loginStaff("vamshi.reddy@padmasritravels.in", "Padmasri@9999");
+  const { data: wm } = await jf(`${API}/api/users`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ name: "Portal Test Manager", role: "workshop_manager", phone: "9000600001", password: "TempPass!123" }),
+  });
+  const { data: mech } = await jf(`${API}/api/users`, {
+    method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + ownerToken },
+    body: JSON.stringify({ name: "Portal Test Mechanic", role: "mechanic", phone: "9000600002", password: "TempPass!123" }),
+  });
+
+  // ============ 1) DRIVER login still works through the combined form ============
+  {
+    const dom = await new JSDOM(await (await fetch(`${API}/driver.html`)).text(), {
+      url: `${API}/driver.html`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+      beforeParse(win) {
+        win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+        win.navigator.geolocation = { getCurrentPosition: (ok) => ok({ coords: { latitude: 17.0, longitude: 78.0 } }) };
+      },
+    });
+    const win = dom.window;
+    const errs = [];
+    win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+    await wait(600);
+    let body = win.document.body.innerHTML;
+    check("combined login screen shows both Driver + Workshop hint", body.includes("Drivers &amp; Workshop staff") || body.includes("Drivers & Workshop staff"));
+    win.document.getElementById("driverPhone").value = "9000000001"; // seed driver
+    win.document.getElementById("driverPin").value = "1234";
+    await win.eval(`doPortalLogin()`);
+    await wait(900);
+    body = win.document.body.innerHTML;
+    check("driver login via combined form succeeds (Current Trip tab visible)", body.includes("Current Trip") || body.includes("Report a Vehicle Problem"));
+    check("driver login: portalType set to driver", win.eval("portalType") === "driver");
+    check("driver login: no runtime JS errors", errs.length === 0, errs);
+  }
+
+  // ============ 2) WRONG phone/PIN combo shows a single clean error ============
+  {
+    const dom = await new JSDOM(await (await fetch(`${API}/driver.html`)).text(), {
+      url: `${API}/driver.html`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+      beforeParse(win) {
+        win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+        win.navigator.geolocation = { getCurrentPosition: (ok) => ok({ coords: { latitude: 17.0, longitude: 78.0 } }) };
+      },
+    });
+    const win = dom.window;
+    await wait(600);
+    win.document.getElementById("driverPhone").value = "9999999999";
+    win.document.getElementById("driverPin").value = "0000";
+    await win.eval(`doPortalLogin()`);
+    await wait(900);
+    const body = win.document.body.innerHTML;
+    check("wrong credentials show 'Incorrect mobile number or PIN.'", body.includes("Incorrect mobile number or PIN."), body.slice(0, 300));
+  }
+
+  // ============ 3) WORKSHOP MANAGER login + assign flow ============
+  let mechDom, mechWin;
+  {
+    const dom = await new JSDOM(await (await fetch(`${API}/driver.html`)).text(), {
+      url: `${API}/driver.html`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+      beforeParse(win) {
+        win.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+        win.navigator.geolocation = { getCurrentPosition: (ok) => ok({ coords: { latitude: 17.0, longitude: 78.0 } }) };
+      },
+    });
+    const win = dom.window;
+    const errs = [];
+    win.addEventListener("error", (e) => errs.push(e.error ? e.error.stack || e.error.message : e.message));
+    await wait(600);
+    win.document.getElementById("driverPhone").value = "9000600001";
+    win.document.getElementById("driverPin").value = "1234";
+    await win.eval(`doPortalLogin()`);
+    await wait(900);
+    let body = win.document.body.innerHTML;
+    check("workshop manager login via combined form succeeds", win.eval("portalType") === "workshop" && win.eval("workshopUser.role") === "workshop_manager");
+    check("manager lands on Incoming Queue tab", body.includes("Incoming Queue"));
+    check("workshop login: no runtime JS errors", errs.length === 0, errs);
+
+    // Raise a repair request as the driver from part 1 (still active) so the queue has something
+    const { data: driverLogin } = await jf(`${API}/api/driver-auth/login`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone: "9000000001", pin: "1234" }),
+    });
+    const { data: rr } = await jf(`${API}/api/driver-auth/repair-requests`, {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer " + driverLogin.token },
+      body: JSON.stringify({ issueDescription: "Combined portal test - AC not cooling", urgency: "normal" }),
+    });
+
+    await win.eval(`setWorkshopTab('queue')`);
+    await wait(500);
+    body = win.document.body.innerHTML;
+    check("manager sees the new repair request in the queue", body.includes("Combined portal test - AC not cooling"));
+
+    const reqId = win.eval(`workshopRequests.find(r=>r.issueDescription==="Combined portal test - AC not cooling").id`);
+    const mechId = mech.id;
+    win.eval(`document.getElementById('wsAssign_${reqId}').value = '${mechId}'`);
+    await win.eval(`assignWorkshopRequest('${reqId}')`);
+    await wait(600);
+    body = win.document.body.innerHTML;
+    check("after assigning, request drops out of the incoming queue", !body.includes("Combined portal test - AC not cooling"));
+
+    // ============ 4) MECHANIC login + start/complete ============
+    mechDom = await new JSDOM(await (await fetch(`${API}/driver.html`)).text(), {
+      url: `${API}/driver.html`, runScripts: "dangerously", resources: "usable", pretendToBeVisual: true,
+      beforeParse(w) {
+        w.fetch = (u, o) => fetch(u.startsWith("http") ? u : `${API}${u}`, o);
+        w.navigator.geolocation = { getCurrentPosition: (ok) => ok({ coords: { latitude: 17.0, longitude: 78.0 } }) };
+      },
+    });
+    mechWin = mechDom.window;
+    const mechErrs = [];
+    mechWin.addEventListener("error", (e) => mechErrs.push(e.error ? e.error.stack || e.error.message : e.message));
+    await wait(600);
+    mechWin.document.getElementById("driverPhone").value = "9000600002";
+    mechWin.document.getElementById("driverPin").value = "1234";
+    await mechWin.eval(`doPortalLogin()`);
+    await wait(900);
+    body = mechWin.document.body.innerHTML;
+    // Note: body.innerHTML includes the <script> tag's own source text (it's
+    // a child of <body>), so a raw body.includes("Incoming Queue") would
+    // always be true regardless of role (the string lives in the tab-label
+    // array in the script itself) - check the actual rendered tab bar
+    // buttons instead for a meaningful assertion.
+    const mechTabLabels = Array.from(mechWin.document.querySelectorAll(".driver-tabbar button")).map(b=>b.textContent);
+    check("mechanic login via combined form succeeds, lands on My Repairs", mechWin.eval("portalType")==="workshop" && mechWin.eval("workshopTab")==="myrepairs" && body.includes("My Assigned Repairs"));
+    check("mechanic's tab bar has no Incoming Queue tab (role gate)", !mechTabLabels.includes("Incoming Queue"), mechTabLabels);
+    check("mechanic sees the assigned request", body.includes("Combined portal test - AC not cooling"));
+
+    await mechWin.eval(`startWorkshopRequest('${reqId}')`);
+    await wait(600);
+    body = mechWin.document.body.innerHTML;
+    check("mechanic started the repair (In Progress badge shows)", body.includes("In Progress"));
+
+    await mechWin.eval(`openWorkshopCompleteForm('${reqId}')`);
+    mechWin.document.getElementById(`wsWd_${reqId}`).value = "Replaced AC compressor relay";
+    mechWin.document.querySelector(`#wsParts_${reqId} .wsPartName`).value = "Relay";
+    mechWin.document.querySelector(`#wsParts_${reqId} .wsPartCost`).value = "450";
+    let alerted = null;
+    mechWin.alert = (m) => { alerted = m; };
+    await mechWin.eval(`submitWorkshopComplete('${reqId}')`);
+    await wait(700);
+    check("mechanic completing the repair shows the expense-created confirmation", !!alerted && /expense/i.test(alerted), alerted);
+    body = mechWin.document.body.innerHTML;
+    check("completed repair no longer shows in My Assigned Repairs, appears in Recently Completed", body.includes("Recently Completed") && body.includes("Combined portal test - AC not cooling"));
+    check("mechanic flow: no runtime JS errors", mechErrs.length === 0, mechErrs);
+
+    // ============ 5) MECHANIC logs a bulk purchase ============
+    await mechWin.eval(`setWorkshopTab('purchases')`);
+    await wait(500);
+    mechWin.document.querySelector("#wsPurchaseItemsRows .wsItemName").value = "Engine oil";
+    mechWin.document.querySelector("#wsPurchaseItemsRows .wsItemQty").value = "5";
+    mechWin.document.querySelector("#wsPurchaseItemsRows .wsItemUnit").value = "L";
+    mechWin.document.getElementById("wsTotalAmount").value = "1800";
+    // Simulate photo attach (real file input can't be driven headlessly)
+    await mechWin.eval(`pendingWorkshopInvoice = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="`);
+    let purchAlert = null;
+    mechWin.alert = (m) => { purchAlert = m; };
+    await mechWin.eval(`submitWorkshopPurchaseMobile()`);
+    await wait(700);
+    check("bulk purchase logged successfully", purchAlert === "Purchase logged.", purchAlert);
+    body = mechWin.document.body.innerHTML;
+    check("purchase now shows in Your Recent Bulk Purchases", body.includes("Engine oil"));
+
+    // ============ 6) Session persistence + logout ============
+    check("workshopAuthToken persisted to localStorage", !!mechWin.localStorage.getItem("workshopAuthToken"));
+    check("portalType persisted as 'workshop'", mechWin.localStorage.getItem("portalType") === "workshop");
+    await mechWin.eval(`setWorkshopTab('account')`);
+    await wait(400);
+    await mechWin.eval(`doWorkshopLogout()`);
+    await wait(600);
+    check("after logout, localStorage cleared", !mechWin.localStorage.getItem("workshopAuthToken") && !mechWin.localStorage.getItem("portalType"));
+    body = mechWin.document.body.innerHTML;
+    check("after logout, back at the combined login screen", body.includes("Slide the button all the way to log in"));
+  }
+
+  // ============ 7) A plain mechanic cannot see/assign in the queue (role gate) ============
+  {
+    const { res: badAssignRes } = await jf(`${API}/api/workshop-auth/repair-requests/does-not-matter/assign`, {
+      method: "PATCH", headers: {}, // no auth at all -> should 401, sanity check endpoint still exists
+    });
+    check("assign endpoint requires auth (sanity check)", badAssignRes.status === 401);
+  }
+
+  server.kill();
+  console.log(allOk ? "\nALL CHECKS PASSED" : "\nSOME CHECKS FAILED");
+  process.exit(allOk ? 0 : 1);
+})();
