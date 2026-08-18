@@ -1232,16 +1232,16 @@ function tabsForInner(role){
   // request, they (plus Data Team and Owner) are the only roles that can
   // approve odometer/fuel readings. See ODOMETER_VERIFY_ROLES and
   // FUEL_CROSS_VERIFY_ROLES in server.js for the matching backend gate.
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["reports","Reports"],["routes","Routes"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["doc_reminders","📋 Document Reminders"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["doc_reminders","📋 Document Reminders"],["reports","Reports"],["routes","Routes"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   // Operations Manager deliberately has no odometer_verify/fuel_verify tab -
   // per the Owner's explicit request, Ops Manager has no role in approving
   // odometer or fuel readings (they previously had odometer_verify; removed
   // on request).
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["fuel_theft","⛽ Fuel Theft & Mileage"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["doc_reminders","📋 Document Reminders"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["doc_reminders","📋 Document Reminders"],["fuel_theft","⛽ Fuel Theft & Mileage"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["vehicle_tracking","📍 Vehicle Tracking"],["alerts","🚨 Alerts"],["doc_reminders","📋 Document Reminders"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="admin") return [["admin_dashboard","Dashboard"],["admin_vehicles","Vehicles"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
@@ -1269,7 +1269,7 @@ const SIDEBAR_GROUP_META = {
 const TAB_GROUP_MAP = {
   my_vehicles:"fleet", onboarding:"fleet", admin_vehicles:"fleet", usage:"fleet",
   assignments:"fleet", routes:"fleet", subvendor_expenses:"fleet",
-  odometer_verify:"fleet", fuel_verify:"fleet", fuel_theft:"fleet", vehicle_tracking:"fleet", alerts:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
+  odometer_verify:"fleet", fuel_verify:"fleet", fuel_theft:"fleet", vehicle_tracking:"fleet", alerts:"fleet", doc_reminders:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
   subvendors:"fleet", hierarchy:"fleet",
   trips:"trips", my_attendance:"trips", attendance:"trips", my_expenses:"trips", queue:"trips",
   expenses:"finance", expenses_view:"finance", payroll:"finance", backup:"finance",
@@ -1401,6 +1401,7 @@ async function routeView(){
   if(tab==="fuel_theft") return fuelTheftScreen();
   if(tab==="vehicle_tracking") return view.name==="vehicle_tracking_detail" ? vehicleTrackingDetailScreen(view.vehicleId) : vehicleTrackingScreen();
   if(tab==="alerts") return alertsFeedScreen();
+  if(tab==="doc_reminders") return documentRemindersScreen();
   if(tab==="transport") return transportScreen();
   if(tab==="repairs") return repairRequestsScreen();
   if(tab==="workshop") return workshopScreen();
@@ -7040,6 +7041,57 @@ async function alertsFeedScreen(){
     ${chip('all','All')}${chip('idling','Idling')}${chip('overspeeding','Over Speeding')}${chip('offline','Offline')}${chip('fuel_theft','Fuel Theft')}
   </div>
   ${!filtered.length? `<div class="empty">No alerts right now.</div>` : `<div class="card">${filtered.map(rowHtml).join("")}</div>`}
+  `;
+}
+
+// ---- Document Reminders (Due/Overdue/Upcoming tabs + compliance %) -----
+// Reworks the existing document-expiry alerting (previously only a
+// dashboard KPI + drill-down table, see dashboardMetricRows("expiring_docs"))
+// into its own tabbed screen matching the reference app's Document
+// Reminders design, with a compliance percentage banner. Real data only -
+// every row here is a document this app already tracks with a real expiry
+// date; nothing fabricated. Service Reminders (km/date-based maintenance
+// schedules) is a separate, not-yet-built feature - this screen is
+// document expiry only.
+let docReminderTab = 'due';
+function setDocReminderTab(t){ docReminderTab = t; renderMain(); }
+function documentReminderRows(){
+  const rows = [];
+  vehicles.filter(v=>!v.soldOut).forEach(v=>{
+    Object.entries(v.docs||{}).forEach(([k,doc])=>{
+      if(!doc || !doc.expiry) return;
+      rows.push({vehicleId:v.id, reg:v.reg, docType:k, expiry:doc.expiry, daysLeft:daysUntil(doc.expiry)});
+    });
+  });
+  return rows;
+}
+async function documentRemindersScreen(){
+  const rows = documentReminderRows();
+  const overdue = rows.filter(r=>r.daysLeft<0).sort((a,b)=>a.daysLeft-b.daysLeft);
+  const due = rows.filter(r=>r.daysLeft>=0 && r.daysLeft<15).sort((a,b)=>a.daysLeft-b.daysLeft);
+  const upcoming = rows.filter(r=>r.daysLeft>=15 && r.daysLeft<30).sort((a,b)=>a.daysLeft-b.daysLeft);
+  const compliantCount = rows.length - overdue.length - due.length;
+  const compliancePct = rows.length ? Math.round(compliantCount/rows.length*100) : 100;
+  const complianceColor = compliancePct>=90 ? 'var(--green)' : compliancePct>=70 ? 'var(--amber)' : 'var(--red)';
+  const complianceBg = compliancePct>=90 ? '#eef7ee' : compliancePct>=70 ? '#fff8e6' : '#fdecea';
+
+  const tabs = [['due',`Due (${due.length})`],['overdue',`Overdue (${overdue.length})`],['upcoming',`Upcoming (${upcoming.length})`],['all',`All (${rows.length})`]];
+  const activeRows = docReminderTab==='due' ? due : docReminderTab==='overdue' ? overdue : docReminderTab==='upcoming' ? upcoming : rows.slice().sort((a,b)=>a.daysLeft-b.daysLeft);
+  const badge = (r) => r.daysLeft<0 ? `<span class="badge low">EXPIRED ${Math.abs(r.daysLeft)}d ago</span>` : r.daysLeft<15 ? `<span class="badge low">${r.daysLeft}d left</span>` : `<span class="badge pending">${r.daysLeft}d left</span>`;
+  const emptyNote = {due:'Nothing due within 15 days.', overdue:'Nothing overdue - great work.', upcoming:'Nothing due in the 15-30 day window.', all:'No documents with an expiry date on file yet.'}[docReminderTab];
+
+  return `
+  <h1 class="page-title">📋 Document Reminders</h1>
+  <div class="card" style="text-align:center;background:${complianceBg};">
+    <div style="font-size:34px;font-weight:800;color:${complianceColor};">${compliancePct}%</div>
+    <div class="muted">In-time compliance - ${compliantCount} of ${rows.length} tracked documents are valid with 15+ days left (not due soon or overdue)</div>
+  </div>
+  <div class="detail-tab-row">
+    ${tabs.map(([k,l])=>`<div class="detail-tab ${docReminderTab===k?'active':''}" onclick="setDocReminderTab('${k}')">${l}</div>`).join("")}
+  </div>
+  ${!activeRows.length? `<div class="empty">${emptyNote}</div>` : `<div class="card"><table><tr><th>Vehicle</th><th>Document</th><th>Expiry</th><th>Status</th></tr>
+    ${activeRows.map(r=>`<tr style="cursor:pointer" onclick="goto('vehicle_status',{vehicleId:'${r.vehicleId}'})" title="View this vehicle"><td><b>${r.reg}</b></td><td>${r.docType}</td><td>${fmtDMY(r.expiry)}</td><td>${badge(r)}</td></tr>`).join("")}
+    </table></div>`}
   `;
 }
 
