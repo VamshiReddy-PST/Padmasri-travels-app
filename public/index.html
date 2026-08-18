@@ -3072,6 +3072,7 @@ async function assignmentsEditorHtml(){
     <button class="btn small danger" onclick="deleteLegacyFirstBatch()">🗑️ Permanently delete these 6 vehicles</button>
     ` : ""}
   </div>` : ""}
+  ${currentUser.role==="owner" ? await duplicateVehiclesCardHtml() : ""}
   <div class="card">
     <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('vehicles_list')" title="${isCardOpen('vehicles_list')?'Click to collapse':'Click to expand'}">
       <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">Vehicles (${vehicles.length})</h2>
@@ -3202,6 +3203,57 @@ async function deleteLegacyFirstBatch(){
     let msg = `Permanently deleted ${result.deletedCount} vehicle(s).`;
     if(result.alreadyGoneCount) msg += `\n\n${result.alreadyGoneCount} were already gone.`;
     alert(msg);
+    await loadCoreData();
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+// ================= DUPLICATE VEHICLES (Owner-only cleanup) =================
+// Same registration number on two or more vehicle records - usually from
+// before the create-time uniqueness check existed, or a direct data fix.
+// Unlike Sold Out (which just hides a vehicle, reversibly), this is the one
+// place a real permanent delete makes sense, since the record itself is
+// the problem. Shows both copies side by side with their assignment/history
+// counts so the Owner can see which one is safe to remove before deleting it.
+async function duplicateVehiclesCardHtml(){
+  let data;
+  try{ data = await api("/vehicles/duplicates"); }catch(e){ return ""; }
+  const groups = data.groups || [];
+  if(!groups.length) return "";
+  const groupHtml = groups.map((g,gi)=>`
+    <div style="border:1px solid var(--red,#c0392b);border-radius:10px;padding:10px 12px;margin-bottom:10px;">
+      <div class="muted" style="margin-bottom:6px;">Registration "${g[0].reg}" - ${g.length} records</div>
+      <table><tr><th>Vehicle</th><th>Type / Fuel</th><th>Status</th><th>Driver assigned</th><th>Expenses</th><th>Trips</th><th></th></tr>
+      ${g.map(v=>`<tr>
+        <td><b>${v.reg}</b><div class="muted" style="font-size:11.5px;">${v.make||''} ${v.model||''}</div></td>
+        <td>${v.vehicleType||'-'} / ${v.fuelType||'-'}</td>
+        <td>${v.soldOut?'<span class="badge low">SOLD OUT</span>':(v.status||'-')}</td>
+        <td>${v.driverId?'Yes':'No'}</td>
+        <td>${v.expenseCount}</td>
+        <td>${v.tripCount}</td>
+        <td><button class="btn small danger" onclick="deleteDuplicateVehicle('${v.id}','${(v.reg||'').replace(/'/g,"\\'")}',${v.expenseCount},${v.tripCount})">🗑️ Delete this copy</button></td>
+      </tr>`).join("")}
+      </table>
+    </div>`).join("");
+  return `
+  <div class="card" style="border:1px solid var(--red,#c0392b);">
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('duplicate_vehicles')" title="${isCardOpen('duplicate_vehicles')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">⚠️ Duplicate vehicle registrations (${groups.length})</h2>
+      ${cardChevronHtml('duplicate_vehicles')}
+    </div>
+    ${isCardOpen('duplicate_vehicles') ? `
+    <div class="muted" style="margin:8px 0;">These registration numbers appear on more than one vehicle record. New vehicles can no longer be added with a duplicate number (checked on save), but these existing pairs need to be cleared by hand - review each pair and delete whichever copy shouldn't exist. This cannot be undone.</div>
+    ${groupHtml}
+    ` : ""}
+  </div>`;
+}
+async function deleteDuplicateVehicle(id, reg, expenseCount, tripCount){
+  let msg = `Permanently delete ${reg}?\n\nThis cannot be undone.`;
+  if(expenseCount>0 || tripCount>0){
+    msg = `${reg} has ${expenseCount} expense record(s) and ${tripCount} trip record(s) on file. Deleting it will not remove those, but they'll lose their vehicle reference.\n\nDelete anyway? This cannot be undone.`;
+  }
+  if(!confirm(msg)) return;
+  try{
+    await api(`/vehicles/${id}?force=true`, {method:"DELETE"});
     await loadCoreData();
     await renderMain();
   }catch(e){ alert(e.message); }

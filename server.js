@@ -905,7 +905,13 @@ function validateVehicleTypeFuel(vehicleType, fuelType) {
 // trimmed + uppercased so "ts09at1001" and "TS 09 AT1001"-with-different-
 // spacing don't sneak past as "different" values.
 function normalizeVehicleFieldValue(v) {
-  return String(v || "").trim().toUpperCase().replace(/\s+/g, "");
+  // Strip ALL non-alphanumeric characters (not just whitespace) so
+  // "TG08U0154", "TG 08 U 0154" and "TG-08-U-0154" are all treated as the
+  // same registration number - this used to only strip whitespace, which
+  // let punctuation-only variants slip past as "different" and create real
+  // duplicate vehicle records (same normalization strength as normalizePlate(),
+  // used separately for Fleetx GPS matching).
+  return String(v || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 function findVehicleFieldClash(field, value, excludeVehicleId) {
   const norm = normalizeVehicleFieldValue(value);
@@ -4880,6 +4886,88 @@ app.delete(
       await audit(req.user, "delete_legacy_first_batch", `${req.user.name} permanently deleted ${deletedRegs.length} original first-batch vehicle(s) (one-time, explicitly requested): ${deletedRegs.join(", ")}`);
     }
     res.json({ deletedCount: deletedRegs.length, deleted: deletedRegs, alreadyGoneCount });
+  })
+);
+
+// ---------- Duplicate vehicle registrations + general delete (Owner-only) ----------
+// Real duplicate vehicle records (same registration number entered twice,
+// usually before the uniqueness check above existed, or via a direct data
+// fix outside the app) need a way to actually be removed - Sold Out isn't
+// right for these since the record itself is the problem, not just "no
+// longer in service." This groups every vehicle by normalized registration
+// number (same normalizeVehicleFieldValue() used for the create-time check)
+// and returns only the groups with more than one vehicle, so the Owner can
+// see both copies side by side - assignment, document, and history counts
+// included - before deciding which one to keep.
+app.get(
+  "/api/vehicles/duplicates",
+  requireAuth,
+  requireRole("owner"),
+  (req, res) => {
+    const groups = new Map();
+    for (const v of db.vehicles) {
+      const key = normalizeVehicleFieldValue(v.reg);
+      if (!key) continue;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(v);
+    }
+    const duplicateGroups = [...groups.values()]
+      .filter((g) => g.length > 1)
+      .map((g) =>
+        g.map((v) => ({
+          id: v.id,
+          reg: v.reg,
+          make: v.make,
+          model: v.model,
+          vehicleType: v.vehicleType,
+          fuelType: v.fuelType,
+          status: v.status,
+          soldOut: !!v.soldOut,
+          driverId: v.driverId,
+          clientId: v.clientId,
+          submittedAt: v.submittedAt,
+          expenseCount: db.expenses.filter((e) => e.vehicleId === v.id).length,
+          tripCount: db.trips.filter((t) => t.vehicleId === v.id).length,
+        }))
+      );
+    res.json({ groups: duplicateGroups });
+  }
+);
+
+// General vehicle delete - the one general-purpose, real "permanently
+// remove this vehicle" action (as opposed to the two hardcoded one-time
+// cleanups above, or Sold Out which just hides it reversibly). Unlike
+// those, this DOES check for expense/trip history first and blocks by
+// default, since a vehicle with real financial/trip records shouldn't be
+// silently erased - pass ?force=true to delete anyway once the Owner has
+// reviewed what's being lost (used by the Duplicate Vehicles cleanup tool,
+// where one copy of a pair often legitimately has zero history and is safe
+// to remove outright).
+app.delete(
+  "/api/vehicles/:id",
+  requireAuth,
+  requireRole("owner"),
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+    const expenseCount = db.expenses.filter((e) => e.vehicleId === vehicle.id).length;
+    const tripCount = db.trips.filter((t) => t.vehicleId === vehicle.id).length;
+    const force = String(req.query.force || "").toLowerCase() === "true";
+    if ((expenseCount > 0 || tripCount > 0) && !force) {
+      return res.status(409).json({
+        error: `${vehicle.reg} has ${expenseCount} expense record(s) and ${tripCount} trip record(s) - deleting it will not remove those, but they'll lose their vehicle reference. Confirm to delete anyway, or use Sold Out instead if you just want it hidden.`,
+        expenseCount,
+        tripCount,
+      });
+    }
+    if (vehicle.driverId) applyVehicleAssignmentPatch(vehicle, { driverId: null });
+    db.vehicles = db.vehicles.filter((v) => v.id !== vehicle.id);
+    await audit(
+      req.user,
+      "delete_vehicle",
+      `${req.user.name} permanently deleted vehicle ${vehicle.reg} (id ${vehicle.id})${expenseCount || tripCount ? ` - had ${expenseCount} expense(s) and ${tripCount} trip(s) on record` : ""}.`
+    );
+    res.json({ deleted: true, reg: vehicle.reg });
   })
 );
 
