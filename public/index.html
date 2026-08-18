@@ -5895,6 +5895,7 @@ async function fuelGraphScreen(vehicleId){
   const toTime = view.toTime || "23:59";
   const showFuel = view.showFuel !== false; // default on
   const showOdo = view.showOdo !== false; // default on
+  const tagFilter = view.tagFilter || 'all'; // 'all' | 'fill' | 'theft'
 
   let points = [], loadError = "";
   try{
@@ -5905,6 +5906,30 @@ async function fuelGraphScreen(vehicleId){
 
   const fuelPoints = points.filter(p=>p.fuel!=null);
   const odoPoints = points.filter(p=>p.odometer!=null);
+
+  // Tag filters, styled after the reference app's Fill/Theft/Pilferage/
+  // Inflow/Outflow chips above its fuel graph - this app's data only
+  // genuinely supports Fill (a refuel, same 8L-rise rule the fill-to-fill
+  // mileage engine already uses server-side - see TANK_REFUEL_MIN_RISE_LITRES
+  // in server.js) and Theft (this vehicle's suspected fuel theft alerts in
+  // this window). Pilferage/Inflow/Outflow aren't concepts this app's data
+  // model tracks, so they're left out rather than faked.
+  const FILL_MIN_RISE_LITRES = 8;
+  const fillEvents = [];
+  for(let i=1;i<fuelPoints.length;i++){
+    const gained = Math.round((fuelPoints[i].fuel - fuelPoints[i-1].fuel)*10)/10;
+    if(gained >= FILL_MIN_RISE_LITRES) fillEvents.push({ts: fuelPoints[i].ts, before: fuelPoints[i-1].fuel, after: fuelPoints[i].fuel, gained});
+  }
+  let theftEvents = [];
+  try{
+    const alerts = await api(`/fuel-theft-alerts?from=${from}T${fromTime}:00.000Z&to=${to}T${toTime}:59.999Z`);
+    theftEvents = alerts.filter(a=>a.vehicleId===v.id);
+  }catch(e){ /* non-essential for the graph itself */ }
+  _lastTheftAlerts = theftEvents;
+  const fillTsSet = new Set(fillEvents.map(e=>e.ts));
+  const theftRanges = theftEvents.map(a=>[new Date(a.startedAt).getTime(), new Date(a.lastDetectedAt||a.startedAt).getTime()]);
+  const fillMask = points.map(p=>fillTsSet.has(p.ts));
+  const theftMask = points.map(p=>{ const t=new Date(p.ts).getTime(); return theftRanges.some(([s,e])=> t>=s && t<=e); });
   let summary = null;
   if(fuelPoints.length || odoPoints.length){
     // Net change from the first reading in this window to the last - NOT a
@@ -5935,7 +5960,30 @@ async function fuelGraphScreen(vehicleId){
     avgMileage = await api(`/vehicles/${vehicleId}/average-mileage?from=${from}&to=${to}&fromTime=${fromTime}&toTime=${toTime}`);
   }catch(e){ avgMileageError = e.message; }
 
-  setTimeout(()=>{ drawFuelChart(points, {showFuel, showOdo}); drawFuel3D(spatialPoints); }, 0);
+  let tagListHtml = "";
+  if(tagFilter==='fill'){
+    tagListHtml = `
+    <div class="card">
+      <h2 class="section-title">⛽ Fill events in this window</h2>
+      ${fillEvents.length ? fillEvents.map(e=>`
+        <div style="border-bottom:1px solid var(--border);padding:8px 0;display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;">
+          <span>${new Date(e.ts).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</span>
+          <span style="color:#2e7d32;font-weight:600;">+${e.gained} L (${e.before} &rarr; ${e.after} L)</span>
+        </div>`).join("") : `<div class="empty">No fill-ups (rises of ${FILL_MIN_RISE_LITRES}+ L) detected in this window.</div>`}
+    </div>`;
+  } else if(tagFilter==='theft'){
+    tagListHtml = `
+    <div class="card">
+      <h2 class="section-title">🚨 Suspected theft in this window</h2>
+      ${theftEvents.length ? theftEvents.map(a=>`
+        <div style="border-bottom:1px solid var(--border);padding:8px 0;cursor:pointer;" onclick="showTheftDetail('${a.id}')" title="Click for the full report">
+          <div class="flex-between"><b>~${a.litersLost} L lost</b><span class="badge ${a.status==='active'?'low':a.status==='acknowledged'?'pending':'ok'}">${a.status}</span></div>
+          <div class="muted" style="font-size:12px;">${fmtDMY(a.startedAt)} ${new Date(a.startedAt).toLocaleTimeString()} - ${new Date(a.lastDetectedAt||a.startedAt).toLocaleTimeString()}</div>
+        </div>`).join("") : `<div class="empty">No suspected fuel theft in this window.</div>`}
+    </div>`;
+  }
+
+  setTimeout(()=>{ drawFuelChart(points, {showFuel, showOdo, fillMask, theftMask}); drawFuel3D(spatialPoints); }, 0);
 
   return `
   <button class="btn secondary small" onclick="goto('vehicle_status',{vehicleId:'${v.id}'})">&larr; Back to ${v.reg}</button>
@@ -5958,9 +6006,15 @@ async function fuelGraphScreen(vehicleId){
         <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" id="fg_show_odo" ${showOdo?'checked':''} onchange="fuelGraphToggle('${v.id}')" /> Odometer (km)</label>
       </div>
     </div>
+    <div class="filter-chip-row" style="margin-top:10px;margin-bottom:0;">
+      <button type="button" class="filter-chip ${tagFilter==='all'?'active':''}" onclick="setFuelGraphTag('${v.id}','all')">All</button>
+      <button type="button" class="filter-chip ${tagFilter==='fill'?'active':''}" onclick="setFuelGraphTag('${v.id}','fill')">⛽ Fill <span class="count">${fillEvents.length}</span></button>
+      <button type="button" class="filter-chip ${tagFilter==='theft'?'active':''}" onclick="setFuelGraphTag('${v.id}','theft')">🚨 Theft <span class="count">${theftEvents.length}</span></button>
+    </div>
     ${points.length ? `<canvas id="fuelGraphCanvas" height="90" style="margin-top:10px;"></canvas>` :
       `<div class="empty">No fuel or odometer readings recorded for this vehicle in this window yet. History only starts building up once this vehicle is linked to GPS/fuel-sensor tracking (Fleetx) - see GPS Device Linking.</div>`}
   </div>
+  ${tagListHtml}
   ${summary ? `
   <div class="grid cols-4">
     <div class="kpi"><div class="num">${summary.min!=null?summary.min:'-'} L</div><div class="label">Lowest fuel reading</div></div>
@@ -6003,6 +6057,9 @@ function fuelGraphToggle(vehicleId){
   // Remember the choice for the next Load/navigation without a full re-fetch.
   view.showFuel = showFuel; view.showOdo = showOdo;
 }
+function setFuelGraphTag(vehicleId, tag){
+  goto('fuel_graph', {vehicleId, from: view.from, to: view.to, fromTime: view.fromTime, toTime: view.toTime, showFuel: view.showFuel, showOdo: view.showOdo, tagFilter: tag});
+}
 let _fuelChart = null;
 function drawFuelChart(points, opts){
   const el = document.getElementById('fuelGraphCanvas');
@@ -6010,14 +6067,23 @@ function drawFuelChart(points, opts){
   if(_fuelChart){ _fuelChart.destroy(); _fuelChart = null; }
   const showFuel = opts ? opts.showFuel !== false : true;
   const showOdo = opts ? opts.showOdo !== false : true;
+  const fillMask = (opts && opts.fillMask) || [];
+  const theftMask = (opts && opts.theftMask) || [];
   const labels = points.map(p=>new Date(p.ts).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}));
   const datasets = [];
   if(showFuel){
+    // Fill (refuel) points are marked green, suspected-theft points are
+    // marked red, right on the fuel line itself - so the Fill/Theft chips
+    // above the graph correspond to something you can actually see happen.
+    const dotColor = (i) => theftMask[i] ? '#c0392b' : (fillMask[i] ? '#2e7d32' : '#00A3A6');
     datasets.push({
       label: 'Fuel (L)', yAxisID: 'yFuel',
       data: points.map(p=>p.fuel),
       borderColor: '#00A3A6', backgroundColor: 'rgba(0,163,166,0.12)',
-      fill: true, tension: 0.15, pointRadius: points.length>150 ? 0 : 1.5, spanGaps: true,
+      pointBackgroundColor: points.map((p,i)=>dotColor(i)),
+      pointBorderColor: points.map((p,i)=>dotColor(i)),
+      pointRadius: points.map((p,i)=> (theftMask[i]||fillMask[i]) ? 5 : (points.length>150 ? 0 : 1.5)),
+      fill: true, tension: 0.15, spanGaps: true,
     });
   }
   if(showOdo){
