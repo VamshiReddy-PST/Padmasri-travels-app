@@ -233,6 +233,10 @@ function backfillDefaults() {
     if (v.manufactureMonth === undefined) v.manufactureMonth = "";
     if (v.manufactureYear === undefined) v.manufactureYear = "";
     if (v.remarks === undefined) v.remarks = "";
+    // Powers the 24-hour "recently updated" row highlight in the staff
+    // app's vehicle list - set on every /details save (see PATCH
+    // /api/vehicles/:id/details below).
+    if (v.detailsUpdatedAt === undefined) v.detailsUpdatedAt = null;
     // Sold Out - Owner-only. Once set, visibleVehiclesFor() excludes this
     // vehicle from every screen (dashboards, reports, GPS, driver app,
     // assignments) for every role, including the Owner's regular views -
@@ -4632,6 +4636,11 @@ app.patch(
     }
     if (remarks !== undefined) vehicle.remarks = remarks || "";
     const after = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity, vehicleType: vehicle.vehicleType, fuelType: vehicle.fuelType, ownerName: vehicle.ownerName, rtoArea: vehicle.rtoArea, manufactureMonth: vehicle.manufactureMonth, manufactureYear: vehicle.manufactureYear, remarks: vehicle.remarks };
+    // Stamped so the frontend can show a "recently updated" highlight on
+    // this vehicle's row for 24 hours after a save - persisted here (not
+    // just a client-side flag) so it survives page reloads and is visible
+    // to every user, not just whoever made the edit.
+    vehicle.detailsUpdatedAt = nowIso();
     await audit(req.user, "update_vehicle_details", `${req.user.name} updated onboarding details for ${vehicle.reg}: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
     res.json(vehicle);
   })

@@ -2616,8 +2616,8 @@ async function setLeave(id, status){
 // already grant "admin" access.
 async function adminVehiclesScreen(){
   const rows = vehicles.map(v=>`
-    <tr>
-      <td><b>${v.reg}</b>${avgMileageBadgeHtml(v)}</td>
+    <tr id="vehicle-row-${v.id}"${vehicleRowStyleAttr(v)}>
+      <td><b>${v.reg}</b>${avgMileageBadgeHtml(v)}${recentlyChangedBadgeHtml(v)}</td>
       <td>${v.make||'-'} ${v.model||''}</td>
       <td>${v.vehicleType||'-'} / ${v.fuelType||'-'}</td>
       <td>${v.siteId ? siteName(v.siteId) : '<span class="muted">Unassigned</span>'}</td>
@@ -2935,6 +2935,26 @@ async function unlockOwnerAssignmentEditing(){
     await renderMain();
   }catch(e){ alert(e.message || "Incorrect password."); }
 }
+// Vehicle-row highlighting: a row can be in one of two attention states -
+// "being edited right now" (lighter) or "saved within the last 24 hours"
+// (a little darker, so it still reads as distinct from the active-editing
+// state). detailsUpdatedAt is stamped server-side on every onboarding
+// details save, so this survives page reloads and shows the same to every
+// user, not just whoever made the change.
+const RECENTLY_CHANGED_MS = 24*60*60*1000;
+function isRecentlyChangedVehicle(v){
+  return !!(v && v.detailsUpdatedAt && (Date.now() - new Date(v.detailsUpdatedAt).getTime()) < RECENTLY_CHANGED_MS);
+}
+function vehicleRowStyleAttr(v){
+  if(editingVehicleId===v.id) return ' style="background:#FFF6CC;"';
+  if(isRecentlyChangedVehicle(v)) return ' style="background:#FFE066;"';
+  return '';
+}
+function recentlyChangedBadgeHtml(v){
+  if(editingVehicleId===v.id || !isRecentlyChangedVehicle(v)) return '';
+  const when = new Date(v.detailsUpdatedAt).toLocaleString('en-GB');
+  return ` <span class="badge" style="background:#FFE066;color:#5c4500;" title="Onboarding details updated ${when} - highlighted for 24 hours">Recently updated</span>`;
+}
 function vehicleAssignmentWarningHtml(v){
   const missing = [];
   if(v.clientId && !v.routeId) missing.push("Route");
@@ -2947,8 +2967,8 @@ async function assignmentsEditorHtml(){
     const client = v.clientId ? meta.clients.find(c=>c.id===v.clientId) : null;
     const clientRoutes = client ? (client.routes||[]) : [];
     return `
-    <tr>
-      <td><b>${v.reg}</b>${vehicleAssignmentWarningHtml(v)}${avgMileageBadgeHtml(v)}</td>
+    <tr id="vehicle-row-${v.id}"${vehicleRowStyleAttr(v)}>
+      <td><b>${v.reg}</b>${vehicleAssignmentWarningHtml(v)}${avgMileageBadgeHtml(v)}${recentlyChangedBadgeHtml(v)}</td>
       <td>${v.vehicleType||'-'} / ${v.fuelType||'-'}</td>
       <td><select onchange="assignField('${v.id}','clientId', this.value||null)">
         <option value="">- none (internal route) -</option>
@@ -3228,9 +3248,15 @@ const DOC_COPY_TYPES = ["RC","Permit","Insurance","Fitness","Tax","PUC","Tempora
 // a vehicle registered somewhere not on the list.
 const RTO_AREAS = ["Uppal","R.R. District","Khairatabad","Secunderabad","Ibrahimpatnam","Malkajgiri","Medchal","Other"];
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-function toggleVehicleDetails(vehicleId){
-  editingVehicleId = editingVehicleId===vehicleId ? null : vehicleId;
-  renderMain();
+async function toggleVehicleDetails(vehicleId){
+  const opening = editingVehicleId !== vehicleId;
+  editingVehicleId = opening ? vehicleId : null;
+  await renderMain();
+  // Editor always renders at the top of the vehicle list, but the list
+  // itself can be long - jump the user straight to it instead of leaving
+  // them to scroll all the way up (or back down, on close) by hand.
+  const target = document.getElementById(opening ? "vehicleDetailsEditor" : `vehicle-row-${vehicleId}`);
+  if(target) target.scrollIntoView({behavior:"smooth", block:"start"});
 }
 // Reads a <input type=file> into a base64 data: URL, same technique as the
 // daily checklist's photo capture, but standalone since this editor isn't
@@ -3290,7 +3316,7 @@ async function vehicleDetailsEditorHtml(vehicleId){
   }).join("");
 
   return `
-  <div class="card" style="margin-top:14px;background:var(--panel-alt,#f7f7f9);">
+  <div class="card" id="vehicleDetailsEditor" style="margin-top:14px;background:var(--panel-alt,#f7f7f9);">
     <h2 class="section-title">${v.reg} - Vehicle Details</h2>
     <div class="check-row"><div class="label">Make</div><div class="controls"><input type="text" id="vd_make_${v.id}" value="${v.make||''}" /></div></div>
     <div class="check-row"><div class="label">Model</div><div class="controls"><input type="text" id="vd_model_${v.id}" value="${v.model||''}" /></div></div>
@@ -3372,8 +3398,13 @@ async function saveVehicleDetails(vehicleId){
   try{
     const v = await api(`/vehicles/${vehicleId}/details`, {method:"PATCH", body: JSON.stringify(body)});
     const idx = vehicles.findIndex(x=>x.id===vehicleId); vehicles[idx] = v;
-    alert("Onboarding details saved.");
+    // Collapse the editor and jump back to this vehicle's row in the list -
+    // it now carries a 24-hour "Recently updated" highlight (v.detailsUpdatedAt,
+    // stamped by the server) so it's easy to spot again without re-opening it.
+    if(editingVehicleId===vehicleId) editingVehicleId = null;
     await renderMain();
+    const row = document.getElementById(`vehicle-row-${vehicleId}`);
+    if(row) row.scrollIntoView({behavior:"smooth", block:"center"});
   }catch(e){ alert(e.message); }
 }
 async function saveVehicleDoc(vehicleId, docType){
