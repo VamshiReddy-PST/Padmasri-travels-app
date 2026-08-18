@@ -6294,7 +6294,6 @@ async function ownerDashboardScreen(){
 
   const tempDriverExpenses = expenses.filter(e=>e.category==="Temporary Driver");
 
-  setTimeout(()=>drawCharts(approved,pending,rejected, breathFailList.length, submitted-breathFailList.length), 0);
   // Kick the AI Insights fetch off in the background so it never blocks the
   // rest of the dashboard from rendering - the card shows its own loading
   // state and fills in whenever the response lands. Only auto-fires once
@@ -6333,7 +6332,6 @@ async function ownerDashboardScreen(){
   // needs a real element in the page to attach to.
   let fleetLive = {vehicles:[]};
   try{ fleetLive = await api('/fleet/live-tracking'); }catch(e){ fleetLive = {vehicles:[], error: e.message}; }
-  if(fleetLive.vehicles && fleetLive.vehicles.length) setTimeout(()=>renderFleetMapMarkers(fleetLive.vehicles), 0);
   const fleetMapCard = fleetMapCardHtml(fleetLive);
 
   // Employee Transport occupancy - fleet-wide, across every client with the
@@ -6384,6 +6382,24 @@ async function ownerDashboardScreen(){
       </div>`;
     }
   }catch(e){ /* role doesn't see fuel-theft alerts, or there aren't any yet */ }
+
+  // Both of these setTimeout(0) draws have to be scheduled as the very last
+  // thing this function does before returning - queued any earlier (e.g.
+  // drawCharts used to fire right after computing its inputs, and the fleet
+  // map right after its own fetch), they were firing BEFORE the
+  // transportOccupancy/fuelTheftAlerts awaits above finished and before
+  // renderMain() had assigned this returned HTML into #main. That meant
+  // #chartFunnel/#chartBreath/#fleetMapContainer didn't exist in the DOM yet,
+  // so drawCharts()/renderFleetMapMarkers() found nothing and silently
+  // returned - the cards would render (with their KPI numbers correct) but
+  // the chart canvases and the map stayed permanently blank, with no error,
+  // every single time the dashboard loaded. Queuing them here, after every
+  // other await, means renderMain()'s `main.innerHTML = ...` assignment -
+  // itself a microtask continuation of this function's own promise
+  // resolving - runs first, so the containers reliably exist by the time
+  // these timers fire.
+  setTimeout(()=>drawCharts(approved,pending,rejected, breathFailList.length, submitted-breathFailList.length), 0);
+  if(fleetLive.vehicles && fleetLive.vehicles.length) setTimeout(()=>renderFleetMapMarkers(fleetLive.vehicles), 0);
 
   return `
   <div class="cmd-hero">
