@@ -1555,8 +1555,7 @@ async function supervisorOnboardingScreen(){
       <div class="f"><label>Vehicle Type *</label>
         <select id="obVehicleType" required onchange="onObVehicleTypeChange()">
           <option value="">- select -</option>
-          <option value="Bus">Bus</option>
-          <option value="Cab">Cab</option>
+          ${vehicleTypeOptionsHtml("")}
         </select>
       </div>
       <div class="f"><label>Fuel Type *</label>
@@ -2673,8 +2672,7 @@ async function adminVehiclesScreen(){
       <div class="f"><label>Vehicle Type *</label>
         <select id="newVehicleType" required onchange="onNewVehicleTypeChange()">
           <option value="">- select -</option>
-          <option value="Bus">Bus</option>
-          <option value="Cab">Cab</option>
+          ${vehicleTypeOptionsHtml("")}
         </select>
       </div>
       <div class="f"><label>Fuel Type *</label>
@@ -3099,8 +3097,7 @@ async function assignmentsEditorHtml(){
       <div class="f"><label>Vehicle Type *</label>
         <select id="newVehicleType" required onchange="onNewVehicleTypeChange()">
           <option value="">- select -</option>
-          <option value="Bus">Bus</option>
-          <option value="Cab">Cab</option>
+          ${vehicleTypeOptionsHtml("")}
         </select>
       </div>
       <div class="f"><label>Fuel Type *</label>
@@ -3371,6 +3368,16 @@ const DOC_COPY_TYPES = ["RC","Permit","Insurance","Fitness","Tax","PUC","Tempora
 // a vehicle registered somewhere not on the list.
 const RTO_AREAS = ["Uppal","R.R. District","Khairatabad","Secunderabad","Ibrahimpatnam","Malkajgiri","Medchal","Other"];
 const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+// Mirrors server.js VEHICLE_TYPES - kept as a plain literal (not fetched)
+// same way THEME_PRESETS is, so the "- select -" dropdowns work offline and
+// don't need an extra round-trip before the Add Vehicle form is usable.
+// Only "Bus" is locked to Diesel fuel (see onNewVehicleTypeChange/
+// onObVehicleTypeChange/onVdVehicleTypeChange) - every other class can be
+// any fuel type.
+const VEHICLE_TYPES = ["Bus","Cab","Ambulance","Tempo Traveller","Towing Vehicle","Camper Van"];
+function vehicleTypeOptionsHtml(selected){
+  return VEHICLE_TYPES.map(t=>`<option value="${t}" ${selected===t?'selected':''}>${t}</option>`).join("");
+}
 async function toggleVehicleDetails(vehicleId){
   const opening = editingVehicleId !== vehicleId;
   editingVehicleId = opening ? vehicleId : null;
@@ -3449,8 +3456,7 @@ async function vehicleDetailsEditorHtml(vehicleId){
     <div class="check-row"><div class="label">Seating Capacity</div><div class="controls"><input type="number" id="vd_seating_${v.id}" min="1" value="${v.seatingCapacity!=null?v.seatingCapacity:''}" style="width:80px" /></div></div>
     <div class="check-row"><div class="label">Vehicle Type</div><div class="controls">
       <select id="vd_vehicleType_${v.id}" onchange="onVdVehicleTypeChange('${v.id}')">
-        <option value="Bus" ${v.vehicleType==='Bus'?'selected':''}>Bus</option>
-        <option value="Cab" ${v.vehicleType==='Cab'?'selected':''}>Cab</option>
+        ${vehicleTypeOptionsHtml(v.vehicleType)}
       </select>
     </div></div>
     <div class="check-row"><div class="label">Fuel Type</div><div class="controls">
@@ -5178,7 +5184,7 @@ async function liveTrackingCardHtml(vehicleId){
   }
 
   // A small embedded live map with the vehicle drawn as a bus icon (sized
-  // by that vehicle's seating capacity - see busDivIcon()) - scheduled via
+  // by that vehicle's seating capacity/type - see vehicleDivIcon()) - scheduled via
   // setTimeout the same way the dashboard's charts/fleet map are, since the
   // map container div doesn't exist in the DOM until this returned HTML has
   // actually been inserted by the caller. Once drawn, starts polling for
@@ -5193,7 +5199,7 @@ async function liveTrackingCardHtml(vehicleId){
     const vMeta = vehicles.find(v=>v.id===vehicleId);
     const seatingCapacity = vMeta ? vMeta.seatingCapacity : null;
     setTimeout(()=>{
-      renderVehicleMiniMap(mapContainerId, d.latitude, d.longitude, d.status, seatingCapacity);
+      renderVehicleMiniMap(mapContainerId, d.latitude, d.longitude, d.status, seatingCapacity, vMeta ? vMeta.vehicleType : null);
       refreshVehicleTripPath(vehicleId);
       startLiveTrackingPolling(vehicleId);
     }, 0);
@@ -5226,7 +5232,7 @@ function startLiveTrackingPolling(vehicleId){
     infoEl.innerHTML = liveTrackInfoInnerHtml(d);
     if(d.latitude!=null && d.longitude!=null){
       const vMeta = vehicles.find(v=>v.id===vehicleId);
-      renderVehicleMiniMap(`vehicleMiniMap_${vehicleId}`, d.latitude, d.longitude, d.status, vMeta ? vMeta.seatingCapacity : null);
+      renderVehicleMiniMap(`vehicleMiniMap_${vehicleId}`, d.latitude, d.longitude, d.status, vMeta ? vMeta.seatingCapacity : null, vMeta ? vMeta.vehicleType : null);
     }
     refreshVehicleTripPath(vehicleId);
   }, 10000);
@@ -5302,7 +5308,7 @@ async function playTripReplay(vehicleId){
   }
   if(mapEl) mapEl.style.display = "block";
   const vMeta = vehicles.find(v=>v.id===vehicleId);
-  renderTripReplayMap(`replayMap_${vehicleId}`, points, statusEl, vMeta ? vMeta.seatingCapacity : null);
+  renderTripReplayMap(`replayMap_${vehicleId}`, points, statusEl, vMeta ? vMeta.seatingCapacity : null, vMeta ? vMeta.vehicleType : null);
 }
 const _replayMapInstances = {};
 const _replayAnimTimers = {};
@@ -5310,7 +5316,7 @@ const _replayAnimTimers = {};
 // along it point by point - total playback time is compressed to a few
 // seconds regardless of how many points were recorded, so reviewing a whole
 // day's route doesn't mean sitting through a whole day of animation.
-function renderTripReplayMap(containerId, points, statusEl, seatingCapacity){
+function renderTripReplayMap(containerId, points, statusEl, seatingCapacity, vehicleType){
   const el = document.getElementById(containerId);
   if(!el || typeof L==="undefined") return;
   if(_replayMapInstances[containerId]){ _replayMapInstances[containerId].remove(); delete _replayMapInstances[containerId]; }
@@ -5322,7 +5328,7 @@ function renderTripReplayMap(containerId, points, statusEl, seatingCapacity){
   L.circleMarker(latlngs[0], {radius:6, color:'#2E7D32', weight:2, fillColor:'#2E7D32', fillOpacity:1}).addTo(map).bindTooltip("Start");
   L.circleMarker(latlngs[latlngs.length-1], {radius:6, color:'#c0392b', weight:2, fillColor:'#c0392b', fillOpacity:1}).addTo(map).bindTooltip("End");
   map.fitBounds(latlngs, {padding:[24,24], maxZoom:16});
-  const movingMarker = L.marker(latlngs[0], {icon: busDivIcon(points[0].status, seatingCapacity)}).addTo(map);
+  const movingMarker = L.marker(latlngs[0], {icon: vehicleDivIcon(points[0].status, seatingCapacity, vehicleType)}).addTo(map);
   _replayMapInstances[containerId] = map;
   setTimeout(()=>{ if(_replayMapInstances[containerId]===map) map.invalidateSize(); }, 150);
 
@@ -5341,22 +5347,65 @@ function renderTripReplayMap(containerId, points, statusEl, seatingCapacity){
   }, stepMs);
 }
 // ---- Live map rendering (Leaflet + OpenStreetMap, no API key needed) --
-// Every marker is drawn as a simple bus-shaped icon whose size scales with
-// the vehicle's seating capacity (bigger buses look bigger on the map),
+// Every marker is drawn as a small silhouette matching that vehicle's type
+// (Bus/Cab/Ambulance/Tempo Traveller/Towing Vehicle/Camper Van all look
+// visibly different from each other now, not just a bus for everything),
+// sized by seating capacity (bigger vehicles look bigger on the map), and
 // colored to match the same status colors used elsewhere (green=running,
-// amber=idle, grey=parked, red=anything that needs attention).
-function busDivIcon(status, seatingCapacity){
-  const size = Math.max(22, Math.min(56, 16 + Math.round((seatingCapacity||18) * 0.55)));
-  const cls = LIVE_STATUS_BADGE_CLASS[status] || "";
-  const color = cls==="ok" ? "#2E7D32" : cls==="pending" ? "#b8860b" : cls==="low" ? "#c0392b" : "#6b6b5e";
-  const svg = `<svg width="${size}" height="${size}" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+// amber=idle, grey=parked, red=anything that needs attention). Ambulance
+// keeps a white body + fixed red cross regardless of status, since that's
+// the one shape people expect to recognize instantly rather than by color.
+const VEHICLE_MARKER_SHAPES = {
+  "Bus": (color) => `
     <rect x="2" y="5.5" width="20" height="12.5" rx="3" fill="${color}" stroke="#fff" stroke-width="1.3"/>
     <rect x="4" y="7.7" width="4.3" height="4" rx="0.8" fill="#fff" opacity=".9"/>
     <rect x="9.1" y="7.7" width="4.3" height="4" rx="0.8" fill="#fff" opacity=".9"/>
     <rect x="14.2" y="7.7" width="4.3" height="4" rx="0.8" fill="#fff" opacity=".9"/>
     <circle cx="7" cy="18.8" r="2.1" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>
-    <circle cx="17" cy="18.8" r="2.1" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>
-  </svg>`;
+    <circle cx="17" cy="18.8" r="2.1" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>`,
+  "Cab": (color) => `
+    <path d="M4 14.3 L5.4 9.2 Q6.2 7.3 8.2 7.3 H15.8 Q17.8 7.3 18.6 9.2 L20 14.3 Z" fill="${color}" stroke="#fff" stroke-width="1.1"/>
+    <rect x="2" y="13.3" width="20" height="3.6" rx="1.6" fill="${color}" stroke="#fff" stroke-width="1.1"/>
+    <path d="M7.3 9.2 H16.7 L17.7 12.7 H6.3 Z" fill="#fff" opacity=".85"/>
+    <line x1="12" y1="9.2" x2="12" y2="12.7" stroke="${color}" stroke-width="0.9"/>
+    <circle cx="6.5" cy="18.3" r="2.1" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>
+    <circle cx="17.5" cy="18.3" r="2.1" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>`,
+  "Ambulance": (color) => `
+    <rect x="2" y="6" width="20" height="11.5" rx="2.5" fill="#fdfdfd" stroke="${color}" stroke-width="1.7"/>
+    <rect x="4" y="8" width="6.3" height="4.2" rx=".8" fill="${color}" opacity=".22"/>
+    <rect x="13.3" y="10.3" width="5" height="1.4" fill="#c0392b"/>
+    <rect x="15.1" y="8.5" width="1.4" height="5" fill="#c0392b"/>
+    <circle cx="7" cy="18.8" r="2.1" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>
+    <circle cx="17" cy="18.8" r="2.1" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>`,
+  "Tempo Traveller": (color) => `
+    <path d="M2 8 H16 Q19.5 8 20.5 11 L21.5 13.5 V17 H2 Z" fill="${color}" stroke="#fff" stroke-width="1.1"/>
+    <rect x="4" y="9.7" width="4.3" height="3.8" rx=".8" fill="#fff" opacity=".9"/>
+    <rect x="9.3" y="9.7" width="4.3" height="3.8" rx=".8" fill="#fff" opacity=".9"/>
+    <path d="M16.3 10.3 L18.5 10.3 L19.6 13 H16.3 Z" fill="#fff" opacity=".75"/>
+    <circle cx="6.5" cy="18.3" r="2" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>
+    <circle cx="17.5" cy="18.3" r="2" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>`,
+  "Towing Vehicle": (color) => `
+    <path d="M2 8.5 H7.5 Q9 8.5 9 10 V13.5 H2 Z" fill="${color}" stroke="#fff" stroke-width="1.1"/>
+    <rect x="3.3" y="9.7" width="3.4" height="3" rx=".6" fill="#fff" opacity=".85"/>
+    <rect x="9" y="11.5" width="11" height="4.5" rx="1" fill="${color}" stroke="#fff" stroke-width="1.1"/>
+    <line x1="20" y1="13.7" x2="22.3" y2="13.7" stroke="${color}" stroke-width="1.6" stroke-linecap="round"/>
+    <circle cx="22.6" cy="13.7" r="1.1" fill="none" stroke="${color}" stroke-width="1.2"/>
+    <circle cx="6" cy="18.3" r="2" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>
+    <circle cx="16" cy="18.3" r="2" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>`,
+  "Camper Van": (color) => `
+    <rect x="2" y="7.5" width="20" height="10.5" rx="2.5" fill="${color}" stroke="#fff" stroke-width="1.1"/>
+    <path d="M8 7.5 Q12 3.3 16 7.5 Z" fill="${color}" stroke="#fff" stroke-width="1.1"/>
+    <rect x="4.3" y="9.5" width="4" height="3.6" rx=".7" fill="#fff" opacity=".85"/>
+    <rect x="15.5" y="9.5" width="4" height="3.6" rx=".7" fill="#fff" opacity=".85"/>
+    <circle cx="7" cy="18.8" r="2.1" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>
+    <circle cx="17" cy="18.8" r="2.1" fill="#2B2E1F" stroke="#fff" stroke-width=".6"/>`,
+};
+function vehicleDivIcon(status, seatingCapacity, vehicleType){
+  const size = Math.max(22, Math.min(56, 16 + Math.round((seatingCapacity||18) * 0.55)));
+  const cls = LIVE_STATUS_BADGE_CLASS[status] || "";
+  const color = cls==="ok" ? "#2E7D32" : cls==="pending" ? "#b8860b" : cls==="low" ? "#c0392b" : "#6b6b5e";
+  const shapeFn = VEHICLE_MARKER_SHAPES[vehicleType] || VEHICLE_MARKER_SHAPES["Cab"];
+  const svg = `<svg width="${size}" height="${size}" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">${shapeFn(color)}</svg>`;
   return L.divIcon({ html: svg, className: "bus-marker-icon", iconSize:[size,size], iconAnchor:[size/2, size/2] });
 }
 // Glides a marker from wherever it currently is to a new position over
@@ -5384,17 +5433,17 @@ function animateMarkerTo(marker, newLatLng, durationMs){
   _markerAnimations.set(marker, requestAnimationFrame(step));
 }
 const _miniMapInstances = {}; // containerId -> {map, marker, pathLine, startMarker}
-function renderVehicleMiniMap(containerId, lat, lng, status, seatingCapacity){
+function renderVehicleMiniMap(containerId, lat, lng, status, seatingCapacity, vehicleType){
   const el = document.getElementById(containerId);
   if(!el || typeof L==="undefined" || lat==null || lng==null) return;
   const existing = _miniMapInstances[containerId];
   if(existing){
     // Same map, same marker - just glide it to the new spot (and refresh
-    // its icon in case status changed) so the bus actually moves on every
-    // 10-second poll instead of the whole map flashing and re-centering,
-    // and so whatever zoom/pan the person left it at stays put.
+    // its icon in case status changed) so the vehicle actually moves on
+    // every 10-second poll instead of the whole map flashing and
+    // re-centering, and so whatever zoom/pan the person left it at stays put.
     animateMarkerTo(existing.marker, [lat,lng], 900);
-    existing.marker.setIcon(busDivIcon(status, seatingCapacity));
+    existing.marker.setIcon(vehicleDivIcon(status, seatingCapacity, vehicleType));
     return;
   }
   // touchZoom/tap explicit (Leaflet defaults to on, but stated outright so a
@@ -5403,7 +5452,7 @@ function renderVehicleMiniMap(containerId, lat, lng, status, seatingCapacity){
   // two-finger scroll through the page doesn't get hijacked by the map.
   const map = L.map(el, {scrollWheelZoom:false, zoomControl:false, touchZoom:true, tap:true, bounceAtZoomLimits:false}).setView([lat,lng], 15);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
-  const marker = L.marker([lat,lng], {icon: busDivIcon(status, seatingCapacity)}).addTo(map);
+  const marker = L.marker([lat,lng], {icon: vehicleDivIcon(status, seatingCapacity, vehicleType)}).addTo(map);
   _miniMapInstances[containerId] = {map, marker, pathLine: null, startMarker: null};
 }
 // Draws (or updates) the polyline tracing where this vehicle has been since
@@ -5495,7 +5544,7 @@ let _fleetMapMarkers = {}; // vehicleId -> marker, for the dashboard's persisten
 // look/behavior never drifts between the three call sites.
 function createFleetMarker(map, v){
   const vMeta = vehicles.find(x=>x.id===v.vehicleId);
-  const marker = L.marker([v.latitude, v.longitude], {icon: busDivIcon(v.status, vMeta ? vMeta.seatingCapacity : null)}).addTo(map);
+  const marker = L.marker([v.latitude, v.longitude], {icon: vehicleDivIcon(v.status, vMeta ? vMeta.seatingCapacity : null, vMeta ? vMeta.vehicleType : null)}).addTo(map);
   bindFleetMarkerPopup(marker, v);
   return marker;
 }
@@ -5579,7 +5628,7 @@ function updateFleetMapMarkerPositions(list){
       const marker = _fleetMapMarkers[v.vehicleId];
       const vMeta = vehicles.find(x=>x.id===v.vehicleId);
       animateMarkerTo(marker, [v.latitude, v.longitude], 900);
-      marker.setIcon(busDivIcon(v.status, vMeta ? vMeta.seatingCapacity : null));
+      marker.setIcon(vehicleDivIcon(v.status, vMeta ? vMeta.seatingCapacity : null, vMeta ? vMeta.vehicleType : null));
       bindFleetMarkerPopup(marker, v); // refresh popup content in case speed/fuel/status changed since the last poll
     } else {
       // A vehicle that wasn't in the filtered set a moment ago (just

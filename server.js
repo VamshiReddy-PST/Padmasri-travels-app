@@ -888,11 +888,19 @@ function passwordReused(password, user) {
 }
 
 // Vehicle class + fuel type - the fleet only has Diesel buses (no Petrol/
-// CNG/EV/Hybrid buses), so a Bus is always forced to Diesel. Cabs can be
-// any of the 5 fuel types. Used to break mileage reporting out by category
-// instead of one misleading blended fleet-wide average.
-const VEHICLE_TYPES = ["Bus", "Cab"];
+// CNG/EV/Hybrid buses), so a Bus is always forced to Diesel. Every other
+// class can be any of the 5 fuel types. Used to break mileage reporting out
+// by category instead of one misleading blended fleet-wide average, and to
+// pick a distinct marker shape on the Live Fleet Map.
+const VEHICLE_TYPES = ["Bus", "Cab", "Ambulance", "Tempo Traveller", "Towing Vehicle", "Camper Van"];
 const FUEL_TYPES = ["Diesel", "Petrol", "CNG", "EV", "Hybrid"];
+// Simple plural for report/category labels ("Buses", "Cabs", "Ambulances"...)
+// - irregular-plural exceptions go here rather than a general grammar engine
+// since the whole list is short and fixed.
+function pluralizeVehicleType(vehicleType) {
+  if (vehicleType === "Bus") return "Buses";
+  return `${vehicleType}s`;
+}
 function validateVehicleTypeFuel(vehicleType, fuelType) {
   if (!VEHICLE_TYPES.includes(vehicleType)) return `Vehicle Type must be one of: ${VEHICLE_TYPES.join(", ")}.`;
   if (!FUEL_TYPES.includes(fuelType)) return `Fuel Type must be one of: ${FUEL_TYPES.join(", ")}.`;
@@ -8496,7 +8504,7 @@ app.get("/api/dashboard/mileage-summary", requireAuth, requireRole("owner", "ops
       return {
         vehicleType: cat.vehicleType,
         fuelType: cat.fuelType,
-        label: `${cat.vehicleType === "Bus" ? "Buses" : "Cabs"} - ${cat.fuelType}`,
+        label: `${pluralizeVehicleType(cat.vehicleType)} - ${cat.fuelType}`,
         vehicleCount: sorted.length,
         categoryAverage,
         worst: sorted.slice(0, MILEAGE_WORST_N),
@@ -9714,7 +9722,7 @@ const AI_TOOLS = [
   {
     name: "list_vehicles",
     description: "List vehicles with their site, client, driver, standard mileage and last odometer reading. Optionally filter by usage or vehicle type.",
-    input_schema: { type: "object", properties: { usage: { type: "string", enum: ["fixed_route", "on_call", "booking"] }, vehicleType: { type: "string", enum: ["Bus", "Cab"] } }, additionalProperties: false },
+    input_schema: { type: "object", properties: { usage: { type: "string", enum: ["fixed_route", "on_call", "booking"] }, vehicleType: { type: "string", enum: VEHICLE_TYPES } }, additionalProperties: false },
   },
   {
     name: "vehicle_expenditure",
