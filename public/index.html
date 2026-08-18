@@ -296,6 +296,11 @@
   .fullmap-topbar h3{margin:0;font-size:15px;}
   .fullmap-topbar button{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35);color:#fff;padding:7px 14px;border-radius:8px;font-size:13px;cursor:pointer;}
   .fullmap-container{flex:1;width:100%;}
+  .modal-backdrop{position:fixed;inset:0;background:rgba(20,20,20,.6);z-index:9998;display:flex;align-items:center;justify-content:center;padding:16px;}
+  .modal-panel{background:#fff;border-radius:12px;max-width:680px;width:100%;max-height:88vh;overflow:auto;padding:18px 20px 20px;box-shadow:0 12px 40px rgba(0,0,0,.35);}
+  .modal-panel-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:10px;}
+  .modal-panel-topbar h3{margin:0;font-size:16px;}
+  .modal-panel-topbar button{background:var(--accent-light);border:1px solid var(--border);color:var(--ink);padding:6px 12px;border-radius:8px;font-size:13px;cursor:pointer;flex-shrink:0;}
   /* ---- AI Assistant + command-center dashboard ---- */
   .ai-hero{background:linear-gradient(135deg,#20241A 0%,var(--ink) 45%,#3A2F6B 100%);border-radius:20px;padding:26px 26px 22px;margin-bottom:16px;color:#fff;position:relative;overflow:hidden;box-shadow:0 12px 30px rgba(43,46,31,.22);}
   .ai-hero::before{content:"";position:absolute;top:-50px;right:-50px;width:200px;height:200px;border-radius:50%;background:radial-gradient(circle,rgba(108,99,255,.35),transparent 70%);}
@@ -351,6 +356,7 @@
 <input type="file" id="scannerFileInput" accept="image/*" capture="environment" style="display:none" onchange="handleScannerFile(event)" />
 <div id="scannerOverlay"></div>
 <div id="fleetMapOverlay"></div>
+<div id="theftDetailOverlay"></div>
 <script>
 /* =========================================================================
    FLEET SUPERVISOR APP - talks to the shared backend in server.js.
@@ -1202,16 +1208,16 @@ function tabsForInner(role){
   // request, they (plus Data Team and Owner) are the only roles that can
   // approve odometer/fuel readings. See ODOMETER_VERIFY_ROLES and
   // FUEL_CROSS_VERIFY_ROLES in server.js for the matching backend gate.
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   // Operations Manager deliberately has no odometer_verify/fuel_verify tab -
   // per the Owner's explicit request, Ops Manager has no role in approving
   // odometer or fuel readings (they previously had odometer_verify; removed
   // on request).
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="admin") return [["admin_dashboard","Dashboard"],["admin_vehicles","Vehicles"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
@@ -1239,7 +1245,7 @@ const SIDEBAR_GROUP_META = {
 const TAB_GROUP_MAP = {
   my_vehicles:"fleet", onboarding:"fleet", admin_vehicles:"fleet", usage:"fleet",
   assignments:"fleet", routes:"fleet", subvendor_expenses:"fleet",
-  odometer_verify:"fleet", fuel_verify:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
+  odometer_verify:"fleet", fuel_verify:"fleet", fuel_theft:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
   subvendors:"fleet", hierarchy:"fleet",
   trips:"trips", my_attendance:"trips", attendance:"trips", my_expenses:"trips", queue:"trips",
   expenses:"finance", expenses_view:"finance", payroll:"finance", backup:"finance",
@@ -1368,6 +1374,7 @@ async function routeView(){
   if(tab==="odometer_verify") return odometerVerificationScreen();
   if(tab==="fuel_verify") return fuelVerificationScreen();
   if(tab==="gps_link") return gpsLinkScreen();
+  if(tab==="fuel_theft") return fuelTheftScreen();
   if(tab==="transport") return transportScreen();
   if(tab==="repairs") return repairRequestsScreen();
   if(tab==="workshop") return workshopScreen();
@@ -6549,8 +6556,178 @@ async function transportDispatchRoute(routeId){
 }
 async function acknowledgeFuelTheftAlert(id){
   if(!confirm('Mark this fuel theft alert as acknowledged? This just clears it from the dashboard - it stays on record.')) return;
-  try{ await api('/fuel-theft-alerts/'+id+'/acknowledge', {method:'POST'}); await goto('dashboard'); }
+  try{
+    await api('/fuel-theft-alerts/'+id+'/acknowledge', {method:'POST'});
+    closeTheftDetail();
+    // Called from either the Dashboard card or the Fuel Theft tab - refresh
+    // whichever one is actually on screen rather than forcing a navigation
+    // away from where the person currently is.
+    await renderMain();
+  }
   catch(e){ alert(e.message); }
+}
+
+// ---------- Fuel Theft & Mileage Watch tab ----------
+// Left box: suspected fuel theft reports (see checkFuelTheftForVehicle() on
+// the backend), filterable by Today / Live (currently active/unresolved) /
+// a custom date range. Right box: vehicles running below a fleet-wide
+// mileage bar for their class, cross-checked against the same daily fuel
+// entries drivers/supervisors submit (see /api/dashboard/low-mileage on the
+// backend). State lives at module level (not inside `view`) so switching
+// away to open a vehicle's full Fuel Pattern screen and coming back doesn't
+// lose the range someone had picked.
+let theftRangeMode = 'today'; // 'today' | 'live' | 'custom'
+let theftFrom = null, theftTo = null;
+let _lastTheftAlerts = [];
+function setTheftRange(mode){ theftRangeMode = mode; renderMain(); }
+function loadTheftCustomRange(){
+  const from = document.getElementById('theft_from').value;
+  const to = document.getElementById('theft_to').value;
+  if(!from || !to || from > to){ alert('Pick a valid From/To range (From must be on or before To).'); return; }
+  theftFrom = from; theftTo = to;
+  renderMain();
+}
+function mileageUnitLabel(fuelType){ return fuelType==='CNG' ? 'km/kg' : 'km/l'; }
+async function fuelTheftScreen(){
+  const today = todayStr();
+  if(!theftFrom) theftFrom = new Date(Date.now()-30*86400000).toISOString().slice(0,10);
+  if(!theftTo) theftTo = today;
+
+  let alertsUrl = '/fuel-theft-alerts';
+  if(theftRangeMode==='live') alertsUrl += '?status=active';
+  else if(theftRangeMode==='today') alertsUrl += `?from=${today}T00:00:00.000Z&to=${today}T23:59:59.999Z`;
+  else alertsUrl += `?from=${theftFrom}T00:00:00.000Z&to=${theftTo}T23:59:59.999Z`;
+
+  let alerts = [], alertsError = "";
+  try{ alerts = await api(alertsUrl); }catch(e){ alertsError = e.message; }
+  _lastTheftAlerts = alerts;
+
+  let lowMileageRows = [], lowMileageError = "";
+  try{ const d = await api('/dashboard/low-mileage'); lowMileageRows = d.rows||[]; }catch(e){ lowMileageError = e.message; }
+
+  const statusBadgeHtml = (status) => status==='active' ? `<span class="badge low">Active</span>` : status==='acknowledged' ? `<span class="badge pending">Acknowledged</span>` : `<span class="badge ok">Resolved</span>`;
+
+  return `
+  <h1 class="page-title">⛽🚨 Fuel Theft &amp; Mileage Watch</h1>
+  <div class="grid cols-2" style="align-items:start;">
+    <div class="card">
+      <h2 class="section-title">Suspected Fuel Theft</h2>
+      <div class="controls" style="margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+        <button class="btn small ${theftRangeMode==='today'?'':'secondary'}" onclick="setTheftRange('today')">Today</button>
+        <button class="btn small ${theftRangeMode==='live'?'':'secondary'}" onclick="setTheftRange('live')">Live (active)</button>
+        <button class="btn small ${theftRangeMode==='custom'?'':'secondary'}" onclick="setTheftRange('custom')">Custom range</button>
+      </div>
+      ${theftRangeMode==='custom' ? `
+      <div class="grid cols-2" style="margin-bottom:10px;">
+        <div class="field"><label>From</label><input type="date" id="theft_from" value="${theftFrom}" max="${today}" /></div>
+        <div class="field"><label>To</label><input type="date" id="theft_to" value="${theftTo}" max="${today}" /></div>
+      </div>
+      <button class="btn small" style="margin-bottom:10px;" onclick="loadTheftCustomRange()">Apply</button>
+      ` : ''}
+      ${alertsError ? `<div class="banner error">${alertsError}</div>` : ''}
+      ${!alertsError && !alerts.length ? `<div class="empty">No fuel theft reports ${theftRangeMode==='live'?'currently active':'in this range'}.</div>` : ''}
+      ${alerts.map(a=>`
+        <div style="border-bottom:1px solid var(--border);padding:10px 0;cursor:pointer;" onclick="showTheftDetail('${a.id}')" title="Click for the full report and fuel graph">
+          <div class="flex-between">
+            <b>${a.vehicleReg}</b>
+            ${statusBadgeHtml(a.status)}
+          </div>
+          <div style="color:#7a2115;font-weight:600;">~${a.litersLost} L lost</div>
+          <div class="muted" style="font-size:12px;">Started ${fmtDMY(a.startedAt)} ${new Date(a.startedAt).toLocaleTimeString()} &middot; last detected ${fmtDMY(a.lastDetectedAt)} ${new Date(a.lastDetectedAt).toLocaleTimeString()}</div>
+        </div>`).join("")}
+    </div>
+    <div class="card">
+      <h2 class="section-title">Low Mileage Watch</h2>
+      <p class="muted" style="margin-bottom:10px;">Vehicles running below their class's mileage bar, cross-checked against the daily fuel entries drivers/supervisors submit: Buses &lt; 5 km/l, Petrol &lt; 15 km/l, Diesel (incl. Innova, Marazzo and similar) &lt; 12 km/l, CNG &lt; 20 km/kg.</p>
+      ${lowMileageError ? `<div class="banner error">${lowMileageError}</div>` : ''}
+      ${!lowMileageError && !lowMileageRows.length ? `<div class="empty">No vehicles currently below their class's mileage bar.</div>` : ''}
+      ${lowMileageRows.map(r=>`
+        <div style="border-bottom:1px solid var(--border);padding:10px 0;cursor:pointer;" onclick="goto('fuel_graph',{vehicleId:'${r.vehicleId}'})" title="Click to open this vehicle's Fuel Pattern">
+          <div class="flex-between">
+            <b>${r.reg}</b>
+            <span style="color:#7a2115;font-weight:600;">${r.avgMileage} ${mileageUnitLabel(r.fuelType)}</span>
+          </div>
+          <div class="muted" style="font-size:12px;">${r.vehicleType} &middot; ${r.fuelType} &middot; bar: ${r.threshold} ${mileageUnitLabel(r.fuelType)} &middot; ${r.fillCount} fill${r.fillCount===1?'':'s'} recorded</div>
+        </div>`).join("")}
+    </div>
+  </div>
+  `;
+}
+// Popup: full report for one alert plus a fuel/odometer graph covering the
+// incident window (padded 30 min either side so the drop is visible against
+// what came right before/after it), reusing the same server-recorded
+// breadcrumb trail (trip-history) and Chart.js drawing approach as the
+// per-vehicle Fuel Pattern screen - just rendered into a modal instead of a
+// full page, since this is meant to be a quick "go verify this" glance
+// without leaving the Fuel Theft tab.
+let _theftChart = null;
+async function showTheftDetail(alertId){
+  const a = _lastTheftAlerts.find(x=>x.id===alertId);
+  const overlay = document.getElementById('theftDetailOverlay');
+  if(!a || !overlay) return;
+  const mapLink = (a.latitude!=null && a.longitude!=null) ? `https://www.google.com/maps?q=${a.latitude},${a.longitude}` : null;
+  const locationHtml = a.address ? a.address : (mapLink ? `${a.latitude}, ${a.longitude}` : "Location unavailable (no GPS fix)");
+  const statusLabel = a.status==='active' ? 'Active' : a.status==='acknowledged' ? `Acknowledged by ${a.acknowledgedByName||'someone'} on ${fmtDMY(a.acknowledgedAt)}` : `Resolved (${a.resolvedReason||'auto'})`;
+  overlay.innerHTML = `
+  <div class="modal-backdrop" onclick="if(event.target===this) closeTheftDetail()">
+    <div class="modal-panel">
+      <div class="modal-panel-topbar">
+        <h3>⛽🚨 ${a.vehicleReg} - Suspected Fuel Theft</h3>
+        <button onclick="closeTheftDetail()">✕ Close</button>
+      </div>
+      <div class="grid cols-4" style="margin-bottom:12px;">
+        <div class="kpi"><div class="num">${a.litersLost} L</div><div class="label">Estimated fuel lost</div></div>
+        <div class="kpi"><div class="num">${a.startFuelLitres!=null?a.startFuelLitres:'-'} L</div><div class="label">Fuel before</div></div>
+        <div class="kpi"><div class="num">${a.endFuelLitres!=null?a.endFuelLitres:'-'} L</div><div class="label">Fuel after</div></div>
+        <div class="kpi"><div class="num" style="font-size:14px;">${statusLabel}</div><div class="label">Status</div></div>
+      </div>
+      <p class="muted" style="margin-bottom:4px;">Started ${fmtDMY(a.startedAt)} ${new Date(a.startedAt).toLocaleTimeString()} &middot; last detected ${fmtDMY(a.lastDetectedAt)} ${new Date(a.lastDetectedAt).toLocaleTimeString()}</p>
+      <p class="muted" style="margin-bottom:12px;">📍 ${locationHtml}${mapLink?` &middot; <a href="${mapLink}" target="_blank" rel="noopener">Open in Google Maps &rsaquo;</a>`:''}</p>
+      <h2 class="section-title" style="font-size:14px;">Fuel &amp; distance around this incident</h2>
+      <canvas id="theftDetailCanvas" height="110" style="margin-top:6px;"></canvas>
+      <div id="theftDetailChartStatus" class="muted" style="font-size:12px;margin-top:6px;"></div>
+      <div class="controls" style="margin-top:14px;">
+        ${a.status==='active' ? `<button class="btn small" onclick="acknowledgeFuelTheftAlert('${a.id}')">Acknowledge</button>` : ''}
+        <button class="btn small secondary" onclick="closeTheftDetail(); goto('fuel_graph',{vehicleId:'${a.vehicleId}'})">Open full Fuel Pattern &rsaquo;</button>
+      </div>
+    </div>
+  </div>`;
+  setTimeout(()=>loadTheftDetailChart(a), 0);
+}
+async function loadTheftDetailChart(a){
+  const statusEl = document.getElementById('theftDetailChartStatus');
+  const canvasEl = document.getElementById('theftDetailCanvas');
+  if(!canvasEl) return;
+  const padMs = 30*60000;
+  const fromIso = new Date(new Date(a.startedAt).getTime()-padMs).toISOString();
+  const toIso = new Date(new Date(a.lastDetectedAt||a.startedAt).getTime()+padMs).toISOString();
+  let points = [];
+  try{
+    const data = await api(`/vehicles/${a.vehicleId}/trip-history?from=${fromIso}&to=${toIso}`);
+    points = (data.points||[]).filter(p=>p.fuel!=null || p.odometer!=null).sort((x,y)=> x.ts < y.ts ? -1 : x.ts > y.ts ? 1 : 0);
+  }catch(e){ if(statusEl) statusEl.textContent = e.message; return; }
+  if(!points.length){ if(statusEl) statusEl.textContent = 'No fuel/odometer readings recorded around this incident.'; return; }
+  if(_theftChart){ _theftChart.destroy(); _theftChart = null; }
+  const labels = points.map(p=>new Date(p.ts).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}));
+  _theftChart = new Chart(canvasEl, {
+    type: 'line',
+    data: { labels, datasets: [
+      { label:'Fuel (L)', yAxisID:'yFuel', data: points.map(p=>p.fuel), borderColor:'#c0392b', backgroundColor:'rgba(192,57,43,0.12)', fill:true, tension:0.15, pointRadius: points.length>150?0:2, spanGaps:true },
+      { label:'Odometer (km)', yAxisID:'yOdo', data: points.map(p=>p.odometer), borderColor:'#b8860b', backgroundColor:'rgba(184,134,11,0.08)', fill:false, tension:0.1, pointRadius: points.length>150?0:2, borderDash:[4,3], spanGaps:true },
+    ]},
+    options: {
+      scales: {
+        yFuel: { beginAtZero:true, position:'left', title:{display:true,text:'Fuel (L)'} },
+        yOdo: { beginAtZero:false, position:'right', title:{display:true,text:'Odometer (km)'}, grid:{drawOnChartArea:false} },
+        x: { ticks:{maxTicksLimit:8} },
+      },
+    }
+  });
+}
+function closeTheftDetail(){
+  const overlay = document.getElementById('theftDetailOverlay');
+  if(_theftChart){ _theftChart.destroy(); _theftChart = null; }
+  if(overlay) overlay.innerHTML = "";
 }
 function initTransportPinMap(officeLat, officeLng){
   const el = document.getElementById('transportPinMap');

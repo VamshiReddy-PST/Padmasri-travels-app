@@ -9295,14 +9295,21 @@ function fuelTheftAlertsVisibleTo(user) {
   }
   return list.slice().sort((a, b) => (b.lastDetectedAt || "").localeCompare(a.lastDetectedAt || ""));
 }
+// `from`/`to` are optional ISO timestamps (inclusive) filtering on
+// lastDetectedAt (falls back to startedAt for an incident that's never been
+// re-detected) - powers the Fuel Theft tab's Today/past-1-month/custom range
+// picker. Leaving both off (paired with status=active) is "Live", i.e.
+// whatever's currently unresolved regardless of when it started.
 app.get(
   "/api/fuel-theft-alerts",
   requireAuth,
   requireRole(...FUEL_THEFT_ALERT_ROLES),
   (req, res) => {
-    const { status } = req.query;
+    const { status, from, to } = req.query;
     let list = fuelTheftAlertsVisibleTo(req.user);
     if (status) list = list.filter((a) => a.status === status);
+    if (from) list = list.filter((a) => (a.lastDetectedAt || a.startedAt || "") >= from);
+    if (to) list = list.filter((a) => (a.lastDetectedAt || a.startedAt || "") <= to);
     res.json(list);
   }
 );
@@ -9322,6 +9329,39 @@ app.post(
     res.json(alert);
   })
 );
+
+// ---------- Low mileage watch (Fuel Theft tab, right-hand box) ----------
+// Fleet-wide thresholds set by the Owner - deliberately NOT the same as a
+// vehicle's own standardMileage field (which can be set optimistically at
+// onboarding and drift from reality). Cross-checks the same self-reported
+// daily fuel/mileage entries drivers and supervisors submit every day (see
+// mileagePerVehicleRows() above, which both this and the Dashboard mileage
+// summary card share) against one fixed bar per vehicle class:
+// Buses < 5 km/l, Petrol vehicles < 15 km/l, Diesel vehicles (Cab/Innova/
+// Marazzo/Ambulance/Tempo Traveller/Towing Vehicle/Camper Van running
+// Diesel) < 12 km/l, CNG vehicles < 20 km/kg (the "litres" field just holds
+// kg filled for a CNG vehicle, so the same ratio works). EV/Hybrid have no
+// fleet-wide bar set yet, so they're left out rather than guessed at.
+function lowMileageThreshold(vehicleType, fuelType) {
+  if (vehicleType === "Bus") return 5; // Buses are always Diesel (see validateVehicleTypeFuel)
+  if (fuelType === "Petrol") return 15;
+  if (fuelType === "Diesel") return 12;
+  if (fuelType === "CNG") return 20;
+  return null;
+}
+app.get("/api/dashboard/low-mileage", requireAuth, requireRole(...FUEL_THEFT_ALERT_ROLES), (req, res) => {
+  const visibleIds = new Set(visibleVehiclesFor(req.user).map((v) => v.id));
+  const rows = mileagePerVehicleRows()
+    .filter((r) => visibleIds.has(r.vehicleId))
+    .map((r) => Object.assign({}, r, { threshold: lowMileageThreshold(r.vehicleType, r.fuelType) }))
+    .filter((r) => r.threshold != null && r.avgMileage < r.threshold)
+    // Worst shortfall relative to its own category's bar first, not raw
+    // km/l, so a Bus at 3/5 and a Cab at 9/12 both show up ranked by how
+    // far under their own bar they are rather than the Bus always winning
+    // just because its unit is smaller.
+    .sort((a, b) => a.avgMileage / a.threshold - b.avgMileage / b.threshold);
+  res.json({ rows });
+});
 
 // Trip Replay data - our own server-recorded breadcrumb trail (see the
 // Location history section above), NOT a Fleetx history feed. Same
