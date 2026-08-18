@@ -283,6 +283,14 @@ function sourceBadge(source){
   const labels = {trip:"PER TRIP", km:"PER KM", package:"PACKAGE"};
   return `<span class="badge ${source}">${labels[source]||source.toUpperCase()}</span>`;
 }
+// DD/MM/YYYY display for raw "YYYY-MM-DD" date strings from the API - matches
+// the DD/MM/YYYY convention used across the staff and driver apps (see
+// fmtDMY in index.html/driver.html).
+function fmtDMY(dateStr){
+  if(!dateStr) return "-";
+  const m = String(dateStr).slice(0,10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(dateStr);
+}
 function render(){
   const app = document.getElementById("app");
   const d = dashboard || {vehicles:[],totalTrips:0,completedTrips:0,totalIncome:0,incomeEntries:[],payments:[],paymentsByType:{},totalPaid:0,advances:[],totalOutstandingPrincipal:0,totalInterestAccrued:0,netPayableToSubvendor:0};
@@ -296,21 +304,21 @@ function render(){
     </tr>`).join("");
   const incomeRows = d.incomeEntries.map(e=>`
     <tr>
-      <td>${e.date}</td>
+      <td>${fmtDMY(e.date)}</td>
       <td>${sourceBadge(e.source)}</td>
       <td>₹${e.amount}</td>
       <td>${e.note||""}</td>
     </tr>`).join("");
   const paymentRows = d.payments.map(p=>`
     <tr>
-      <td>${p.date}</td>
+      <td>${fmtDMY(p.date)}</td>
       <td>${p.type}</td>
       <td>₹${p.amount}</td>
       <td>${p.note||""}</td>
     </tr>`).join("");
   const advanceRows = d.advances.map(a=>`
     <tr>
-      <td>${a.date}</td>
+      <td>${fmtDMY(a.date)}</td>
       <td>₹${a.principal}</td>
       <td>₹${a.outstandingPrincipal}</td>
       <td>₹${a.interestAccrued} <span class="muted">(3%/mo simple)</span></td>

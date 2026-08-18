@@ -225,6 +225,14 @@ function backfillDefaults() {
     // records created before vehicle class/fuel type existed as fields.
     if (v.vehicleType === undefined) v.vehicleType = "Cab";
     if (v.fuelType === undefined) v.fuelType = "Diesel";
+    // Data Team/Admin corrections batch: additional optional identification
+    // fields, filled in later via the vehicle details editor rather than at
+    // creation time - see vehicleDetailsEditorHtml() in index.html.
+    if (v.ownerName === undefined) v.ownerName = "";
+    if (v.rtoArea === undefined) v.rtoArea = "";
+    if (v.manufactureMonth === undefined) v.manufactureMonth = "";
+    if (v.manufactureYear === undefined) v.manufactureYear = "";
+    if (v.remarks === undefined) v.remarks = "";
     if (v.docs && v.docs.Permit) {
       if (v.docs.Permit.isStatePermit === undefined) v.docs.Permit.isStatePermit = false;
       if (v.docs.Permit.districtCount === undefined) v.docs.Permit.districtCount = 0;
@@ -236,6 +244,9 @@ function backfillDefaults() {
       // can fill them in and drivers can see the field at all.
       if (!v.docs.TemporaryPermit) v.docs.TemporaryPermit = { number: "", expiry: "", updatedAt: null, copyUrl: null };
       if (!v.docs.BorderTax) v.docs.BorderTax = { number: "", expiry: "", updatedAt: null, copyUrl: null };
+      // Police City Permission - added after some vehicles already existed,
+      // same flat number/expiry/copy shape as RC/Insurance/Fitness/Tax/PUC.
+      if (!v.docs.PoliceCityPermission) v.docs.PoliceCityPermission = { number: "", expiry: "", updatedAt: null, copyUrl: null };
       DOC_COPY_TYPES.forEach((docType) => {
         const doc = v.docs[docType];
         if (!doc) return;
@@ -376,6 +387,10 @@ function backfillDefaults() {
     if (d.phone === undefined) d.phone = "";
     if (d.theme === undefined) d.theme = null;
     if (d.licenseNumber === undefined) d.licenseNumber = "";
+    // Licence expiry - drives the 30-days-before alert (see task #301); kept
+    // separate from licenseNumber since it wasn't originally captured.
+    if (d.licenseExpiry === undefined) d.licenseExpiry = "";
+    if (d.remarks === undefined) d.remarks = "";
     if (d.aadharNumber === undefined) d.aadharNumber = "";
     if (d.esiNumber === undefined) d.esiNumber = "";
     if (d.pfNumber === undefined) d.pfNumber = "";
@@ -805,7 +820,7 @@ function computeRcExpiry(rcDate) {
 // cover whatever an RTA checkpoint outside the vehicle's home state might
 // ask for, alongside the original 5 - drivers view/download all of these
 // read-only in the driver app once the office has filled them in here.
-const DOC_COPY_TYPES = ["RC", "Permit", "Insurance", "Fitness", "Tax", "PUC", "TemporaryPermit", "BorderTax"];
+const DOC_COPY_TYPES = ["RC", "Permit", "Insurance", "Fitness", "Tax", "PUC", "TemporaryPermit", "BorderTax", "PoliceCityPermission"];
 
 // ---------- PASSWORDS ----------
 // Every login is now email (or mobile number, if no email on file) plus a
@@ -3871,7 +3886,7 @@ app.post(
   requireAuth,
   requireRole(...DRIVER_EDITOR_ROLES, "site_supervisor", "area_supervisor"),
   h(async (req, res) => {
-    const { name, phone, licenseNumber, aadharNumber, dateOfJoining, drivingLevel } = req.body || {};
+    const { name, phone, licenseNumber, licenseExpiry, aadharNumber, dateOfJoining, drivingLevel } = req.body || {};
     if (!name) return res.status(400).json({ error: "name is required." });
     if (drivingLevel && !DRIVING_LEVELS.includes(drivingLevel)) {
       return res.status(400).json({ error: `Driving level must be one of: ${DRIVING_LEVELS.join(", ")}.` });
@@ -3888,6 +3903,9 @@ app.post(
       name,
       phone: phone || "",
       licenseNumber: licenseNumber || "",
+      // Drives the 30-days-before licence expiry alert (see task #301).
+      licenseExpiry: licenseExpiry || "",
+      remarks: "",
       aadharNumber: aadharNumber || "",
       esiNumber: "",
       pfNumber: "",
@@ -4010,14 +4028,14 @@ app.patch(
       return res.status(403).json({ error: "You can only edit documents for a driver you submitted yourself." });
     }
     const {
-      name, phone, licenseNumber, aadharNumber, esiNumber, pfNumber, uanNumber,
+      name, phone, licenseNumber, licenseExpiry, aadharNumber, esiNumber, pfNumber, uanNumber,
       dateOfJoining, drivingLevel, esiCertificate, pfCertificate,
       panNumber, bankAccountNumber, bankIfsc, bankAccountHolderName,
       licenseCopy, aadharCopy, panCopy, bankCheque,
       healthRecordNumber, healthRecordDate, healthRecordCopy,
       trainingCertNumber, trainingCertDate, trainingCertCopy,
       policeVerificationNumber, policeVerificationDate, policeVerificationCopy,
-      homeLat, homeLng, homeAddress,
+      homeLat, homeLng, homeAddress, remarks,
     } = req.body || {};
     if (drivingLevel !== undefined && drivingLevel && !DRIVING_LEVELS.includes(drivingLevel)) {
       return res.status(400).json({ error: `Driving level must be one of: ${DRIVING_LEVELS.join(", ")}.` });
@@ -4032,6 +4050,9 @@ app.patch(
     if (name !== undefined && String(name).trim()) { driver.name = String(name).trim(); changed = true; }
     if (phone !== undefined) { driver.phone = phone || ""; changed = true; }
     if (licenseNumber !== undefined) { driver.licenseNumber = licenseNumber || ""; changed = true; }
+    // Drives the 30-days-before licence expiry alert (see task #301).
+    if (licenseExpiry !== undefined) { driver.licenseExpiry = licenseExpiry || ""; changed = true; }
+    if (remarks !== undefined) { driver.remarks = remarks || ""; changed = true; }
     if (aadharNumber !== undefined) { driver.aadharNumber = aadharNumber || ""; changed = true; }
     if (esiNumber !== undefined) { driver.esiNumber = esiNumber || ""; changed = true; }
     if (pfNumber !== undefined) { driver.pfNumber = pfNumber || ""; changed = true; }
@@ -4438,6 +4459,14 @@ app.post(
       seatingCapacity: seatingCapacity != null && seatingCapacity !== "" ? Number(seatingCapacity) : null,
       vehicleType,
       fuelType,
+      // Optional identification fields (Data Team/Admin corrections batch) -
+      // not required at creation, filled in later via the vehicle details
+      // editor (see PATCH /api/vehicles/:id/details below).
+      ownerName: "",
+      rtoArea: "",
+      manufactureMonth: "",
+      manufactureYear: "",
+      remarks: "",
       standardMileage: Number(standardMileage) || 4.0,
       lastOdometer: null,
       // Onboarding/approval trail - see vehicleIsApproved(). Vehicles
@@ -4460,6 +4489,7 @@ app.post(
         PUC: { number: "", expiry: "", updatedAt: null, copyUrl: null },
         TemporaryPermit: { number: "", expiry: "", updatedAt: null, copyUrl: null },
         BorderTax: { number: "", expiry: "", updatedAt: null, copyUrl: null },
+        PoliceCityPermission: { number: "", expiry: "", updatedAt: null, copyUrl: null },
       },
     };
     db.vehicles.push(vehicle);
@@ -4530,8 +4560,8 @@ app.patch(
   h(async (req, res) => {
     const vehicle = db.vehicles.find((v) => v.id === req.params.id);
     if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
-    const before = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity, vehicleType: vehicle.vehicleType, fuelType: vehicle.fuelType };
-    const { make, model, engineNo, chassisNo, rcDate, seatingCapacity, vehicleType, fuelType } = req.body || {};
+    const before = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity, vehicleType: vehicle.vehicleType, fuelType: vehicle.fuelType, ownerName: vehicle.ownerName, rtoArea: vehicle.rtoArea, manufactureMonth: vehicle.manufactureMonth, manufactureYear: vehicle.manufactureYear, remarks: vehicle.remarks };
+    const { make, model, engineNo, chassisNo, rcDate, seatingCapacity, vehicleType, fuelType, ownerName, rtoArea, manufactureMonth, manufactureYear, remarks } = req.body || {};
     // Vehicle Type / Fuel Type are validated together (Bus => Diesel only),
     // using whichever value is being kept if only one of the two changed.
     if (vehicleType !== undefined || fuelType !== undefined) {
@@ -4575,7 +4605,19 @@ app.patch(
       }
       vehicle.seatingCapacity = Number(seatingCapacity);
     }
-    const after = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity, vehicleType: vehicle.vehicleType, fuelType: vehicle.fuelType };
+    // Optional identification fields (Data Team/Admin corrections batch) -
+    // never required, unlike the mandatory onboarding fields above.
+    if (ownerName !== undefined) vehicle.ownerName = ownerName || "";
+    if (rtoArea !== undefined) vehicle.rtoArea = rtoArea || "";
+    if (manufactureMonth !== undefined) vehicle.manufactureMonth = manufactureMonth || "";
+    if (manufactureYear !== undefined) {
+      if (manufactureYear && !(Number(manufactureYear) > 1900 && Number(manufactureYear) <= new Date().getFullYear() + 1)) {
+        return res.status(400).json({ error: "Year of Manufacture looks invalid." });
+      }
+      vehicle.manufactureYear = manufactureYear || "";
+    }
+    if (remarks !== undefined) vehicle.remarks = remarks || "";
+    const after = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity, vehicleType: vehicle.vehicleType, fuelType: vehicle.fuelType, ownerName: vehicle.ownerName, rtoArea: vehicle.rtoArea, manufactureMonth: vehicle.manufactureMonth, manufactureYear: vehicle.manufactureYear, remarks: vehicle.remarks };
     await audit(req.user, "update_vehicle_details", `${req.user.name} updated onboarding details for ${vehicle.reg}: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
     res.json(vehicle);
   })

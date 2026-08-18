@@ -600,7 +600,7 @@ function empRequestHtml(){
     <h2 class="section-title">Standing Request</h2>
     ${active ? `
       <p>Your standing request: <b>${active.type}</b> &middot; <span class="badge ${active.status}">${active.status}</span></p>
-      <p class="muted">Raised ${new Date(active.raisedAt).toLocaleDateString()}</p>
+      <p class="muted">Raised ${new Date(active.raisedAt).toLocaleDateString('en-GB')}</p>
       <button class="btn danger" onclick="cancelRequest('${active.id}')">Cancel Request</button>
     ` : `
       <p class="muted" style="margin-bottom:10px;">Ask for transport every working day - Travel Desk will review, then you'll be added to whichever route the office plans.</p>
@@ -628,18 +628,18 @@ function empRequestHtml(){
     </div>
     ${_selectedBookingDates.length ? `
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">
-        ${_selectedBookingDates.map(d=>`<span class="badge" style="cursor:pointer;" onclick="removeBookingDate('${d}')">${new Date(d).toLocaleDateString()} &times;</span>`).join("")}
+        ${_selectedBookingDates.map(d=>`<span class="badge" style="cursor:pointer;" onclick="removeBookingDate('${d}')">${new Date(d).toLocaleDateString('en-GB')} &times;</span>`).join("")}
       </div>
       <button class="btn" style="margin-top:10px;" onclick="submitAdvanceBookings()">Book ${_selectedBookingDates.length} Selected Date${_selectedBookingDates.length===1?'':'s'}</button>
     ` : ""}
   </div>
 
   ${upcoming.length ? `<div class="card"><h2 class="section-title">Upcoming Bookings</h2><table><tr><th>Date</th><th>Type</th><th>Status</th><th></th></tr>
-    ${upcoming.map(r=>`<tr><td>${new Date(r.date).toLocaleDateString()}</td><td>${r.type}</td><td><span class="badge ${r.status}">${r.status}</span></td><td><button class="btn small danger" onclick="cancelRequest('${r.id}')">Cancel</button></td></tr>`).join("")}
+    ${upcoming.map(r=>`<tr><td>${new Date(r.date).toLocaleDateString('en-GB')}</td><td>${r.type}</td><td><span class="badge ${r.status}">${r.status}</span></td><td><button class="btn small danger" onclick="cancelRequest('${r.id}')">Cancel</button></td></tr>`).join("")}
   </table></div>` : ""}
 
   ${pastBooked.length || myRequests.length ? `<div class="card"><h2 class="section-title">History</h2><table><tr><th>Date</th><th>Type</th><th>Status</th></tr>
-    ${myRequests.slice().sort((a,b)=>(b.date||b.raisedAt||"").localeCompare(a.date||a.raisedAt||"")).map(r=>`<tr><td>${r.date?new Date(r.date).toLocaleDateString()+' (booked)':new Date(r.raisedAt).toLocaleDateString()+' (standing)'}</td><td>${r.type}</td><td><span class="badge ${r.status}">${r.status}</span></td></tr>`).join("")}
+    ${myRequests.slice().sort((a,b)=>(b.date||b.raisedAt||"").localeCompare(a.date||a.raisedAt||"")).map(r=>`<tr><td>${r.date?new Date(r.date).toLocaleDateString('en-GB')+' (booked)':new Date(r.raisedAt).toLocaleDateString('en-GB')+' (standing)'}</td><td>${r.type}</td><td><span class="badge ${r.status}">${r.status}</span></td></tr>`).join("")}
   </table></div>` : ""}`;
 }
 function addBookingDate(){
@@ -674,7 +674,7 @@ function empLocationHtml(){
     <button class="btn secondary" style="margin-bottom:10px;" onclick="useMyGpsLocation()">📍 Use my current location</button>
     <div class="field"><label>Address (optional, helps the driver)</label><input type="text" id="pinAddress" value="${(employee.homeAddress||"").replace(/"/g,'&quot;')}" placeholder="Flat/House no., street, landmark" /></div>
     <button class="btn" onclick="saveMyLocation()">Save Location</button>
-    ${employee.locationPinnedAt ? `<p class="muted" style="margin-top:8px;">Last updated ${new Date(employee.locationPinnedAt).toLocaleString()}</p>` : ""}
+    ${employee.locationPinnedAt ? `<p class="muted" style="margin-top:8px;">Last updated ${new Date(employee.locationPinnedAt).toLocaleString('en-GB')}</p>` : ""}
   </div>`;
 }
 function empSettingsHtml(){
@@ -852,7 +852,7 @@ function requestsTabHtml(){
   <div class="card">
     <h2 class="section-title">Pending (${pending.length})</h2>
     ${pending.length ? `<table><tr><th>Employee</th><th>Type</th><th>Raised</th><th></th></tr>
-    ${pending.map(r=>`<tr><td>${r.employeeName}</td><td>${r.type}</td><td>${new Date(r.raisedAt).toLocaleDateString()}</td><td>
+    ${pending.map(r=>`<tr><td>${r.employeeName}</td><td>${r.type}</td><td>${new Date(r.raisedAt).toLocaleDateString('en-GB')}</td><td>
       <button class="btn small" onclick="decideRequest('${r.id}','approved')">Approve</button>
       <button class="btn small danger" onclick="decideRequest('${r.id}','rejected')">Reject</button>
     </td></tr>`).join("")}</table>` : `<div class="empty">Nothing pending.</div>`}

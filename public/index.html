@@ -3126,10 +3126,15 @@ async function addVehicle(evt){
 // ---- Vehicle Details: onboarding fields (Make/Model/Engine/Chassis/RC
 // Date/Seating) and per-document number/expiry, including Permit's district
 // details. Opened per-vehicle from the Assignments table.
-const DOC_TYPES = ["RC","Permit","Insurance","Fitness","Tax","PUC","TemporaryPermit","BorderTax"];
+const DOC_TYPES = ["RC","Permit","Insurance","Fitness","Tax","PUC","TemporaryPermit","BorderTax","PoliceCityPermission"];
 // These get a photo/scan of the physical document attached + a visible
 // "last updated" stamp (matches the server's DOC_COPY_TYPES list).
-const DOC_COPY_TYPES = ["RC","Permit","Insurance","Fitness","Tax","PUC","TemporaryPermit","BorderTax"];
+const DOC_COPY_TYPES = ["RC","Permit","Insurance","Fitness","Tax","PUC","TemporaryPermit","BorderTax","PoliceCityPermission"];
+// Common RTO areas across the fleet's operating region - Data Team/Admin
+// correction #6. "Other" falls back to a free-text box so this never blocks
+// a vehicle registered somewhere not on the list.
+const RTO_AREAS = ["Uppal","R.R. District","Khairatabad","Secunderabad","Ibrahimpatnam","Malkajgiri","Medchal","Other"];
+const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 function toggleVehicleDetails(vehicleId){
   editingVehicleId = editingVehicleId===vehicleId ? null : vehicleId;
   renderMain();
@@ -3211,6 +3216,23 @@ async function vehicleDetailsEditorHtml(vehicleId){
         ${["Diesel","Petrol","CNG","EV","Hybrid"].map(f=>`<option value="${f}" ${v.fuelType===f?'selected':''}>${f}</option>`).join("")}
       </select>
     </div></div>
+    <div class="check-row"><div class="label">Registered Owner Name</div><div class="controls"><input type="text" id="vd_ownerName_${v.id}" value="${v.ownerName||''}" /></div></div>
+    <div class="check-row"><div class="label">Month &amp; Year of Manufacture</div><div class="controls">
+      <select id="vd_manufactureMonth_${v.id}" style="width:130px">
+        <option value="">Month</option>
+        ${MONTH_NAMES.map(m=>`<option value="${m}" ${v.manufactureMonth===m?'selected':''}>${m}</option>`).join("")}
+      </select>
+      <input type="number" placeholder="Year" min="1980" max="${new Date().getFullYear()+1}" value="${v.manufactureYear||''}" style="width:90px" id="vd_manufactureYear_${v.id}" />
+    </div></div>
+    <div class="check-row"><div class="label">RTO Area</div><div class="controls">
+      <select id="vd_rtoArea_${v.id}" onchange="onVdRtoAreaChange('${v.id}')">
+        <option value="">- Select -</option>
+        ${RTO_AREAS.map(a=>`<option value="${a}" ${v.rtoArea===a?'selected':''}>${a}</option>`).join("")}
+        ${v.rtoArea && !RTO_AREAS.includes(v.rtoArea) ? `<option value="Other" selected>Other</option>` : ""}
+      </select>
+      <input type="text" placeholder="Enter RTO area" id="vd_rtoAreaOther_${v.id}" value="${v.rtoArea && !RTO_AREAS.includes(v.rtoArea) ? v.rtoArea : ''}" style="width:160px;${(v.rtoArea && !RTO_AREAS.includes(v.rtoArea)) ? '' : 'display:none;'}" />
+    </div></div>
+    <div class="check-row"><div class="label">Remarks</div><div class="controls"><textarea id="vd_remarks_${v.id}" rows="2" style="width:100%;max-width:420px;">${v.remarks||''}</textarea></div></div>
     <button class="btn small" onclick="saveVehicleDetails('${v.id}')">Save onboarding details</button>
 
     <h2 class="section-title" style="margin-top:16px;">Documents</h2>
@@ -3228,8 +3250,17 @@ function onVdVehicleTypeChange(vehicleId){
     fuelEl.disabled = false;
   }
 }
+// RTO Area select showing/hiding the free-text "Other" fallback box - same
+// pattern as onPermitStateToggle above.
+function onVdRtoAreaChange(vehicleId){
+  const sel = document.getElementById(`vd_rtoArea_${vehicleId}`);
+  const otherEl = document.getElementById(`vd_rtoAreaOther_${vehicleId}`);
+  if(!sel || !otherEl) return;
+  otherEl.style.display = sel.value === "Other" ? "" : "none";
+}
 async function saveVehicleDetails(vehicleId){
   const g = (id) => document.getElementById(id).value;
+  const rtoAreaSel = g(`vd_rtoArea_${vehicleId}`);
   const body = {
     make: g(`vd_make_${vehicleId}`),
     model: g(`vd_model_${vehicleId}`),
@@ -3239,6 +3270,11 @@ async function saveVehicleDetails(vehicleId){
     seatingCapacity: g(`vd_seating_${vehicleId}`),
     vehicleType: g(`vd_vehicleType_${vehicleId}`),
     fuelType: g(`vd_fuelType_${vehicleId}`),
+    ownerName: g(`vd_ownerName_${vehicleId}`),
+    manufactureMonth: g(`vd_manufactureMonth_${vehicleId}`),
+    manufactureYear: g(`vd_manufactureYear_${vehicleId}`),
+    rtoArea: rtoAreaSel === "Other" ? g(`vd_rtoAreaOther_${vehicleId}`) : rtoAreaSel,
+    remarks: g(`vd_remarks_${vehicleId}`),
   };
   try{
     const v = await api(`/vehicles/${vehicleId}/details`, {method:"PATCH", body: JSON.stringify(body)});
@@ -3661,6 +3697,7 @@ function driverEditorHtml(d){
       <div class="f"><label>Name</label><input type="text" id="ed_name_${d.id}" value="${d.name||''}" required /></div>
       <div class="f"><label>Mobile Number</label><input type="tel" id="ed_phone_${d.id}" value="${d.phone||''}" style="width:130px" /></div>
       <div class="f"><label>License Number</label><input type="text" id="ed_license_${d.id}" value="${d.licenseNumber||''}" style="width:130px" /></div>
+      <div class="f"><label>License Expiry</label><input type="date" id="ed_licenseExpiry_${d.id}" value="${d.licenseExpiry||''}" style="width:140px" /></div>
       <div class="f"><label>Aadhar Number</label><input type="text" id="ed_aadhar_${d.id}" value="${d.aadharNumber||''}" style="width:130px" /></div>
       <div class="f"><label>Date of Joining</label><input type="date" id="ed_doj_${d.id}" value="${d.dateOfJoining||''}" style="width:140px" /></div>
       <div class="f"><label>Driving Level</label><select id="ed_level_${d.id}">
@@ -3680,6 +3717,7 @@ function driverEditorHtml(d){
       <div class="f"><label>Training Cert Date</label><input type="date" id="ed_trainingdate_${d.id}" value="${d.trainingCertDate||''}" style="width:140px" /></div>
       <div class="f"><label>Police Verification No.</label><input type="text" id="ed_policeno_${d.id}" value="${d.policeVerificationNumber||''}" style="width:150px" /></div>
       <div class="f"><label>Police Verification Date</label><input type="date" id="ed_policedate_${d.id}" value="${d.policeVerificationDate||''}" style="width:140px" /></div>
+      <div class="f" style="flex-basis:100%;"><label>Remarks</label><textarea id="ed_remarks_${d.id}" rows="2" style="width:100%;max-width:420px;">${d.remarks||''}</textarea></div>
       <button class="btn small" type="submit">Save</button>
       <button type="button" class="btn small secondary" onclick="toggleDriverDetails('${d.id}')">Close</button>
     </form>
@@ -3898,6 +3936,7 @@ async function saveDriverDetails(evt, id){
     name: document.getElementById(`ed_name_${id}`).value,
     phone: document.getElementById(`ed_phone_${id}`).value,
     licenseNumber: document.getElementById(`ed_license_${id}`).value,
+    licenseExpiry: document.getElementById(`ed_licenseExpiry_${id}`).value,
     aadharNumber: document.getElementById(`ed_aadhar_${id}`).value,
     dateOfJoining: document.getElementById(`ed_doj_${id}`).value,
     drivingLevel: document.getElementById(`ed_level_${id}`).value,
@@ -3914,6 +3953,7 @@ async function saveDriverDetails(evt, id){
     trainingCertDate: document.getElementById(`ed_trainingdate_${id}`).value,
     policeVerificationNumber: document.getElementById(`ed_policeno_${id}`).value,
     policeVerificationDate: document.getElementById(`ed_policedate_${id}`).value,
+    remarks: document.getElementById(`ed_remarks_${id}`).value,
   };
   try{
     const updated = await api(`/drivers/${id}`, {method:"PATCH", body: JSON.stringify(body)});
@@ -5425,7 +5465,7 @@ async function vehicleTodayStatusScreen(vehicleId){
   <div class="card">
     <h2 class="section-title">Documents expiring within 15 days</h2>
     <table><tr><th>Document</th><th>Expiry</th><th>Status</th></tr>
-    ${expiringDocs.map(d=>`<tr><td>${d.docType}</td><td>${d.expiry}</td><td><span class="badge low">${d.daysLeft<0? 'EXPIRED': d.daysLeft+' days left'}</span></td></tr>`).join("")
+    ${expiringDocs.map(d=>`<tr><td>${d.docType}</td><td>${fmtDMY(d.expiry)}</td><td><span class="badge low">${d.daysLeft<0? 'EXPIRED': d.daysLeft+' days left'}</span></td></tr>`).join("")
       || `<tr><td colspan="3" class="empty">Nothing expiring soon for this vehicle.</td></tr>`}
     </table>
   </div>
