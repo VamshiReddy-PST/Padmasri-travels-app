@@ -2629,6 +2629,7 @@ async function adminVehiclesScreen(){
   <div class="banner">Add new vehicles and manage every vehicle's documents (RC, Permit, Insurance, Fitness, Tax, PUC, Temporary Permit, Border Tax) here - numbers, expiry dates, and a photo or PDF copy of each.</div>
   <div class="card">
     <h2 class="section-title">Vehicles (${vehicles.length})</h2>
+    ${editingVehicleId ? await vehicleDetailsEditorHtml(editingVehicleId) : ""}
     <table><tr><th>Vehicle</th><th>Make/Model</th><th>Type / Fuel</th><th>Area</th><th></th><th></th></tr>${rows || "<tr><td colspan='6' class='empty'>No vehicles yet.</td></tr>"}</table>
     <div class="banner">Every field below is required - a vehicle cannot be added without its complete onboarding data.</div>
     <form class="inline-form" onsubmit="return addVehicle(event)">
@@ -2666,7 +2667,6 @@ async function adminVehiclesScreen(){
       <button class="btn small" type="submit">+ Add vehicle</button>
     </form>
     <div class="muted" style="margin-top:6px;">Buses in this fleet only run on Diesel. A newly added vehicle isn't assigned to an Area/Route/Driver yet - that's done separately by Operations/Data Team.</div>
-    ${editingVehicleId ? await vehicleDetailsEditorHtml(editingVehicleId) : ""}
   </div>`;
 }
 // All of a vehicle's documents (not just the <15-day-urgent ones the main
@@ -2981,13 +2981,20 @@ async function assignmentsEditorHtml(){
         <option value="client_on_demand" ${v.usage==='client_on_demand'?'selected':''}>Client on demand</option>
         <option value="booking" ${v.usage==='booking'?'selected':''}>Booking</option>
       </select></td>
-      <td><button class="btn small secondary" onclick="toggleVehicleDetails('${v.id}')">${editingVehicleId===v.id?'Close':'Vehicle Details'}</button></td>
+      <td>
+        <button class="btn small secondary" onclick="toggleVehicleDetails('${v.id}')">${editingVehicleId===v.id?'Close':'Vehicle Details'}</button>
+        ${currentUser.role==="owner" ? `
+        <button class="btn small secondary" style="margin-top:4px;" onclick="markVehicleSoldOut('${v.id}','${(v.reg||'').replace(/'/g,"\\'")}')" title="Hides this vehicle everywhere for everyone - reversible from the Sold Out Vehicles list below.">Mark Sold Out</button>
+        <button class="btn small danger" style="margin-top:4px;" onclick="deleteVehicle('${v.id}','${(v.reg||'').replace(/'/g,"\\'")}')" title="Permanently deletes this vehicle - only allowed if it has no expense/trip history.">Delete</button>
+        ` : ""}
+      </td>
     </tr>`;}).join("");
   return `
   <h1 class="page-title">Overview</h1>
   <div class="banner">Assign each vehicle to a company and one of its Route IDs, a site supervisor, and a driver here. Only Operations Manager, Data Team and Owner can make these changes - every change is logged. A vehicle with a Company but no Route (or vice versa) is flagged below - both are required to fully recognise a vehicle.</div>
   <div class="card">
     <h2 class="section-title">Vehicles (${vehicles.length})</h2>
+    ${editingVehicleId ? await vehicleDetailsEditorHtml(editingVehicleId) : ""}
     <table><tr><th>Vehicle</th><th>Type / Fuel</th><th>Client</th><th>Route ID</th><th>Area</th><th>Area Supervisor</th><th>Driver</th><th>Driver since</th><th>Usage</th><th></th></tr>${rows}</table>
     <div class="banner">Every field below is required - a vehicle cannot be added without its complete onboarding data.</div>
     <form class="inline-form" onsubmit="return addVehicle(event)">
@@ -3024,10 +3031,10 @@ async function assignmentsEditorHtml(){
       <div class="f"><label>Seating Capacity *</label><input type="number" id="newVehicleSeating" min="1" style="width:80px" required /></div>
       <button class="btn small" type="submit">+ Add vehicle</button>
     </form>
-    <div class="muted" style="margin-top:6px;">Buses in this fleet only run on Diesel. Once added, these onboarding details (and each vehicle's documents) can be edited later via "Vehicle Details" below.</div>
-    ${editingVehicleId ? await vehicleDetailsEditorHtml(editingVehicleId) : ""}
+    <div class="muted" style="margin-top:6px;">Buses in this fleet only run on Diesel. Once added, these onboarding details (and each vehicle's documents) can be edited later via "Vehicle Details" above.</div>
   </div>
 
+  ${currentUser.role==="owner" ? await soldOutVehiclesCardHtml() : ""}
   ${(currentUser.role==="ops_manager" || currentUser.role==="owner") ? await assignmentsDateViewCardHtml() : ""}
   ${(currentUser.role==="ops_manager" || currentUser.role==="owner") ? await fuelOverviewCardHtml() : ""}
 
@@ -3074,6 +3081,55 @@ async function assignField(vehicleId, field, value){
     const v = await api(`/vehicles/${vehicleId}/assign`, {method:"PATCH", body: JSON.stringify({[field]: value})});
     const idx = vehicles.findIndex(x=>x.id===vehicleId); vehicles[idx] = v;
   }catch(e){ alert(e.message); await renderMain(); }
+}
+// Sold Out - Owner-only. Once marked, the vehicle disappears from every
+// screen for every role (server-side, via visibleVehiclesFor) - it's
+// removed from the local `vehicles` array here too so the UI updates
+// immediately without waiting for the next full reload.
+async function markVehicleSoldOut(vehicleId, reg){
+  if(!confirm(`Mark ${reg} as Sold Out?\n\nIt will disappear from every screen (dashboards, reports, GPS tracking, assignments, the driver app) for everyone, including you, except the Sold Out Vehicles list below - where you can restore it if this was a mistake.`)) return;
+  try{
+    await api(`/vehicles/${vehicleId}/sold-out`, {method:"PATCH", body: JSON.stringify({soldOut:true})});
+    vehicles = vehicles.filter(v=>v.id!==vehicleId);
+    if(editingVehicleId===vehicleId) editingVehicleId = null;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function restoreVehicle(vehicleId, reg){
+  if(!confirm(`Restore ${reg} from Sold Out? It will become visible everywhere again.`)) return;
+  try{
+    const v = await api(`/vehicles/${vehicleId}/sold-out`, {method:"PATCH", body: JSON.stringify({soldOut:false})});
+    vehicles.push(v);
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function deleteVehicle(vehicleId, reg){
+  if(!confirm(`Permanently delete ${reg}?\n\nThis cannot be undone. It will only work if this vehicle has no expense or trip history - if it's a real fleet vehicle that's just no longer in use, use "Mark Sold Out" instead.`)) return;
+  try{
+    await api(`/vehicles/${vehicleId}`, {method:"DELETE"});
+    vehicles = vehicles.filter(v=>v.id!==vehicleId);
+    if(editingVehicleId===vehicleId) editingVehicleId = null;
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function soldOutVehiclesCardHtml(){
+  let rows = [];
+  try{ rows = await api("/vehicles/sold-out"); }catch(e){ rows = []; }
+  if(!rows.length) return "";
+  const trs = rows.map(v=>`
+    <tr>
+      <td><b>${v.reg}</b></td>
+      <td>${v.make||'-'} ${v.model||''}</td>
+      <td>${v.soldOutAt ? new Date(v.soldOutAt).toLocaleString('en-GB') : '-'}</td>
+      <td>${v.soldOutByName||'-'}</td>
+      <td><button class="btn small secondary" onclick="restoreVehicle('${v.id}','${(v.reg||'').replace(/'/g,"\\'")}')">Restore</button></td>
+    </tr>`).join("");
+  return `
+  <div class="card">
+    <h2 class="section-title">Sold Out Vehicles (${rows.length})</h2>
+    <div class="muted" style="margin-bottom:8px;">Hidden everywhere else in the app - no details beyond registration/make/model are kept visible. Restore here if one was marked by mistake.</div>
+    <table><tr><th>Vehicle</th><th>Make/Model</th><th>Marked sold out</th><th>By</th><th></th></tr>${trs}</table>
+  </div>`;
 }
 // Buses in this fleet only run on Diesel - selecting "Bus" locks the fuel
 // dropdown to Diesel so it's impossible to submit an invalid combination.

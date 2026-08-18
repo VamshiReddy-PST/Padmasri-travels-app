@@ -233,6 +233,15 @@ function backfillDefaults() {
     if (v.manufactureMonth === undefined) v.manufactureMonth = "";
     if (v.manufactureYear === undefined) v.manufactureYear = "";
     if (v.remarks === undefined) v.remarks = "";
+    // Sold Out - Owner-only. Once set, visibleVehiclesFor() excludes this
+    // vehicle from every screen (dashboards, reports, GPS, driver app,
+    // assignments) for every role, including the Owner's regular views -
+    // see the "Sold Out Vehicles" Owner-only card for the one place it's
+    // still reachable (to restore it if marked by mistake).
+    if (v.soldOut === undefined) v.soldOut = false;
+    if (v.soldOutAt === undefined) v.soldOutAt = null;
+    if (v.soldOutBy === undefined) v.soldOutBy = null;
+    if (v.soldOutByName === undefined) v.soldOutByName = null;
     if (v.docs && v.docs.Permit) {
       if (v.docs.Permit.isStatePermit === undefined) v.docs.Permit.isStatePermit = false;
       if (v.docs.Permit.districtCount === undefined) v.docs.Permit.districtCount = 0;
@@ -4361,7 +4370,12 @@ function vehicleIsApproved(v) {
 // scoped), so no new field is needed - just widening who supervisorId can
 // point to and who's allowed to see/act on it.
 function visibleVehiclesFor(user) {
-  const approved = db.vehicles.filter(vehicleIsApproved);
+  // Sold Out (Owner-only, see PATCH /api/vehicles/:id/sold-out) removes a
+  // vehicle from every screen for every role, including the Owner's own
+  // regular views - the one place it's still reachable is the Owner-only
+  // "Sold Out Vehicles" list (GET /api/vehicles/sold-out), for restoring a
+  // vehicle marked by mistake.
+  const approved = db.vehicles.filter((v) => vehicleIsApproved(v) && !v.soldOut);
   if (user.role === "site_supervisor") return approved.filter((v) => v.supervisorId === user.id);
   if (user.role === "area_supervisor") {
     const mySupervisors = new Set(user.supervises || []);
@@ -4710,6 +4724,82 @@ app.patch(
       `${req.user.name} reassigned ${vehicle.reg}: ${JSON.stringify(before)} -> ${JSON.stringify({ siteId: vehicle.siteId, supervisorId: vehicle.supervisorId, driverId: vehicle.driverId, clientId: vehicle.clientId, routeId: vehicle.routeId, driverAssignedDate: vehicle.driverAssignedDate })}`
     );
     res.json(vehicle);
+  })
+);
+
+// Sold Out - Owner-only. Marking a vehicle sold removes it from every
+// screen for every role (see visibleVehiclesFor()) - it stops counting for
+// dashboards, reports, GPS tracking, assignments, and the driver app. The
+// vehicle record itself isn't deleted (see DELETE /api/vehicles/:id for
+// that) - this is reversible via the same endpoint with soldOut:false, in
+// case it was marked by mistake. Any driver currently on the vehicle is
+// unassigned so their driver-app login/trip flows (which look the vehicle
+// up directly by driverId, not through visibleVehiclesFor) stop finding it.
+app.patch(
+  "/api/vehicles/:id/sold-out",
+  requireAuth,
+  requireRole("owner"),
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+    const { soldOut } = req.body || {};
+    if (typeof soldOut !== "boolean") return res.status(400).json({ error: "soldOut must be true or false." });
+    if (soldOut) {
+      if (vehicle.driverId) applyVehicleAssignmentPatch(vehicle, { driverId: null });
+      vehicle.soldOut = true;
+      vehicle.soldOutAt = nowIso();
+      vehicle.soldOutBy = req.user.id;
+      vehicle.soldOutByName = req.user.name;
+      await audit(req.user, "vehicle_sold_out", `${req.user.name} marked ${vehicle.reg} as sold out - it is now hidden fleet-wide.`);
+    } else {
+      vehicle.soldOut = false;
+      vehicle.soldOutAt = null;
+      vehicle.soldOutBy = null;
+      vehicle.soldOutByName = null;
+      await audit(req.user, "vehicle_restored", `${req.user.name} restored ${vehicle.reg} from Sold Out.`);
+    }
+    res.json(vehicle);
+  })
+);
+
+// Owner-only list of sold-out vehicles - deliberately minimal (registration
+// + make/model + who/when marked it) rather than the full vehicle record,
+// matching "no details visible, just that it's sold out." This is the only
+// place a sold vehicle is still reachable, so the Owner can restore one
+// marked by mistake or hand-identify it before a permanent delete.
+app.get(
+  "/api/vehicles/sold-out",
+  requireAuth,
+  requireRole("owner"),
+  (req, res) => {
+    const rows = db.vehicles
+      .filter((v) => v.soldOut)
+      .map((v) => ({ id: v.id, reg: v.reg, make: v.make, model: v.model, soldOutAt: v.soldOutAt, soldOutByName: v.soldOutByName }));
+    res.json(rows);
+  }
+);
+
+// Permanent delete - Owner-only. Blocked if the vehicle has any expense or
+// trip history recorded against it, so a real fleet vehicle's records can
+// never accidentally be wiped out - only ever the original sample/demo
+// vehicles or a genuine duplicate/mistake entry that never did any work.
+app.delete(
+  "/api/vehicles/:id",
+  requireAuth,
+  requireRole("owner"),
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+    const hasExpenses = db.expenses.some((e) => e.vehicleId === vehicle.id);
+    const hasTrips = db.trips.some((t) => t.vehicleId === vehicle.id);
+    if (hasExpenses || hasTrips) {
+      return res.status(400).json({
+        error: `${vehicle.reg} has real expense/trip history recorded against it, so it can't be deleted - mark it Sold Out instead if it's no longer in the fleet.`,
+      });
+    }
+    db.vehicles = db.vehicles.filter((v) => v.id !== vehicle.id);
+    await audit(req.user, "delete_vehicle", `${req.user.name} permanently deleted vehicle ${vehicle.reg} (no expense/trip history existed for it).`);
+    res.json({ ok: true });
   })
 );
 
@@ -8937,7 +9027,7 @@ app.get(
     }
     const liveVehicles = live.vehicles || [];
     const results = [];
-    db.vehicles.forEach((vehicle) => {
+    db.vehicles.filter((v) => !v.soldOut).forEach((vehicle) => {
       const match = resolveFleetxMatch(vehicle, liveVehicles);
       if (!match) return;
       results.push(Object.assign({ vehicleId: vehicle.id, reg: vehicle.reg }, liveTrackingPayloadFor(match)));
@@ -8965,7 +9055,7 @@ app.get(
     }
     const liveVehicles = live.vehicles || [];
     const linkByPlate = new Map(); // normalized fleetx vehicleNumber -> our vehicle
-    db.vehicles.forEach((vehicle) => {
+    db.vehicles.filter((v) => !v.soldOut).forEach((vehicle) => {
       const match = resolveFleetxMatch(vehicle, liveVehicles);
       if (match) linkByPlate.set(normalizePlate(match.vehicleNumber), vehicle);
     });
