@@ -4,16 +4,18 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Padmasri Travels - Client Transport Portal</title>
-<meta name="theme-color" content="#2B2E1F" />
+<meta name="theme-color" content="#3E0B07" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@1,500;1,600;1,700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
   :root{
-    --ink:#2B2E1F; --accent:#4C6A2B; --accent-dark:#3A5220; --accent-light:#E9EDA8; --green:#2E7D32;
-    --amber:#b8860b; --red:#c0392b; --grey:#6b6b5e; --bg:#FBF8E3; --card:#ffffff;
-    --border:#ECE6C8; --purple:#6C63FF; --purple-dark:#4A43C7; --purple-light:#E7E5FF;
+    /* Padma Sri Travels brand palette - see index.html for the full note. */
+    --ink:#2A1410; --accent:#5D110B; --accent-dark:#3E0B07; --accent-light:#F0DCC0; --green:#2E7D32;
+    --amber:#B8860B; --red:#c0392b; --grey:#7A6A5C; --bg:#FBF3E6; --card:#ffffff;
+    --border:#E8D6BB; --purple:#6C63FF; --purple-dark:#4A43C7; --purple-light:#E7E5FF;
+    --gold:#C9A227; --gold-light:#F6ECD2;
     --on-accent:#ffffff; --on-accent-rgb:255,255,255; --accent-text:var(--accent);
   }
   *{box-sizing:border-box;}
@@ -21,7 +23,10 @@
   .accent-script{font-family:'Playfair Display',Georgia,serif;font-style:italic;font-weight:600;}
   #app{max-width:1080px;margin:0 auto;min-height:100vh;background:var(--bg);}
   header.topbar{background:var(--ink);color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;flex-wrap:wrap;gap:8px;}
-  header.topbar .brand{font-weight:700;font-size:17px;}
+  header.topbar .brand{font-weight:700;font-size:17px;display:flex;align-items:center;gap:8px;}
+  .brand-logo{height:54px;width:auto;display:block;}
+  .login-wrap .logo .brand-logo{height:64px;margin:0 auto;}
+  header.topbar .brand .brand-logo{height:24px;}
   header.topbar .who{font-size:12.5px;opacity:.9;text-align:right;}
   header.topbar button.gear, header.topbar button.logout{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35);color:#fff;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;margin-left:8px;}
   main{padding:18px 20px 70px;}
@@ -111,7 +116,7 @@ let showThemeModal = false;
 const THEME_PRESETS = {
   teal:   { key:"teal",   label:"Teal",          accent:"#00A3A6", text:"#FFFFFF" },
   lime:   { key:"lime",   label:"Lime",          accent:"#D7E600", text:"#1A1A1A" },
-  maroon: { key:"maroon", label:"Maroon",        accent:"#722F37", text:"#FFFFFF" },
+  maroon: { key:"maroon", label:"Padma Sri Maroon", accent:"#5D110B", text:"#FFFFFF" },
   gold:   { key:"gold",   label:"Golden Yellow", accent:"#FFC107", text:"#1A1A1A" },
   black:  { key:"black",  label:"Black",         accent:"#000000", text:"#FFFFFF" },
   white:  { key:"white",  label:"White",         accent:"#FFFFFF", text:"#1A1A1A" },
@@ -452,7 +457,7 @@ function portalChooserHtml(){
 function employeeLoginHtml(){
   return `
   <div class="login-wrap">
-    <div class="logo">🚌 Padmasri <span class="accent-script">Travels</span></div>
+    <div class="logo"><img class="brand-logo" src="logo-mark.png" alt="Padma Sri Travels" /></div>
     <div class="sub">Employee Transport - sign in with your mobile number and PIN</div>
     ${errorBannerHtml()}
     <div class="card">
@@ -467,7 +472,7 @@ function employeeLoginHtml(){
 function staffLoginHtml(){
   return `
   <div class="login-wrap">
-    <div class="logo">🚌 Padmasri <span class="accent-script">Travels</span></div>
+    <div class="logo"><img class="brand-logo" src="logo-mark.png" alt="Padma Sri Travels" /></div>
     <div class="sub">Client Staff - Travel Desk Manager / Billing / HOD</div>
     ${errorBannerHtml()}
     <div class="card">
@@ -481,7 +486,7 @@ function staffLoginHtml(){
 function staffForcedPasswordChangeHtml(){
   return `
   <div class="login-wrap">
-    <div class="logo">🚌 Padmasri <span class="accent-script">Travels</span></div>
+    <div class="logo"><img class="brand-logo" src="logo-mark.png" alt="Padma Sri Travels" /></div>
     <div class="sub">Set a permanent password to continue</div>
     ${pwChangeError ? `<div class="banner error">${pwChangeError}</div>` : ""}
     <div class="card">
@@ -497,7 +502,7 @@ function staffForcedPasswordChangeHtml(){
 // ---------- employee shell ----------
 function empTopbarHtml(){
   return `<header class="topbar">
-    <div class="brand">🚌 Padmasri <span class="accent-script">Travels</span></div>
+    <div class="brand"><img class="brand-logo" src="logo-mark.png" alt="" /> Padmasri <span class="accent-script">Travels</span></div>
     <div>
       <span class="who">${employee.name}${empClient?'<br/><span style="opacity:.8;">'+empClient.name+'</span>':''}</span>
     </div>
@@ -695,7 +700,7 @@ function empSettingsHtml(){
 // ---------- staff shell ----------
 function staffTopbarHtml(){
   return `<header class="topbar">
-    <div class="brand">🚌 Padmasri <span class="accent-script">Travels</span></div>
+    <div class="brand"><img class="brand-logo" src="logo-mark.png" alt="" /> Padmasri <span class="accent-script">Travels</span></div>
     <div>
       <span class="who">${staffUser.name}<br/><span style="opacity:.8;">${roleLabel(staffUser.role)}${staffClient?" &middot; "+staffClient.name:""}</span></span>
       <button class="gear" onclick="toggleThemeModal()">&#9881;</button>

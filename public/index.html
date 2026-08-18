@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Padmasri Travels - Fleet Supervisor App</title>
 <link rel="manifest" href="manifest.json" />
-<meta name="theme-color" content="#2B2E1F" />
+<meta name="theme-color" content="#3E0B07" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@1,500;1,600;1,700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
@@ -14,23 +14,35 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
   :root{
-    --ink:#2B2E1F; --accent:#4C6A2B; --accent-dark:#3A5220; --accent-light:#E9EDA8; --green:#2E7D32;
-    --amber:#b8860b; --red:#c0392b; --grey:#6b6b5e; --bg:#FBF8E3; --card:#ffffff;
-    --border:#ECE6C8; --purple:#6C63FF; --purple-dark:#4A43C7; --purple-light:#E7E5FF;
+    /* Padma Sri Travels brand palette - deep maroon (sampled straight from
+       the compass-rose mandala logo, #5D110B) with warm gold/parchment
+       accents, replacing the old olive-green placeholder theme. */
+    --ink:#2A1410; --accent:#5D110B; --accent-dark:#3E0B07; --accent-light:#F0DCC0; --green:#2E7D32;
+    --amber:#B8860B; --red:#c0392b; --grey:#7A6A5C; --bg:#FBF3E6; --card:#ffffff;
+    --border:#E8D6BB; --purple:#6C63FF; --purple-dark:#4A43C7; --purple-light:#E7E5FF;
+    --gold:#C9A227; --gold-light:#F6ECD2;
     /* Custom theme support (see applyTheme() in the script below) - default
-       values here match the app's original look exactly, so nothing changes
-       until someone actually picks a theme. --on-accent(-rgb) is the text
-       color to use ON TOP of an --accent-colored background (sidebar,
-       buttons); --accent-text is for when --accent is used as foreground
-       text/borders on the normal cream/white page instead - kept as a
-       separate variable because a light accent (e.g. white or lime) needs
-       different fallback logic for each of those two uses. */
+       values here are the brand maroon/gold palette above, so nothing
+       changes until someone actively picks a different preset in Settings.
+       --on-accent(-rgb) is the text color to use ON TOP of an
+       --accent-colored background (sidebar, buttons); --accent-text is for
+       when --accent is used as foreground text/borders on the normal
+       cream/white page instead - kept as a separate variable because a
+       light accent (e.g. white or lime) needs different fallback logic for
+       each of those two uses. */
     --on-accent:#ffffff; --on-accent-rgb:255,255,255; --accent-text:var(--accent);
   }
   *{box-sizing:border-box;}
-  body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;overflow-x:hidden;}
+  body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;overflow-x:hidden;
+    /* Subtle warm texture instead of a flat fill - two soft radial washes
+       (gold top-left, maroon bottom-right) that sit behind every screen at
+       ~2% opacity, giving the app a bit of depth/richness without ever
+       competing with page content for attention. */
+    background-image:radial-gradient(circle at 8% 4%, rgba(201,162,39,.07), transparent 40%), radial-gradient(circle at 96% 92%, rgba(93,17,11,.06), transparent 45%);
+    background-attachment:fixed;
+  }
   .accent-script{font-family:'Playfair Display',Georgia,serif;font-style:italic;font-weight:600;}
-  #app{min-height:100vh;background:#f2f1e4;display:flex;align-items:stretch;}
+  #app{min-height:100vh;background:#F3E7D3;display:flex;align-items:stretch;}
   /* ---- Left sidebar shell (replaces the old top tab bar) ----
      A floating, rounded "glass" panel inset from the edges rather than a
      flush-edge bar - soft gradient body, frosted/translucent pill buttons
@@ -218,9 +230,17 @@
   .login-wrap.wide{max-width:1080px;}
   .login-wrap .logo{text-align:center;font-size:22px;font-weight:800;color:var(--ink);margin-bottom:4px;}
   .login-wrap .sub{text-align:center;color:var(--grey);font-size:13px;margin-bottom:22px;}
-  .portal-hero{background:linear-gradient(135deg,#20241A 0%,var(--ink) 45%,#3A5220 100%);border-radius:22px;padding:38px 30px 34px;margin-bottom:0;box-shadow:0 12px 34px rgba(43,46,31,.25);position:relative;overflow:hidden;}
-  .portal-hero::before{content:"";position:absolute;top:-60px;right:-60px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(233,237,168,.25),transparent 70%);}
-  .portal-hero::after{content:"";position:absolute;bottom:-80px;left:-40px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(108,99,255,.22),transparent 70%);}
+  /* Brand logo image - used everywhere the old emoji+text "logo"/"brand" div
+     used to be (login screens, sidebar, topbar). Height-driven so the
+     mandala mark keeps its aspect ratio in every context. */
+  .brand-logo{height:54px;width:auto;display:block;margin:0 auto 6px;}
+  .login-wrap .logo .brand-logo{height:64px;}
+  .portal-hero .logo .brand-logo{height:58px;filter:drop-shadow(0 2px 8px rgba(0,0,0,.35));}
+  .sidebar-brand .brand-logo{height:30px;margin:0;}
+  .app-topbar .brand .brand-logo{height:22px;margin:0;}
+  .portal-hero{background:linear-gradient(135deg,#2A0A06 0%,var(--accent-dark) 45%,#7A2015 100%);border-radius:22px;padding:38px 30px 34px;margin-bottom:0;box-shadow:0 12px 34px rgba(61,11,7,.3);position:relative;overflow:hidden;}
+  .portal-hero::before{content:"";position:absolute;top:-60px;right:-60px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(201,162,39,.28),transparent 70%);}
+  .portal-hero::after{content:"";position:absolute;bottom:-80px;left:-40px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(240,220,192,.18),transparent 70%);}
   .portal-hero .logo{color:#fff;font-size:25px;position:relative;z-index:1;}
   .portal-hero .sub{color:#dfe3c2;margin-bottom:28px;position:relative;z-index:1;}
   .portal-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;position:relative;z-index:1;}
@@ -468,12 +488,15 @@ const WORKSHOP_STAFF_ROLES = ["workshop_manager","workshop_supervisor","mechanic
 const THEME_PRESETS = {
   teal:   { key:"teal",   label:"Teal",          accent:"#00A3A6", text:"#FFFFFF" },
   lime:   { key:"lime",   label:"Lime",          accent:"#D7E600", text:"#1A1A1A" },
-  maroon: { key:"maroon", label:"Maroon",        accent:"#722F37", text:"#FFFFFF" },
+  maroon: { key:"maroon", label:"Padma Sri Maroon", accent:"#5D110B", text:"#FFFFFF" },
   gold:   { key:"gold",   label:"Golden Yellow", accent:"#FFC107", text:"#1A1A1A" },
   black:  { key:"black",  label:"Black",         accent:"#000000", text:"#FFFFFF" },
   white:  { key:"white",  label:"White",         accent:"#FFFFFF", text:"#1A1A1A" },
 };
-const THEME_ROLE_DEFAULTS = { owner:"teal", admin:"lime" };
+// No role forces a preset anymore - everyone gets the brand maroon/gold
+// look baked into :root by default (see the CSS above) until they pick a
+// different theme themselves under Settings.
+const THEME_ROLE_DEFAULTS = {};
 function hexToRgb(hex){
   const h = hex.replace("#","");
   const n = h.length===3 ? h.split("").map(c=>c+c).join("") : h;
@@ -900,7 +923,7 @@ async function renderLogin(){
     app.innerHTML = `
     <div class="login-wrap wide">
       <div class="portal-hero">
-        <div class="logo">🧭 Padmasri <span class="accent-script">Travels</span></div>
+        <div class="logo"><img class="brand-logo" src="logo-mark.png" alt="Padma Sri Travels" /></div>
         <div class="sub">Fleet Supervisor Platform — choose how you'd like to sign in</div>
         <div class="portal-grid">
           <div class="portal-card driver" onclick="choosePortal('driver')">
@@ -936,7 +959,7 @@ async function renderLogin(){
   app.innerHTML = `
   <div class="login-wrap">
     <button class="portal-back" onclick="choosePortal(null)">&larr; Back</button>
-    <div class="logo">🧑‍💼 Staff &amp; Supervisor Login</div>
+    <div class="logo"><img class="brand-logo" src="logo-mark.png" alt="Padma Sri Travels" /><div style="font-size:15px;font-weight:700;color:var(--grey);margin-top:2px;">Staff &amp; Supervisor Login</div></div>
     <div class="sub">Sign in with your own login</div>
     <div class="card">
       ${lastError ? `<div class="banner error">${lastError}</div>` : ""}
@@ -1009,7 +1032,7 @@ async function renderForcedPasswordChange(){
   const app = document.getElementById("app");
   app.innerHTML = `
   <div class="login-wrap">
-    <div class="logo">🧭 Padmasri Travels</div>
+    <div class="logo"><img class="brand-logo" src="logo-mark.png" alt="Padma Sri Travels" /></div>
     <div class="sub">Set a new password to continue</div>
     <div class="card">
       <div class="banner">For security, you need to set your own password before you can use the app${currentUser && currentUser.name ? ", " + currentUser.name : ""}.</div>
@@ -1280,7 +1303,7 @@ async function render(){
   const tabs = tabsFor(u.role);
   app.innerHTML = `
     <aside class="sidebar" id="sidebar">
-      <div class="sidebar-brand"><span class="dot"></span> Padmasri <span class="accent-script">Travels</span></div>
+      <div class="sidebar-brand"><img class="brand-logo" src="logo-mark.png" alt="" /> Padmasri <span class="accent-script">Travels</span></div>
       <nav class="sidebar-nav">${sidebarNavHtml(tabs)}</nav>
       <div class="sidebar-foot">
         <div class="who-name">${u.name}</div>
@@ -1293,7 +1316,7 @@ async function render(){
     <div class="app-col">
       <header class="app-topbar">
         <button class="sidebar-toggle" onclick="toggleSidebar()">&#9776;</button>
-        <div class="brand"><span class="dot"></span> Padmasri <span class="accent-script">Travels</span></div>
+        <div class="brand"><img class="brand-logo" src="logo-mark.png" alt="" /> Padmasri <span class="accent-script">Travels</span></div>
       </header>
       <main id="main"><div class="empty">Loading...</div></main>
       <div class="footer-note">Shared data - everyone signed into this app sees the same fleet records.</div>

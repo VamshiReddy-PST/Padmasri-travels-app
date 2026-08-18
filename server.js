@@ -1917,15 +1917,16 @@ app.get("/api/photo/:id", async (req, res) => {
 const THEME_PRESETS = {
   teal: { key: "teal", label: "Teal", accent: "#00A3A6", text: "#FFFFFF" },
   lime: { key: "lime", label: "Lime", accent: "#D7E600", text: "#1A1A1A" },
-  maroon: { key: "maroon", label: "Maroon", accent: "#722F37", text: "#FFFFFF" },
+  maroon: { key: "maroon", label: "Padma Sri Maroon", accent: "#5D110B", text: "#FFFFFF" },
   gold: { key: "gold", label: "Golden Yellow", accent: "#FFC107", text: "#1A1A1A" },
   black: { key: "black", label: "Black", accent: "#000000", text: "#FFFFFF" },
   white: { key: "white", label: "White", accent: "#FFFFFF", text: "#1A1A1A" },
 };
-// Roles that get a specific brand color by default until they personally
-// pick a different one from the picker (everyone else just keeps the app's
-// normal default look until they choose something).
-const THEME_ROLE_DEFAULTS = { owner: "teal", admin: "lime" };
+// No role forces a preset anymore - the app's default look (set in each
+// frontend's :root CSS) is now the Padma Sri Travels brand maroon/gold
+// theme itself, so everyone sees it until they personally pick something
+// different from the picker.
+const THEME_ROLE_DEFAULTS = {};
 function themeFromBody(body) {
   const raw = (body || {}).theme;
   if (raw === null || raw === undefined) return { value: null, error: null };
