@@ -301,6 +301,30 @@
   .modal-panel-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:10px;}
   .modal-panel-topbar h3{margin:0;font-size:16px;}
   .modal-panel-topbar button{background:var(--accent-light);border:1px solid var(--border);color:var(--ink);padding:6px 12px;border-radius:8px;font-size:13px;cursor:pointer;flex-shrink:0;}
+  /* ---- Vehicle Tracking (minimal card list, GPS/health) ---- */
+  .filter-chip-row{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px;-webkit-overflow-scrolling:touch;}
+  .filter-chip{flex-shrink:0;padding:7px 14px;border-radius:20px;border:1.5px solid var(--border);background:#fff;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap;color:var(--ink);}
+  .filter-chip .count{margin-left:5px;opacity:.65;}
+  .filter-chip.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .track-card{display:flex;border-radius:12px;overflow:hidden;margin-bottom:10px;border:1px solid var(--border);background:#fff;cursor:pointer;}
+  .track-health-strip{width:24px;flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:10px;font-weight:800;letter-spacing:1.5px;writing-mode:vertical-rl;transform:rotate(180deg);}
+  .track-health-strip.good{background:var(--green);}
+  .track-health-strip.issue{background:var(--amber);}
+  .track-health-strip.alert{background:var(--red);}
+  .track-card-body{flex:1;padding:12px 14px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+  .track-pill{display:inline-block;padding:5px 13px;border-radius:20px;font-size:11.5px;font-weight:700;border:1.5px solid;text-transform:uppercase;white-space:nowrap;}
+  .track-pill.moving{color:var(--green);border-color:var(--green);}
+  .track-pill.idling{color:var(--amber);border-color:var(--amber);}
+  .track-pill.parked{color:var(--grey);border-color:var(--grey);}
+  .track-pill.offline{color:var(--red);border-color:var(--red);}
+  .track-pill.no_gps{color:var(--grey);border-color:var(--border);}
+  .track-counters{display:flex;gap:8px;font-size:11px;color:var(--grey);margin-top:6px;align-items:center;}
+  .track-counter-badge{background:var(--accent-light);color:var(--ink);border-radius:10px;padding:1px 8px;font-weight:700;}
+  .detail-tab-row{display:flex;gap:0;overflow-x:auto;border-bottom:1px solid var(--border);margin-bottom:14px;-webkit-overflow-scrolling:touch;}
+  .detail-tab{flex-shrink:0;padding:10px 16px;font-size:13px;font-weight:700;color:var(--grey);cursor:pointer;border-bottom:2.5px solid transparent;white-space:nowrap;}
+  .detail-tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+  .not-available-card{text-align:center;padding:36px 16px;color:var(--grey);}
+  .not-available-card .icon{font-size:34px;margin-bottom:8px;opacity:.5;}
   /* ---- AI Assistant + command-center dashboard ---- */
   .ai-hero{background:linear-gradient(135deg,#20241A 0%,var(--ink) 45%,#3A2F6B 100%);border-radius:20px;padding:26px 26px 22px;margin-bottom:16px;color:#fff;position:relative;overflow:hidden;box-shadow:0 12px 30px rgba(43,46,31,.22);}
   .ai-hero::before{content:"";position:absolute;top:-50px;right:-50px;width:200px;height:200px;border-radius:50%;background:radial-gradient(circle,rgba(108,99,255,.35),transparent 70%);}
@@ -1208,16 +1232,16 @@ function tabsForInner(role){
   // request, they (plus Data Team and Owner) are the only roles that can
   // approve odometer/fuel readings. See ODOMETER_VERIFY_ROLES and
   // FUEL_CROSS_VERIFY_ROLES in server.js for the matching backend gate.
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["reports","Reports"],["routes","Routes"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["vehicle_tracking","📍 Vehicle Tracking"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["vehicle_tracking","📍 Vehicle Tracking"],["reports","Reports"],["routes","Routes"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   // Operations Manager deliberately has no odometer_verify/fuel_verify tab -
   // per the Owner's explicit request, Ops Manager has no role in approving
   // odometer or fuel readings (they previously had odometer_verify; removed
   // on request).
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["vehicle_tracking","📍 Vehicle Tracking"],["fuel_theft","⛽ Fuel Theft & Mileage"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["vehicle_tracking","📍 Vehicle Tracking"],["fuel_theft","⛽ Fuel Theft & Mileage"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["vehicle_tracking","📍 Vehicle Tracking"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fuel_theft","⛽ Fuel Theft & Mileage"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="admin") return [["admin_dashboard","Dashboard"],["admin_vehicles","Vehicles"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
@@ -1245,7 +1269,7 @@ const SIDEBAR_GROUP_META = {
 const TAB_GROUP_MAP = {
   my_vehicles:"fleet", onboarding:"fleet", admin_vehicles:"fleet", usage:"fleet",
   assignments:"fleet", routes:"fleet", subvendor_expenses:"fleet",
-  odometer_verify:"fleet", fuel_verify:"fleet", fuel_theft:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
+  odometer_verify:"fleet", fuel_verify:"fleet", fuel_theft:"fleet", vehicle_tracking:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
   subvendors:"fleet", hierarchy:"fleet",
   trips:"trips", my_attendance:"trips", attendance:"trips", my_expenses:"trips", queue:"trips",
   expenses:"finance", expenses_view:"finance", payroll:"finance", backup:"finance",
@@ -1375,6 +1399,7 @@ async function routeView(){
   if(tab==="fuel_verify") return fuelVerificationScreen();
   if(tab==="gps_link") return gpsLinkScreen();
   if(tab==="fuel_theft") return fuelTheftScreen();
+  if(tab==="vehicle_tracking") return view.name==="vehicle_tracking_detail" ? vehicleTrackingDetailScreen(view.vehicleId) : vehicleTrackingScreen();
   if(tab==="transport") return transportScreen();
   if(tab==="repairs") return repairRequestsScreen();
   if(tab==="workshop") return workshopScreen();
@@ -6728,6 +6753,156 @@ function closeTheftDetail(){
   const overlay = document.getElementById('theftDetailOverlay');
   if(_theftChart){ _theftChart.destroy(); _theftChart = null; }
   if(overlay) overlay.innerHTML = "";
+}
+
+// ---- Vehicle Tracking (minimal GPS/health card list + tabbed detail) ----
+// Styled after the reference telematics app screenshots the Owner shared:
+// a filterable card list (health strip + status pill + FAULTS/ISSUES
+// counters) that drills into a tabbed Map/Faults/Health/AdBlue/Performance
+// detail per vehicle. Built entirely on data this app's Fleetx integration
+// actually returns (see liveTrackingPayloadFor() on the backend) - Faults/
+// Health/AdBlue show an honest "Not available" empty state rather than
+// fabricated numbers, since Fleetx doesn't report OBD fault codes, engine
+// health metrics, or DEF/AdBlue level for this fleet. This is an
+// additional entry point alongside the existing per-vehicle Today's Status
+// screen (vehicleTodayStatusScreen), not a replacement for it - that
+// screen's verification/approval workflow stays exactly where it is.
+let vehicleTrackingFilter = 'all';
+function setVehicleTrackingFilter(f){ vehicleTrackingFilter = f; renderMain(); }
+// Maps this app's real 6-status Fleetx enum down to the reference app's
+// simpler MOVING/IDLING/PARKED/NO GPS/OFFLINE vocabulary.
+function trackingStatusOf(d){
+  if(!d || !d.matched) return 'no_gps';
+  if(d.status==='RUNNING') return 'moving';
+  if(d.status==='IDLE') return 'idling';
+  if(['REMOVED','DISCONNECTED','UNREACHABLE','NO_POWER','BATTERY_DISCHARGED','IMMOBILISED'].includes(d.status)) return 'offline';
+  return 'parked'; // PARKED, STANDBY, INSHOP, or no live row yet but matched
+}
+const TRACKING_STATUS_LABEL = {moving:'Moving', idling:'Idling', parked:'Parked', offline:'Offline', no_gps:'No GPS'};
+// "Issues" counter reuses the same <15-day document-expiry rule the
+// Today's Status screen already uses - real data, not a fabricated count.
+function vehicleIssueCount(v){
+  return Object.values(v.docs||{}).filter(doc=>doc && doc.expiry && daysUntil(doc.expiry)<15).length;
+}
+async function vehicleTrackingScreen(){
+  let fleetLive = {vehicles:[]};
+  try{ fleetLive = await api('/fleet/live-tracking'); }catch(e){ fleetLive = {vehicles:[], error:e.message}; }
+  _lastFleetLiveVehicles = fleetLive.vehicles || [];
+  const liveById = {};
+  _lastFleetLiveVehicles.forEach(d=>{ liveById[d.vehicleId] = d; });
+
+  // Health strip: ALERT (red) if this vehicle has an active fuel theft
+  // alert right now, ISSUE (amber) if a document is expiring within 15
+  // days, else GOOD (green) - the same signals already surfaced elsewhere
+  // in the app, just summarized into one glanceable strip here.
+  let activeTheftIds = new Set();
+  try{ const alerts = await api('/fuel-theft-alerts?status=active'); activeTheftIds = new Set(alerts.map(a=>a.vehicleId)); }catch(e){ /* non-essential for this list */ }
+
+  const activeVehicles = vehicles.filter(v=>!v.soldOut);
+  const rows = activeVehicles.map(v=>{
+    const d = liveById[v.id];
+    const status = trackingStatusOf(d);
+    const issues = vehicleIssueCount(v);
+    const health = activeTheftIds.has(v.id) ? 'alert' : (issues>0 ? 'issue' : 'good');
+    return {v, d, status, issues, health};
+  });
+
+  const counts = {all:rows.length, moving:0, idling:0, parked:0, offline:0, no_gps:0};
+  rows.forEach(r=>counts[r.status]++);
+
+  const filtered = rows
+    .filter(r=>vehicleTrackingFilter==='all' || r.status===vehicleTrackingFilter)
+    .filter(r=>matchesSearch('vehicle_tracking', r.v.reg, r.v.make, r.v.model, r.v.vehicleType));
+
+  const chip = (key,label) => `<button type="button" class="filter-chip ${vehicleTrackingFilter===key?'active':''}" onclick="setVehicleTrackingFilter('${key}')">${label} <span class="count">${counts[key]||0}</span></button>`;
+
+  const cardHtml = (r) => {
+    const d = r.d;
+    const odo = d && d.odometerKm!=null ? `${d.odometerKm.toLocaleString('en-IN')} km` : '';
+    const healthLabel = r.health==='good' ? 'GOOD' : r.health==='issue' ? 'ISSUE' : 'ALERT';
+    return `
+    <div class="track-card" onclick="goto('vehicle_tracking_detail',{vehicleId:'${r.v.id}'})" title="View GPS, health and performance detail">
+      <div class="track-health-strip ${r.health}">${healthLabel}</div>
+      <div class="track-card-body">
+        <div>
+          <b>${r.v.reg}</b>
+          <div class="muted" style="font-size:12px;">${r.v.make||''} ${r.v.model||''}${r.v.vehicleType?' &middot; '+r.v.vehicleType:''}</div>
+          <div class="track-counters">
+            <span class="track-counter-badge" title="This fleet's GPS integration doesn't report engine fault codes">FAULTS: N/A</span>
+            <span class="track-counter-badge">ISSUES: ${r.issues}</span>
+          </div>
+        </div>
+        <div style="text-align:right;">
+          <span class="track-pill ${r.status}">${TRACKING_STATUS_LABEL[r.status]}</span>
+          ${odo? `<div class="muted" style="font-size:12px;margin-top:6px;">${odo}</div>` : ''}
+          <div class="muted" style="font-size:11px;">${d? timeAgoLabel(d.lastUpdatedAt)+' updated' : 'Not linked to GPS'}</div>
+        </div>
+      </div>
+    </div>`;
+  };
+
+  return `
+  <div class="flex-between" style="margin-bottom:6px;flex-wrap:wrap;gap:8px;">
+    <h1 class="page-title" style="margin-bottom:0;">📍 Vehicle Tracking</h1>
+    <button class="btn small secondary" onclick="openFleetMapFullscreen(_lastFleetLiveVehicles)">🗺️ Map View</button>
+  </div>
+  ${fleetLive.error? `<div class="banner error">${fleetLive.error}</div>` : ''}
+  <div class="filter-chip-row">
+    ${chip('all','All')}${chip('moving','Moving')}${chip('idling','Idling')}${chip('parked','Parked')}${chip('no_gps','No GPS')}${chip('offline','Offline')}
+  </div>
+  ${searchBoxHtml('vehicle_tracking','Search by reg, make, model...', activeVehicles.length)}
+  ${searchResultCountHtml('vehicle_tracking', filtered.length, activeVehicles.length)}
+  ${!filtered.length? `<div class="empty">No vehicles match this filter.</div>` : filtered.map(cardHtml).join("")}
+  `;
+}
+let vehicleTrackingDetailTab = 'map';
+function setVehicleTrackingDetailTab(t){ vehicleTrackingDetailTab = t; renderMain(); }
+function notAvailableCardHtml(icon, title, note){
+  return `<div class="card"><div class="not-available-card"><div class="icon">${icon}</div><div><b>${title}</b></div><p class="muted" style="margin-top:6px;">${note}</p></div></div>`;
+}
+async function vehicleTrackingDetailScreen(vehicleId){
+  const v = vehicles.find(x=>x.id===vehicleId);
+  if(!v){
+    return `<button class="btn secondary small" onclick="goto('vehicle_tracking')">&larr; Back to Vehicle Tracking</button>
+    <div class="banner error" style="margin-top:12px;">That vehicle could not be found.</div>`;
+  }
+  const tabs = [['map','📍 Map'],['faults','⚠️ Faults'],['health','🩺 Health'],['adblue','💧 AdBlue'],['performance','📈 Performance']];
+  const tabRow = `<div class="detail-tab-row">${tabs.map(([k,l])=>`<div class="detail-tab ${vehicleTrackingDetailTab===k?'active':''}" onclick="setVehicleTrackingDetailTab('${k}')">${l}</div>`).join("")}</div>`;
+
+  let bodyHtml = "";
+  if(vehicleTrackingDetailTab==='faults'){
+    bodyHtml = notAvailableCardHtml('⚠️','No Fault Codes Available', `This fleet's GPS integration doesn't report OBD/engine fault codes, so there's nothing to show here yet.`);
+  } else if(vehicleTrackingDetailTab==='health'){
+    bodyHtml = notAvailableCardHtml('🩺','Engine Health Not Available', `Boost pressure, coolant temperature, charging system and DPF health all come from OBD sensors this fleet's GPS devices don't expose - not shown here to avoid guessing.`);
+  } else if(vehicleTrackingDetailTab==='adblue'){
+    bodyHtml = notAvailableCardHtml('💧','DEF / AdBlue Not Available', `AdBlue level and fill/theft tracking need a DEF sensor feed this fleet's GPS devices don't provide.`);
+  } else if(vehicleTrackingDetailTab==='performance'){
+    const r = records[v.id];
+    const mileageBadge = avgMileageBadgeHtml(v);
+    const fuelUnit = v.fuelType==='CNG' ? 'kg' : 'L';
+    bodyHtml = `
+    <div class="card">
+      <h2 class="section-title">Mileage &amp; Distance</h2>
+      ${mileageBadge || `<p class="muted">No sensor-based average mileage yet - needs at least one complete fill-to-fill cycle.</p>`}
+      <div class="grid cols-3" style="margin-top:12px;">
+        <div class="kpi"><div class="num">${r && r.fuel && r.fuel.distance!=null ? r.fuel.distance : '-'}</div><div class="label">Distance today (km)</div></div>
+        <div class="kpi"><div class="num">${r && r.fuel && r.fuel.litres!=null ? r.fuel.litres : '-'}</div><div class="label">Fuel filled today (${fuelUnit})</div></div>
+        <div class="kpi"><div class="num">${r && r.fuel && r.fuel.mileage!=null ? r.fuel.mileage : '-'}</div><div class="label">Mileage today (${mileageUnitLabel(v.fuelType)})</div></div>
+      </div>
+      <button class="btn small secondary" style="margin-top:14px;" onclick="goto('fuel_graph',{vehicleId:'${v.id}'})">⛽ View full Fuel Pattern &rsaquo;</button>
+    </div>
+    <p class="muted" style="margin-top:10px;">Gear utilization and engine speed distribution need transmission/OBD data this fleet's GPS integration doesn't provide, so they're not shown.</p>`;
+  } else {
+    bodyHtml = await liveTrackingCardHtml(v.id);
+  }
+
+  return `
+  <button class="btn secondary small" onclick="goto('vehicle_tracking')">&larr; Back to Vehicle Tracking</button>
+  <h1 class="page-title">${v.reg}</h1>
+  <div class="muted" style="margin-top:-8px;margin-bottom:14px;">${v.make||''} ${v.model||''}${v.vehicleType?' &middot; '+v.vehicleType:''}</div>
+  ${tabRow}
+  ${bodyHtml}
+  `;
 }
 function initTransportPinMap(officeLat, officeLng){
   const el = document.getElementById('transportPinMap');
