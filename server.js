@@ -4803,6 +4803,58 @@ app.delete(
   })
 );
 
+// The exact 55 registration numbers generated as sample/demo data early in
+// this app's build (see data/seed.json) - hardcoded here (not "delete
+// anything matching a pattern") so this action can only ever remove those
+// specific original placeholders, never a real vehicle someone registered
+// later that happens to share the same TS 09 prefix as the rest of the
+// fleet.
+const SAMPLE_SEED_VEHICLE_REGS = [
+  "TS 09 AT 1001", "TS 09 BT 1002", "TS 09 CT 1003", "TS 09 DT 1004", "TS 09 ET 1005", "TS 09 FT 1006",
+  "TS 09 CG 2002", "TS 09 DJ 2003", "TS 09 EM 2004", "TS 09 FP 2005", "TS 09 GS 2006", "TS 09 HV 2007",
+  "TS 09 IY 2008", "TS 09 JB 2009", "TS 09 KE 2010", "TS 09 LH 2011", "TS 09 MK 2012", "TS 09 NN 2013",
+  "TS 09 OQ 2014", "TS 09 PT 2015", "TS 09 QW 2016", "TS 09 RZ 2017", "TS 09 SC 2018", "TS 09 TF 2019",
+  "TS 09 UI 2020", "TS 09 VL 2021", "TS 09 WO 2022", "TS 09 XR 2023", "TS 09 YU 2024", "TS 09 ZX 2025",
+  "TS 09 AA 2026", "TS 09 BD 2027", "TS 09 CG 2028", "TS 09 DJ 2029", "TS 09 EM 2030", "TS 09 FP 2031",
+  "TS 09 GS 2032", "TS 09 HV 2033", "TS 09 IY 2034", "TS 09 JB 2035", "TS 09 KE 2036", "TS 09 LH 2037",
+  "TS 09 MK 2038", "TS 09 NN 2039", "TS 09 OQ 2040", "TS 09 PT 2041", "TS 09 QW 2042", "TS 09 RZ 2043",
+  "TS 09 SC 2044", "TS 09 TF 2045", "TS 09 UI 2046", "TS 09 VL 2047", "TS 09 WO 2048", "TS 09 XR 2049",
+  "TS 09 YU 2050",
+];
+// One-click cleanup for the sample data above - Owner-only. Deletes every
+// one of those 55 registrations that's still present AND still has no
+// expense/trip history (i.e. was genuinely never used); anything that
+// somehow picked up real history, or was already deleted/renamed, is
+// reported back separately rather than silently skipped.
+app.post(
+  "/api/vehicles/delete-sample-data",
+  requireAuth,
+  requireRole("owner"),
+  h(async (req, res) => {
+    const regSet = new Set(SAMPLE_SEED_VEHICLE_REGS);
+    const candidates = db.vehicles.filter((v) => regSet.has(v.reg));
+    const deleted = [];
+    const skipped = [];
+    const deleteIds = new Set();
+    for (const vehicle of candidates) {
+      const hasExpenses = db.expenses.some((e) => e.vehicleId === vehicle.id);
+      const hasTrips = db.trips.some((t) => t.vehicleId === vehicle.id);
+      if (hasExpenses || hasTrips) {
+        skipped.push({ reg: vehicle.reg, reason: "has real expense/trip history" });
+        continue;
+      }
+      deleted.push(vehicle.reg);
+      deleteIds.add(vehicle.id);
+    }
+    db.vehicles = db.vehicles.filter((v) => !deleteIds.has(v.id));
+    const notFoundCount = SAMPLE_SEED_VEHICLE_REGS.length - candidates.length;
+    if (deleted.length) {
+      await audit(req.user, "delete_sample_vehicles", `${req.user.name} bulk-deleted ${deleted.length} original sample vehicle(s): ${deleted.join(", ")}`);
+    }
+    res.json({ deletedCount: deleted.length, deleted, skipped, notFoundCount });
+  })
+);
+
 // ---------- Driver/Route/Company assignment requests (Area Supervisor
 // proposes for a vehicle under their own site, Data Team/Ops Manager/Owner
 // approves) ----------

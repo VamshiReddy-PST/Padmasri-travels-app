@@ -2992,6 +2992,12 @@ async function assignmentsEditorHtml(){
   return `
   <h1 class="page-title">Overview</h1>
   <div class="banner">Assign each vehicle to a company and one of its Route IDs, a site supervisor, and a driver here. Only Operations Manager, Data Team and Owner can make these changes - every change is logged. A vehicle with a Company but no Route (or vice versa) is flagged below - both are required to fully recognise a vehicle.</div>
+  ${currentUser.role==="owner" ? `
+  <div class="card">
+    <h2 class="section-title">Remove sample data</h2>
+    <div class="muted" style="margin-bottom:8px;">The original 55 placeholder vehicles created when this app was first set up (registrations like TS 09 AT 1001) - one click removes every one of them that's still untouched. Any that have since picked up real expense/trip history are left alone and listed back to you.</div>
+    <button class="btn small secondary" onclick="deleteSampleVehicles()">🧹 Remove Claude sample vehicles</button>
+  </div>` : ""}
   <div class="card">
     <h2 class="section-title">Vehicles (${vehicles.length})</h2>
     ${editingVehicleId ? await vehicleDetailsEditorHtml(editingVehicleId) : ""}
@@ -3100,6 +3106,22 @@ async function restoreVehicle(vehicleId, reg){
   try{
     const v = await api(`/vehicles/${vehicleId}/sold-out`, {method:"PATCH", body: JSON.stringify({soldOut:false})});
     vehicles.push(v);
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function deleteSampleVehicles(){
+  if(!confirm(`Remove all original Claude-seeded sample vehicles (registrations like TS 09 AT 1001)?\n\nOnly ones with no real expense/trip history are deleted - anything already in real use is left alone and reported back to you.`)) return;
+  try{
+    const result = await api("/vehicles/delete-sample-data", {method:"POST"});
+    let msg = `Deleted ${result.deletedCount} sample vehicle(s).`;
+    if(result.skipped && result.skipped.length){
+      msg += `\n\nLeft alone (already in real use):\n` + result.skipped.map(s=>`${s.reg} - ${s.reason}`).join("\n");
+    }
+    if(result.notFoundCount){
+      msg += `\n\n${result.notFoundCount} of the original 55 were already gone (deleted earlier, sold out, or renamed).`;
+    }
+    alert(msg);
+    await loadCoreData();
     await renderMain();
   }catch(e){ alert(e.message); }
 }
