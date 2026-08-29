@@ -343,6 +343,56 @@ function backfillDefaults() {
         }
       });
     }
+    // ---------- Organisation profile ----------
+    // A client is more than just a name + route list - the Owner asked for a
+    // proper onboarding record: address/contact person, the financial
+    // documents needed for billing (GST/PAN/bank/signed agreement), and the
+    // contracted package (how many vehicles, what seating, which billing
+    // model, whether the fleet is free to rotate or dedicated to this client
+    // on an on-call basis). Kept as sub-objects on the client record itself
+    // (small, low-churn data - unlike the transport employee roster, which
+    // lives in its own store) so it round-trips through the same
+    // save()/backup path as everything else.
+    if (c.address === undefined) c.address = "";
+    if (!c.contactPerson || typeof c.contactPerson !== "object") c.contactPerson = { name: "", phone: "", email: "", designation: "" };
+    if (!c.gst || typeof c.gst !== "object") c.gst = { number: "", copyUrl: null };
+    if (!c.pan || typeof c.pan !== "object") c.pan = { number: "", copyUrl: null };
+    if (!c.bankDetails || typeof c.bankDetails !== "object") c.bankDetails = { accountNumber: "", ifsc: "", bankName: "", accountHolderName: "", copyUrl: null };
+    // Agreement copies are append-only: the very first upload is the
+    // "original", and every renewal/extension after that is added as a new
+    // entry alongside it rather than overwriting anything - per the Owner's
+    // explicit instruction that the original must never be deleted or
+    // replaced.
+    if (!Array.isArray(c.agreements)) c.agreements = [];
+    c.agreements.forEach((a) => {
+      if (a.type === undefined) a.type = "original";
+      if (a.startDate === undefined) a.startDate = "";
+      if (a.endDate === undefined) a.endDate = "";
+      if (a.label === undefined) a.label = "";
+    });
+    if (!c.package || typeof c.package !== "object") {
+      c.package = {
+        vehicleCount: 0,
+        seatingCapacities: [], // e.g. [13, 20, 45] - the seater sizes contracted
+        billingModel: "", // one of CLIENT_BILLING_MODELS
+        kmCap: null, // for package_capped: included km before extra charges apply
+        workingDaysPerWeek: null,
+        workingDaysPerMonth: null,
+        rotationType: "", // "free" (vehicle rotates across clients/jobs) or "on_call" (dedicated to this client)
+        notes: "",
+      };
+    } else {
+      if (c.package.vehicleCount === undefined) c.package.vehicleCount = 0;
+      if (!Array.isArray(c.package.seatingCapacities)) c.package.seatingCapacities = [];
+      if (c.package.billingModel === undefined) c.package.billingModel = "";
+      if (c.package.kmCap === undefined) c.package.kmCap = null;
+      if (c.package.workingDaysPerWeek === undefined) c.package.workingDaysPerWeek = null;
+      if (c.package.workingDaysPerMonth === undefined) c.package.workingDaysPerMonth = null;
+      if (c.package.rotationType === undefined) c.package.rotationType = "";
+      if (c.package.notes === undefined) c.package.notes = "";
+    }
+    if (c.onboardingComplete === undefined) c.onboardingComplete = !!(c.package && c.package.rotationType); // pre-existing clients count as already onboarded
+    if (c.createdAt === undefined) c.createdAt = null;
   });
   // ---------- Employee Transport module ----------
   // Client-portal staff logins (Travel Desk Manager/Billing/HOD) stay in the
@@ -952,6 +1002,7 @@ function roleLabelServer(role) {
       hr: "HR",
       bookings: "Bookings Department",
       admin: "Admin",
+      billing: "Billing",
       workshop_manager: "Workshop Manager",
       workshop_supervisor: "Workshop Supervisor",
       mechanic: "Mechanic",
@@ -2159,7 +2210,7 @@ app.post(
 // ---------- META (clients, sites, drivers, users) ----------
 app.get("/api/meta", requireAuth, (req, res) => {
   res.json({
-    clients: db.clients,
+    clients: db.clients.map((c) => publicClient(c, req.user.role)),
     sites: db.sites,
     // A driver an Area Supervisor has just onboarded isn't a real, assignable
     // driver yet - see driverIsApproved(). Meta feeds every driver dropdown/
@@ -2251,8 +2302,15 @@ const VALID_ROLES = [
   "hr",
   "bookings",
   "admin",
+  "billing",
   ...WORKSHOP_STAFF_ROLES,
 ];
+// Who can see/upload a client's sensitive financial documents (GST, PAN,
+// bank details, signed agreement copies) - per the Owner's explicit
+// instruction, this is restricted to the new Billing role plus the Owner
+// only. Nobody else (not even Ops Manager/Data Team, who can otherwise
+// manage the rest of a client's Organisation profile) can reach these.
+const CLIENT_FINANCE_ROLES = ["billing", "owner"];
 
 // People-management permission tiers:
 // - Owner can create/edit anyone, including other Owner/Ops Manager/HR accounts.
@@ -2269,8 +2327,8 @@ const VALID_ROLES = [
 const PEOPLE_EDITOR_ROLES = ["ops_manager", "owner", "hr"];
 const PEOPLE_VIEWER_ROLES = ["ops_manager", "owner", "hr", "data_team"];
 const ROLE_MANAGEMENT_ALLOWED = {
-  hr: ["site_supervisor", "area_supervisor", "ops_manager", "data_team", "bookings", "admin", ...WORKSHOP_STAFF_ROLES],
-  ops_manager: ["site_supervisor", "area_supervisor", "data_team", "bookings", "admin", ...WORKSHOP_STAFF_ROLES],
+  hr: ["site_supervisor", "area_supervisor", "ops_manager", "data_team", "bookings", "admin", "billing", ...WORKSHOP_STAFF_ROLES],
+  ops_manager: ["site_supervisor", "area_supervisor", "data_team", "bookings", "admin", "billing", ...WORKSHOP_STAFF_ROLES],
 };
 function canManageUserRole(actorRole, targetRole) {
   if (actorRole === "owner") return true;
@@ -2415,18 +2473,215 @@ app.patch(
   })
 );
 
-// ---------- CLIENTS ----------
+// ---------- CLIENTS / ORGANISATION ----------
+// Billing model options for a client's contracted vehicle package - distinct
+// from TRANSPORT_BILLING_MODELS above (which prices the separate Employee
+// Transport ride-booking feature per-seat/per-trip). This is the general
+// "how do we bill this client for the vehicles under contract" model the
+// Owner asked for on the Organisation onboarding wizard's 3rd step.
+const CLIENT_BILLING_MODELS = ["km_based", "route_based", "trip_based", "package_capped"];
+const CLIENT_BILLING_MODEL_LABELS = {
+  km_based: "KM Based (billed per kilometre travelled)",
+  route_based: "Route Based (billed per fixed route run)",
+  trip_based: "Trip Based (billed per trip/booking)",
+  package_capped: "Package (fixed KM cap + working days per month)",
+};
+const CLIENT_ROTATION_TYPES = ["free", "on_call"];
+// Builds a brand-new client with every Organisation sub-object already
+// present in the exact shape backfillDefaults() would give it - so the
+// 3-step onboarding wizard can PATCH step 2/3 onto a client created seconds
+// earlier in the same server run, without waiting for a restart to backfill
+// the fields in.
+function newClientRecord(name) {
+  return {
+    id: uid("c"),
+    name,
+    routeCap: 0,
+    routes: [],
+    address: "",
+    contactPerson: { name: "", phone: "", email: "", designation: "" },
+    gst: { number: "", copyUrl: null },
+    pan: { number: "", copyUrl: null },
+    bankDetails: { accountNumber: "", ifsc: "", bankName: "", accountHolderName: "", copyUrl: null },
+    agreements: [],
+    package: {
+      vehicleCount: 0,
+      seatingCapacities: [],
+      billingModel: "",
+      kmCap: null,
+      workingDaysPerWeek: null,
+      workingDaysPerMonth: null,
+      rotationType: "",
+      notes: "",
+    },
+    onboardingComplete: false,
+    createdAt: nowIso(),
+    createdBy: null,
+  };
+}
+// Strips the Organisation financial documents (GST/PAN/bank/agreement
+// copies) out of a client record for anyone who isn't Billing or Owner - see
+// CLIENT_FINANCE_ROLES above. Every other Organisation field (address,
+// contact person, package/billing-model info) stays visible to the normal
+// admin tier, since that's operational information Ops Manager/Data Team
+// need day to day.
+function publicClient(c, viewerRole) {
+  if (CLIENT_FINANCE_ROLES.includes(viewerRole)) return c;
+  const { gst, pan, bankDetails, agreements, ...rest } = c;
+  return { ...rest, gst: { number: "", copyUrl: null }, pan: { number: "", copyUrl: null }, bankDetails: { accountNumber: "", ifsc: "", bankName: "", accountHolderName: "", copyUrl: null }, agreements: [], financeRedacted: true };
+}
 app.post(
   "/api/clients",
   requireAuth,
   requireRole(...ADMIN_ROLES),
   h(async (req, res) => {
     const { name } = req.body || {};
-    if (!name) return res.status(400).json({ error: "name is required." });
-    const client = { id: uid("c"), name, routeCap: 0, routes: [] };
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "name is required." });
+    const client = newClientRecord(String(name).trim());
+    client.createdBy = req.user.id;
     db.clients.push(client);
     await audit(req.user, "create_client", `${req.user.name} added client ${name}`);
-    res.json(client);
+    res.json(publicClient(client, req.user.role));
+  })
+);
+
+// Full Organisation profile: address + contact person. ADMIN_ROLES (same
+// tier that can create/rename a client) - not financial, so Billing-only
+// restriction doesn't apply here.
+app.patch(
+  "/api/clients/:id/profile",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const { address, contactName, contactPhone, contactEmail, contactDesignation } = req.body || {};
+    if (address !== undefined) client.address = address || "";
+    if (contactName !== undefined) client.contactPerson.name = contactName || "";
+    if (contactPhone !== undefined) client.contactPerson.phone = contactPhone || "";
+    if (contactEmail !== undefined) client.contactPerson.email = contactEmail || "";
+    if (contactDesignation !== undefined) client.contactPerson.designation = contactDesignation || "";
+    await audit(req.user, "update_client_profile", `${req.user.name} updated the Organisation profile for ${client.name}`);
+    res.json(publicClient(client, req.user.role));
+  })
+);
+
+// Financial documents - GST/PAN/bank details + the agreement copy(ies).
+// Restricted to CLIENT_FINANCE_ROLES (Billing + Owner) per the Owner's
+// explicit instruction. Agreement copies are handled by the separate
+// /agreements endpoint below since they're append-only, not overwrite-in-place.
+app.patch(
+  "/api/clients/:id/financial-docs",
+  requireAuth,
+  requireRole(...CLIENT_FINANCE_ROLES),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const { gstNumber, gstCopy, panNumber, panCopy, bankAccountNumber, bankIfsc, bankName, bankAccountHolderName, bankCheque } = req.body || {};
+    if (gstNumber !== undefined) client.gst.number = gstNumber || "";
+    if (gstCopy) {
+      const url = await savePhoto(gstCopy, "client_gst_" + client.id);
+      if (url) client.gst.copyUrl = url;
+    }
+    if (panNumber !== undefined) client.pan.number = panNumber || "";
+    if (panCopy) {
+      const url = await savePhoto(panCopy, "client_pan_" + client.id);
+      if (url) client.pan.copyUrl = url;
+    }
+    if (bankAccountNumber !== undefined) client.bankDetails.accountNumber = bankAccountNumber || "";
+    if (bankIfsc !== undefined) client.bankDetails.ifsc = bankIfsc || "";
+    if (bankName !== undefined) client.bankDetails.bankName = bankName || "";
+    if (bankAccountHolderName !== undefined) client.bankDetails.accountHolderName = bankAccountHolderName || "";
+    if (bankCheque) {
+      const url = await savePhoto(bankCheque, "client_cheque_" + client.id);
+      if (url) client.bankDetails.copyUrl = url;
+    }
+    await audit(req.user, "update_client_financial_docs", `${req.user.name} updated financial documents for ${client.name}`);
+    res.json(publicClient(client, req.user.role));
+  })
+);
+
+// Agreement copies - append-only. The first upload for a client is the
+// "original" (type defaults to that if none are on file yet); every
+// renewal/extension after that is added as its own dated entry alongside
+// it - the original is never deleted or overwritten, per the Owner's
+// explicit instruction. Restricted to Billing + Owner, same as the rest of
+// the financial documents.
+app.post(
+  "/api/clients/:id/agreements",
+  requireAuth,
+  requireRole(...CLIENT_FINANCE_ROLES),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const { copy, type, startDate, endDate, label } = req.body || {};
+    if (!copy) return res.status(400).json({ error: "An agreement document copy is required." });
+    const url = await savePhoto(copy, "client_agreement_" + client.id);
+    if (!url) return res.status(400).json({ error: "Could not save the agreement copy - please try a smaller file." });
+    const entryType = type && ["original", "renewal", "extension"].includes(type) ? type : client.agreements.length === 0 ? "original" : "renewal";
+    const entry = {
+      id: uid("agr"),
+      url,
+      type: entryType,
+      startDate: startDate || "",
+      endDate: endDate || "",
+      label: label || "",
+      uploadedAt: nowIso(),
+      uploadedBy: req.user.id,
+      uploadedByName: req.user.name,
+    };
+    client.agreements.push(entry);
+    await audit(req.user, "add_client_agreement", `${req.user.name} added a ${entryType} agreement copy for ${client.name}`);
+    res.json(publicClient(client, req.user.role));
+  })
+);
+
+// Contracted package - vehicle count/seating, billing model, working days,
+// and the free-rotation vs on-call classification that the Fleet page uses
+// to tag this client's vehicles. ADMIN_ROLES (not finance-restricted - this
+// is operational contract info Ops Manager/Data Team need day to day).
+app.patch(
+  "/api/clients/:id/package",
+  requireAuth,
+  requireRole(...ADMIN_ROLES),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const { vehicleCount, seatingCapacities, billingModel, kmCap, workingDaysPerWeek, workingDaysPerMonth, rotationType, notes, markOnboarded } = req.body || {};
+    if (vehicleCount !== undefined) client.package.vehicleCount = Math.max(0, Number(vehicleCount) || 0);
+    if (Array.isArray(seatingCapacities)) client.package.seatingCapacities = seatingCapacities.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0);
+    if (billingModel !== undefined) {
+      if (billingModel && !CLIENT_BILLING_MODELS.includes(billingModel)) {
+        return res.status(400).json({ error: `billingModel must be one of: ${CLIENT_BILLING_MODELS.join(", ")}.` });
+      }
+      client.package.billingModel = billingModel || "";
+    }
+    if (kmCap !== undefined) client.package.kmCap = kmCap === null || kmCap === "" ? null : Number(kmCap);
+    if (workingDaysPerWeek !== undefined) client.package.workingDaysPerWeek = workingDaysPerWeek === null || workingDaysPerWeek === "" ? null : Number(workingDaysPerWeek);
+    if (workingDaysPerMonth !== undefined) client.package.workingDaysPerMonth = workingDaysPerMonth === null || workingDaysPerMonth === "" ? null : Number(workingDaysPerMonth);
+    if (rotationType !== undefined) {
+      if (rotationType && !CLIENT_ROTATION_TYPES.includes(rotationType)) {
+        return res.status(400).json({ error: `rotationType must be one of: ${CLIENT_ROTATION_TYPES.join(", ")}.` });
+      }
+      client.package.rotationType = rotationType || "";
+    }
+    if (notes !== undefined) client.package.notes = notes || "";
+    if (markOnboarded) client.onboardingComplete = true;
+    await audit(req.user, "update_client_package", `${req.user.name} updated the contracted package for ${client.name}`);
+    res.json(publicClient(client, req.user.role));
+  })
+);
+
+// Full detail for one client (Organisation page detail view / wizard
+// resume) - sanitized the same way the list is.
+app.get(
+  "/api/clients/:id",
+  requireAuth,
+  requireRole(...ADMIN_ROLES, "billing", "admin"),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    res.json(publicClient(client, req.user.role));
   })
 );
 

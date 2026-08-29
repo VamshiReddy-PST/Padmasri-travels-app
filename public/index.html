@@ -1269,12 +1269,17 @@ function tabsForInner(role){
   // per the Owner's explicit request, Ops Manager has no role in approving
   // odometer or fuel readings (they previously had odometer_verify; removed
   // on request).
-  if(role==="ops_manager") return [["operations","Operations"],["overview","Overview"],["expenses","Expenses"],["fleet_list","Fleet"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="data_team") return [["corrections","Corrections"],["overview","Overview"],["expenses_view","Expenses"],["fleet_list","Fleet"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="ops_manager") return [["operations","Operations"],["overview","Overview"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="data_team") return [["corrections","Corrections"],["overview","Overview"],["expenses_view","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["overview","Overview"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["fleet_list","Fleet"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["overview","Overview"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="admin") return [["overview","Overview"],["fleet_list","Fleet"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="admin") return [["overview","Overview"],["fleet_list","Fleet"],["organisation","Organisation"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  // Billing - new role, per the Owner's explicit request: the only staff
+  // tier (besides Owner) that can see/upload a client's GST/PAN/bank/
+  // agreement documents on the Organisation page (see CLIENT_FINANCE_ROLES
+  // in server.js). Narrow tab list, same pattern as HR/Bookings.
+  if(role==="billing") return [["organisation","Organisation"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   return [];
 }
@@ -1304,7 +1309,7 @@ const TAB_GROUP_MAP = {
   subvendors:"fleet", hierarchy:"fleet",
   trips:"trips", my_attendance:"trips", attendance:"trips", my_expenses:"trips", queue:"trips",
   expenses:"finance", expenses_view:"finance", payroll:"finance", backup:"finance",
-  people:"people", approvals:"people", corrections:"people", audit:"people",
+  people:"people", approvals:"people", corrections:"people", audit:"people", organisation:"people",
   reports:"tools", smart_assistant:"tools", letterhead:"tools",
   dashboard:"tools", admin_dashboard:"tools", operations:"tools",
 };
@@ -1495,6 +1500,7 @@ async function routeView(){
   if(tab==="overview") return minimalOverviewScreen();
   if(tab==="fleet_list") return view.name==="vehicle_tracking_detail" ? vehicleTrackingDetailScreen(view.vehicleId) : fleetListScreen();
   if(tab==="add_vehicle") return addVehicleWizardScreen();
+  if(tab==="organisation") return view.name==="add_client_wizard" ? addClientWizardScreen() : organisationScreen();
   if(tab==="transport") return transportScreen();
   if(tab==="repairs") return repairRequestsScreen();
   if(tab==="workshop") return workshopScreen();
@@ -3262,7 +3268,8 @@ async function assignmentsEditorHtml(){
 
   <div class="grid cols-3">
     <div class="card">
-      <h2 class="section-title">Clients & Routes</h2>
+      <h2 class="section-title">Client Routes</h2>
+      <div class="muted" style="margin-bottom:8px;">Full client profiles, documents, and package/billing setup have moved to <a onclick="switchTab('organisation')" style="cursor:pointer;">Organisation</a> - this card is just for numbered route management.</div>
       <table><tr><th>Client</th><th>Routes</th><th></th><th></th></tr>${meta.clients.map(c=>`
         <tr>
           <td>${c.name}</td>
@@ -3270,10 +3277,6 @@ async function assignmentsEditorHtml(){
           <td><button class="btn small secondary" onclick="toggleClientRoutes('${c.id}')">${editingClientRoutesId===c.id?'Close':(canEditRoutes()?'Manage Routes':'View Routes')}</button></td>
           <td>${canEditRoutes() ? `<button class="btn small secondary" onclick="renameClient('${c.id}')">Rename</button>` : ""}</td>
         </tr>`).join("")}</table>
-      <form class="inline-form" onsubmit="return addClient(event)">
-        <div class="f"><label>New client</label><input type="text" id="newClientName" required /></div>
-        <button class="btn small" type="submit">+ Add</button>
-      </form>
       ${editingClientRoutesId ? clientRoutesEditorHtml(editingClientRoutesId) : ""}
     </div>
     <div class="card">
@@ -7468,6 +7471,284 @@ async function fleetRowDetailHtml(vehicleId, canAssign){
     ${editingVehicleId===v.id ? await vehicleDetailsEditorHtml(v.id) : ''}
   </div>`;
 }
+// ---- Organisation (Clients) ----
+// A client-facing "who are we billing, on what terms" page, separate from
+// the Fleet page's Client filter dropdown (which just needs the name). Lists
+// every client with their contracted package at a glance, and is the entry
+// point for the 3-step onboarding wizard below. Financial documents
+// (GST/PAN/bank/agreement) are restricted server-side to Billing + Owner -
+// see CLIENT_FINANCE_ROLES in server.js - so this screen hides that section
+// entirely for everyone else rather than showing broken/403 controls.
+const CLIENT_BILLING_MODEL_LABELS = {
+  km_based: "KM Based",
+  route_based: "Route Based",
+  trip_based: "Trip Based",
+  package_capped: "Package (KM cap + working days)",
+};
+function isClientFinanceRole(){ return ["billing","owner"].includes(currentUser.role); }
+function clientRotationBadgeHtml(clientId){
+  const c = meta.clients.find(x=>x.id===clientId);
+  const rt = c && c.package && c.package.rotationType;
+  if(!rt) return '';
+  return rt==='on_call'
+    ? `<span class="pill" style="background:#fff3e0;color:#b45309;border-color:#fde3b8;">On-Call</span>`
+    : `<span class="pill" style="background:var(--accent-light);color:var(--accent-dark);">Package</span>`;
+}
+let organisationExpandedClientId = null;
+function toggleOrganisationClient(clientId){ organisationExpandedClientId = organisationExpandedClientId===clientId ? null : clientId; renderMain(); }
+async function organisationScreen(){
+  const canManage = ["ops_manager","data_team","owner"].includes(currentUser.role);
+  const rows = meta.clients.map(c=>{
+    const pkg = c.package||{};
+    return `
+    <tr>
+      <td><b>${c.name}</b>${c.onboardingComplete?'':' <span class="pill" style="background:#fff3e0;color:#b45309;">Onboarding incomplete</span>'}</td>
+      <td>${c.contactPerson && c.contactPerson.name ? `${c.contactPerson.name}${c.contactPerson.phone?' &middot; '+c.contactPerson.phone:''}` : '<span class="muted">-</span>'}</td>
+      <td>${pkg.vehicleCount||0}</td>
+      <td>${(pkg.seatingCapacities||[]).join(', ')||'<span class="muted">-</span>'}</td>
+      <td>${pkg.billingModel ? CLIENT_BILLING_MODEL_LABELS[pkg.billingModel]||pkg.billingModel : '<span class="muted">-</span>'}</td>
+      <td>${clientRotationBadgeHtml(c.id)||'<span class="muted">-</span>'}</td>
+      <td><button class="btn small secondary" onclick="toggleOrganisationClient('${c.id}')">${organisationExpandedClientId===c.id?'Close':'View'}</button></td>
+    </tr>
+    ${organisationExpandedClientId===c.id ? `<tr><td colspan="7">${organisationClientDetailHtml(c.id)}</td></tr>` : ''}`;
+  }).join("");
+  return `
+  <div class="flex-between" style="margin-bottom:6px;flex-wrap:wrap;gap:8px;">
+    <h1 class="page-title" style="margin-bottom:0;">Organisation</h1>
+    ${canManage ? `<button class="btn small" onclick="startClientWizard()">+ Add Client</button>` : ''}
+  </div>
+  <div class="card">
+    <table><tr><th>Client</th><th>Contact</th><th>Vehicles</th><th>Seating</th><th>Billing Model</th><th>Rotation</th><th></th></tr>
+    ${rows || `<tr><td colspan="7" class="empty">No clients onboarded yet.</td></tr>`}
+    </table>
+  </div>
+  `;
+}
+function organisationClientDetailHtml(clientId){
+  const c = meta.clients.find(x=>x.id===clientId);
+  if(!c) return "";
+  const pkg = c.package||{};
+  const canManage = ["ops_manager","data_team","owner"].includes(currentUser.role);
+  const financeVisible = isClientFinanceRole() && !c.financeRedacted;
+  return `
+  <div style="padding:10px 0;">
+    <div class="grid cols-2">
+      <div class="card" style="background:var(--panel-alt,#f7f7f9);">
+        <h2 class="section-title">Profile</h2>
+        <div class="check-row"><div class="label">Address</div><div class="controls">${c.address||'<span class="muted">-</span>'}</div></div>
+        <div class="check-row"><div class="label">Contact Person</div><div class="controls">${c.contactPerson.name||'<span class="muted">-</span>'} ${c.contactPerson.designation?`(${c.contactPerson.designation})`:''}</div></div>
+        <div class="check-row"><div class="label">Contact Phone</div><div class="controls">${c.contactPerson.phone||'<span class="muted">-</span>'}</div></div>
+        <div class="check-row"><div class="label">Contact Email</div><div class="controls">${c.contactPerson.email||'<span class="muted">-</span>'}</div></div>
+      </div>
+      <div class="card" style="background:var(--panel-alt,#f7f7f9);">
+        <h2 class="section-title">Contracted Package</h2>
+        <div class="check-row"><div class="label">Vehicles under contract</div><div class="controls">${pkg.vehicleCount||0}</div></div>
+        <div class="check-row"><div class="label">Seating capacities</div><div class="controls">${(pkg.seatingCapacities||[]).join(', ')||'<span class="muted">-</span>'}</div></div>
+        <div class="check-row"><div class="label">Billing model</div><div class="controls">${pkg.billingModel?CLIENT_BILLING_MODEL_LABELS[pkg.billingModel]:'<span class="muted">-</span>'}</div></div>
+        ${pkg.billingModel==='package_capped' ? `<div class="check-row"><div class="label">KM cap</div><div class="controls">${pkg.kmCap!=null?pkg.kmCap+' km':'-'}</div></div>` : ''}
+        <div class="check-row"><div class="label">Working days</div><div class="controls">${pkg.workingDaysPerWeek?pkg.workingDaysPerWeek+'/week':''} ${pkg.workingDaysPerMonth?pkg.workingDaysPerMonth+'/month':''}${!pkg.workingDaysPerWeek && !pkg.workingDaysPerMonth?'<span class="muted">-</span>':''}</div></div>
+        <div class="check-row"><div class="label">Rotation</div><div class="controls">${clientRotationBadgeHtml(c.id)||'<span class="muted">-</span>'}</div></div>
+      </div>
+    </div>
+    ${financeVisible ? `
+    <div class="card" style="margin-top:12px;background:var(--panel-alt,#f7f7f9);">
+      <h2 class="section-title">Financial Documents <span class="muted" style="font-weight:400;">(Billing/Owner only)</span></h2>
+      <div class="check-row"><div class="label">GST</div><div class="controls">${c.gst.number||'-'} ${c.gst.copyUrl?`<a href="${c.gst.copyUrl}" target="_blank">View copy</a>`:''}</div></div>
+      <div class="check-row"><div class="label">PAN</div><div class="controls">${c.pan.number||'-'} ${c.pan.copyUrl?`<a href="${c.pan.copyUrl}" target="_blank">View copy</a>`:''}</div></div>
+      <div class="check-row"><div class="label">Bank Details</div><div class="controls">${c.bankDetails.accountNumber?`${c.bankDetails.accountNumber} / ${c.bankDetails.ifsc}`:'-'} ${c.bankDetails.copyUrl?`<a href="${c.bankDetails.copyUrl}" target="_blank">View cheque copy</a>`:''}</div></div>
+      <div class="label" style="margin-top:8px;">Agreement copies (original never replaced - renewals/extensions are added alongside it)</div>
+      <table style="margin-top:6px;"><tr><th>Type</th><th>Period</th><th>Uploaded</th><th></th></tr>
+      ${(c.agreements||[]).length ? c.agreements.map(a=>`
+        <tr><td>${a.type}</td><td>${a.startDate||'-'} &rarr; ${a.endDate||'-'}</td><td>${a.uploadedByName||''} ${a.uploadedAt?new Date(a.uploadedAt).toLocaleDateString('en-GB'):''}</td><td><a href="${a.url}" target="_blank">View</a></td></tr>
+      `).join("") : `<tr><td colspan="4" class="empty">No agreement copies uploaded yet.</td></tr>`}
+      </table>
+      <button class="btn small secondary" style="margin-top:8px;" onclick="startClientDocsUpdate('${c.id}')">Update Financial Documents</button>
+    </div>
+    ` : (isClientFinanceRole() ? '' : `<div class="muted" style="margin-top:10px;">Financial documents (GST/PAN/Bank/Agreement) are restricted to Billing and Owner.</div>`)}
+    <div class="controls" style="margin-top:12px;">
+      ${canManage ? `<button class="btn small secondary" onclick="toggleClientRoutes('${c.id}')">${editingClientRoutesId===c.id?'Close Routes':'Manage Routes'}</button>` : ''}
+    </div>
+    ${editingClientRoutesId===c.id ? clientRoutesEditorHtml(c.id) : ''}
+  </div>`;
+}
+// Lets Billing/Owner jump straight into the wizard's Documents step for an
+// already-onboarded client, to add a renewal/extension agreement copy or fix
+// GST/PAN/bank details later, without re-running the whole 3-step flow.
+function startClientDocsUpdate(clientId){
+  const c = meta.clients.find(x=>x.id===clientId);
+  if(!c) return;
+  clientWizard = {step: CLIENT_WIZARD_STEPS_ALL.findIndex(s=>s.key==='documents'), busy:false, done:false, clientId:c.id, name:c.name};
+  goto('add_client_wizard');
+}
+
+// ---- Add Client wizard (3 steps: Client Details -> Documents -> Package &
+// Billing). Documents step is Billing/Owner only - everyone else's wizard
+// skips straight from Details to Package (financial docs can be added later
+// by Billing/Owner from the Organisation detail view above). ----
+const CLIENT_WIZARD_STEPS_ALL = [
+  {key:'details', title:"Client Details", sub:"Name, address & contact"},
+  {key:'documents', title:"Documents", sub:"GST, PAN, Bank & Agreement"},
+  {key:'package', title:"Package & Billing", sub:"Vehicles, billing & rotation"},
+];
+function clientWizardStepsForRole(){
+  return isClientFinanceRole() ? CLIENT_WIZARD_STEPS_ALL : CLIENT_WIZARD_STEPS_ALL.filter(s=>s.key!=='documents');
+}
+let clientWizard = {step:0, busy:false, done:false, clientId:null, name:''};
+function startClientWizard(){ clientWizard = {step:0, busy:false, done:false, clientId:null, name:''}; goto('add_client_wizard'); }
+async function addClientWizardScreen(){
+  const steps = clientWizardStepsForRole();
+  if(clientWizard.done){
+    return wizardSuccessHtml("Client Onboarded", `${clientWizard.name} has been onboarded. Congratulations!`, "View Organisation", "goto('organisation')");
+  }
+  const step = Math.min(clientWizard.step, steps.length-1);
+  const key = steps[step].key;
+  const body = key==='details' ? clientWizardStep1Html() : key==='documents' ? clientWizardStep2Html() : clientWizardStep3Html();
+  return `
+  <h1 class="page-title">${clientWizard.clientId ? 'Update Client' : 'Add Client'}</h1>
+  ${stepperHtml(steps, step)}
+  <div class="card">${body}</div>
+  `;
+}
+function clientWizardStep1Html(){
+  return `
+  <div class="grid cols-2">
+    <div class="f"><label>Client Name *</label><input type="text" id="cw_name" value="${clientWizard.name||''}" required /></div>
+    <div class="f"><label>Address</label><input type="text" id="cw_address" placeholder="Registered / office address" /></div>
+    <div class="f"><label>Contact Person Name</label><input type="text" id="cw_contactName" /></div>
+    <div class="f"><label>Designation</label><input type="text" id="cw_contactDesignation" placeholder="e.g. Admin Manager" /></div>
+    <div class="f"><label>Contact Phone</label><input type="tel" id="cw_contactPhone" /></div>
+    <div class="f"><label>Contact Email</label><input type="email" id="cw_contactEmail" /></div>
+  </div>
+  <div class="wizard-actions">
+    <span></span>
+    <button class="btn" ${clientWizard.busy?'disabled':''} onclick="clientWizardStep1Submit()">${clientWizard.busy?'<span class="spinner"></span>':'Save &amp; Next &rsaquo;'}</button>
+  </div>`;
+}
+async function clientWizardStep1Submit(){
+  const g = id => document.getElementById(id).value;
+  const name = g('cw_name');
+  if(!name.trim()){ alert("Client Name is required."); return; }
+  clientWizard.busy = true; await renderMain();
+  try{
+    if(!clientWizard.clientId){
+      const c = await api("/clients", {method:"POST", body: JSON.stringify({name})});
+      clientWizard.clientId = c.id;
+      meta.clients.push(c);
+    }
+    const updated = await api(`/clients/${clientWizard.clientId}/profile`, {method:"PATCH", body: JSON.stringify({
+      address: g('cw_address'), contactName: g('cw_contactName'), contactPhone: g('cw_contactPhone'),
+      contactEmail: g('cw_contactEmail'), contactDesignation: g('cw_contactDesignation'),
+    })});
+    const idx = meta.clients.findIndex(x=>x.id===clientWizard.clientId); if(idx>=0) meta.clients[idx] = updated;
+    clientWizard.name = updated.name;
+    const steps = clientWizardStepsForRole();
+    clientWizard.step = steps.findIndex(s=>s.key==='documents')>=0 ? steps.findIndex(s=>s.key==='documents') : steps.findIndex(s=>s.key==='package');
+  }catch(e){ alert(e.message); }
+  clientWizard.busy = false; await renderMain();
+}
+function clientWizardStep2Html(){
+  return `
+  <div class="grid cols-2">
+    <div class="f"><label>GST Number</label><input type="text" id="cw_gstNumber" /></div>
+    <div class="f"><label>GST Copy</label><input type="file" accept="image/*,.pdf" id="cw_gstCopy" /></div>
+    <div class="f"><label>PAN Number</label><input type="text" id="cw_panNumber" /></div>
+    <div class="f"><label>PAN Copy</label><input type="file" accept="image/*,.pdf" id="cw_panCopy" /></div>
+    <div class="f"><label>Bank Account Number</label><input type="text" id="cw_bankAccountNumber" /></div>
+    <div class="f"><label>IFSC</label><input type="text" id="cw_bankIfsc" /></div>
+    <div class="f"><label>Bank Name</label><input type="text" id="cw_bankName" /></div>
+    <div class="f"><label>Account Holder Name</label><input type="text" id="cw_bankHolder" /></div>
+    <div class="f"><label>Cancelled Cheque Copy</label><input type="file" accept="image/*,.pdf" id="cw_bankCheque" /></div>
+  </div>
+  <div class="label" style="margin-top:10px;">Agreement</div>
+  <div class="grid cols-2">
+    <div class="f"><label>Agreement Copy</label><input type="file" accept="image/*,.pdf" id="cw_agreementCopy" /></div>
+    <div class="f"><label>Type</label><select id="cw_agreementType"><option value="original">Original</option><option value="renewal">Renewal</option><option value="extension">Extension</option></select></div>
+    <div class="f"><label>Start Date</label><input type="date" id="cw_agreementStart" /></div>
+    <div class="f"><label>End Date</label><input type="date" id="cw_agreementEnd" /></div>
+  </div>
+  <div class="wizard-actions">
+    <button class="btn small secondary" type="button" onclick="clientWizardBack()">&lsaquo; Back</button>
+    <button class="btn" ${clientWizard.busy?'disabled':''} onclick="clientWizardStep2Submit()">${clientWizard.busy?'<span class="spinner"></span>':'Save &amp; Next &rsaquo;'}</button>
+  </div>`;
+}
+async function clientWizardStep2Submit(){
+  const g = id => document.getElementById(id).value;
+  clientWizard.busy = true; await renderMain();
+  try{
+    const gstCopy = await readFileAsDataUrl(document.getElementById('cw_gstCopy'));
+    const panCopy = await readFileAsDataUrl(document.getElementById('cw_panCopy'));
+    const bankCheque = await readFileAsDataUrl(document.getElementById('cw_bankCheque'));
+    let updated = await api(`/clients/${clientWizard.clientId}/financial-docs`, {method:"PATCH", body: JSON.stringify({
+      gstNumber: g('cw_gstNumber'), gstCopy, panNumber: g('cw_panNumber'), panCopy,
+      bankAccountNumber: g('cw_bankAccountNumber'), bankIfsc: g('cw_bankIfsc'), bankName: g('cw_bankName'),
+      bankAccountHolderName: g('cw_bankHolder'), bankCheque,
+    })});
+    const agreementCopy = await readFileAsDataUrl(document.getElementById('cw_agreementCopy'));
+    if(agreementCopy){
+      updated = await api(`/clients/${clientWizard.clientId}/agreements`, {method:"POST", body: JSON.stringify({
+        copy: agreementCopy, type: g('cw_agreementType'), startDate: g('cw_agreementStart'), endDate: g('cw_agreementEnd'),
+      })});
+    }
+    const idx = meta.clients.findIndex(x=>x.id===clientWizard.clientId); if(idx>=0) meta.clients[idx] = updated;
+    const steps = clientWizardStepsForRole();
+    clientWizard.step = steps.findIndex(s=>s.key==='package');
+  }catch(e){ alert(e.message); }
+  clientWizard.busy = false; await renderMain();
+}
+function clientWizardStep3Html(){
+  const pkg = (meta.clients.find(x=>x.id===clientWizard.clientId)||{}).package || {};
+  return `
+  <div class="grid cols-2">
+    <div class="f"><label>Vehicles under contract</label><input type="number" min="0" id="cw_vehicleCount" value="${pkg.vehicleCount||''}" /></div>
+    <div class="f"><label>Seating capacities (comma-separated)</label><input type="text" id="cw_seatingCapacities" placeholder="e.g. 13, 20, 45" value="${(pkg.seatingCapacities||[]).join(', ')}" /></div>
+    <div class="f"><label>Billing Model *</label><select id="cw_billingModel" required onchange="onCwBillingModelChange()">
+      <option value="">- select -</option>
+      ${Object.entries(CLIENT_BILLING_MODEL_LABELS).map(([v,l])=>`<option value="${v}" ${pkg.billingModel===v?'selected':''}>${l}</option>`).join("")}
+    </select></div>
+    <div class="f" id="cw_kmCapField" style="${pkg.billingModel==='package_capped'?'':'display:none;'}"><label>KM cap (included in package)</label><input type="number" min="0" id="cw_kmCap" value="${pkg.kmCap!=null?pkg.kmCap:''}" /></div>
+    <div class="f"><label>Working days / week</label><input type="number" min="0" max="7" id="cw_workingDaysPerWeek" value="${pkg.workingDaysPerWeek!=null?pkg.workingDaysPerWeek:''}" /></div>
+    <div class="f"><label>Working days / month</label><input type="number" min="0" max="31" id="cw_workingDaysPerMonth" value="${pkg.workingDaysPerMonth!=null?pkg.workingDaysPerMonth:''}" /></div>
+    <div class="f"><label>Rotation *</label><select id="cw_rotationType" required>
+      <option value="">- select -</option>
+      <option value="free" ${pkg.rotationType==='free'?'selected':''}>Free to rotate (shared across clients/jobs)</option>
+      <option value="on_call" ${pkg.rotationType==='on_call'?'selected':''}>On-Call (dedicated to this client)</option>
+    </select></div>
+  </div>
+  <div class="f"><label>Notes</label><textarea id="cw_notes" rows="2">${pkg.notes||''}</textarea></div>
+  <div class="wizard-actions">
+    <button class="btn small secondary" type="button" onclick="clientWizardBack()">&lsaquo; Back</button>
+    <button class="btn" ${clientWizard.busy?'disabled':''} onclick="clientWizardStep3Submit()">${clientWizard.busy?'<span class="spinner"></span>':'Finish Onboarding'}</button>
+  </div>`;
+}
+function onCwBillingModelChange(){
+  const sel = document.getElementById('cw_billingModel');
+  const field = document.getElementById('cw_kmCapField');
+  if(sel && field) field.style.display = sel.value==='package_capped' ? '' : 'none';
+}
+function clientWizardBack(){
+  const steps = clientWizardStepsForRole();
+  const curIdx = steps.findIndex((s,i)=>i===clientWizard.step);
+  if(curIdx>0){ clientWizard.step = curIdx-1; renderMain(); }
+}
+async function clientWizardStep3Submit(){
+  const g = id => document.getElementById(id).value;
+  const billingModel = g('cw_billingModel'), rotationType = g('cw_rotationType');
+  if(!billingModel || !rotationType){ alert("Billing Model and Rotation are required."); return; }
+  clientWizard.busy = true; await renderMain();
+  try{
+    const seatingCapacities = g('cw_seatingCapacities').split(',').map(s=>Number(s.trim())).filter(n=>Number.isFinite(n)&&n>0);
+    const updated = await api(`/clients/${clientWizard.clientId}/package`, {method:"PATCH", body: JSON.stringify({
+      vehicleCount: g('cw_vehicleCount'), seatingCapacities, billingModel,
+      kmCap: billingModel==='package_capped' ? g('cw_kmCap') : null,
+      workingDaysPerWeek: g('cw_workingDaysPerWeek'), workingDaysPerMonth: g('cw_workingDaysPerMonth'),
+      rotationType, notes: g('cw_notes'), markOnboarded: true,
+    })});
+    const idx = meta.clients.findIndex(x=>x.id===clientWizard.clientId); if(idx>=0) meta.clients[idx] = updated;
+    clientWizard.done = true;
+  }catch(e){ alert(e.message); }
+  clientWizard.busy = false; await renderMain();
+}
+
 async function fleetListScreen(){
   const canAssign = ["ops_manager","data_team","owner"].includes(currentUser.role);
   const canRegister = ["ops_manager","data_team","owner","admin","site_supervisor","area_supervisor"].includes(currentUser.role);
@@ -7541,7 +7822,7 @@ async function fleetListScreen(){
       <td>${v.fuelType||'-'}</td>
       <td>${v.seatingCapacity!=null?v.seatingCapacity:'-'}</td>
       <td>${v.siteId? siteName(v.siteId) : '<span class="muted">-</span>'}</td>
-      <td>${v.clientId? clientName(v.clientId) : '<span class="muted">Internal</span>'}</td>
+      <td>${v.clientId? `${clientName(v.clientId)} ${clientRotationBadgeHtml(v.clientId)}` : '<span class="muted">Internal</span>'}</td>
       <td>${v.driverId? driverName(v.driverId) : '<span class="muted">Unassigned</span>'}</td>
       <td><span class="track-pill ${r.status}">${TRACKING_STATUS_LABEL[r.status]}</span>${speed?`<div class="muted" style="font-size:11px;">${speed}</div>`:''}</td>
     </tr>
