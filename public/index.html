@@ -466,6 +466,7 @@ let pendingVehicleApprovals = [];
 let pendingDriverApprovals = [];
 let approvalsLoaded = false;
 let approvalsBusy = false;
+let approvalsTab = 'vehicles'; // which single category table is shown - see fleetApprovalsScreen()
 
 // ---- Area Supervisor: propose a new route, or a driver/route/company
 // assignment for one of their own vehicles - both need Data Team/Ops
@@ -1971,78 +1972,76 @@ async function loadPendingApprovals(){
   approvalsLoaded = true;
   routeAssignmentApprovalsLoaded = true;
 }
+function setApprovalsTab(t){ approvalsTab = t; renderMain(); }
+// Redesigned per the Owner's explicit feedback: the old layout stacked 4
+// full-width cards top to bottom, most of them empty most days - now it's
+// one card with chip tabs (counts baked into the label) showing a single
+// dense table at a time, so a page with mostly-empty queues doesn't scroll
+// past acres of blank space to find the one category that actually has
+// something pending. Vehicle/driver info stays on one compact row each -
+// nothing moved to a separate expanded detail view.
 async function fleetApprovalsScreen(){
   if(!approvalsLoaded) await loadPendingApprovals();
   const role = currentUser.role;
   const canSeeVehicles = role==="data_team" || role==="owner";
   const canSeeDrivers = role==="hr" || role==="owner" || role==="data_team";
   const canSeeRoutesAndAssignments = role==="data_team" || role==="ops_manager" || role==="owner";
-  const vehicleRows = pendingVehicleApprovals.map(v=>`
-    <tr>
-      <td><b>${v.reg}</b></td><td>${v.make||''} ${v.model||''}</td><td>${v.vehicleType||''} / ${v.fuelType||''}</td>
-      <td>${v.submittedByName||'-'}</td><td>${v.submittedAt? new Date(v.submittedAt).toLocaleDateString('en-GB') : '-'}</td>
-      <td>
-        <button class="btn small" ${approvalsBusy?"disabled":""} onclick="decideVehicleApproval('${v.id}','approved')">Approve</button>
-        <button class="btn small danger" ${approvalsBusy?"disabled":""} onclick="decideVehicleApproval('${v.id}','rejected')">Reject</button>
-      </td>
-    </tr>`).join("");
-  const driverRows = pendingDriverApprovals.map(d=>`
-    <tr>
-      <td><b>${d.name}</b></td><td>${d.phone||'-'}</td><td>${d.licenseNumber||'-'}</td>
-      <td>${d.submittedByName||'-'}</td><td>${d.submittedAt? new Date(d.submittedAt).toLocaleDateString('en-GB') : '-'}</td>
-      <td>
-        <button class="btn small" ${approvalsBusy?"disabled":""} onclick="decideDriverApproval('${d.id}','approved')">Approve</button>
-        <button class="btn small danger" ${approvalsBusy?"disabled":""} onclick="decideDriverApproval('${d.id}','rejected')">Reject</button>
-      </td>
-    </tr>`).join("");
-  const routeRequestRows = pendingRouteRequests.map(r=>`
-    <tr>
-      <td>${r.clientName}</td><td>${r.routeNumber||'-'} - ${r.name}</td>
-      <td>${r.requestedByName||'-'}</td><td>${r.createdAt? new Date(r.createdAt).toLocaleDateString('en-GB') : '-'}</td>
-      <td>
-        <button class="btn small" ${approvalsBusy?"disabled":""} onclick="decideRouteRequest('${r.id}','approved')">Approve</button>
-        <button class="btn small danger" ${approvalsBusy?"disabled":""} onclick="decideRouteRequest('${r.id}','rejected')">Reject</button>
-      </td>
-    </tr>`).join("");
-  const assignmentRequestRows = pendingAssignmentRequests.map(r=>`
-    <tr>
-      <td><b>${r.vehicleReg}</b></td><td>${r.clientName}</td><td>${r.routeNumber||r.routeName}</td><td>${r.driverName}</td>
-      <td>${r.requestedByName||'-'}</td><td>${r.createdAt? new Date(r.createdAt).toLocaleDateString('en-GB') : '-'}</td>
-      <td>
-        <button class="btn small" ${approvalsBusy?"disabled":""} onclick="decideAssignmentRequest('${r.id}','approved')">Approve</button>
-        <button class="btn small danger" ${approvalsBusy?"disabled":""} onclick="decideAssignmentRequest('${r.id}','rejected')">Reject</button>
-      </td>
-    </tr>`).join("");
+  const cats = [];
+  if(canSeeVehicles) cats.push(['vehicles', 'Vehicles', pendingVehicleApprovals.length]);
+  if(canSeeDrivers) cats.push(['drivers', 'Drivers', pendingDriverApprovals.length]);
+  if(canSeeRoutesAndAssignments){
+    cats.push(['routes', 'Routes', pendingRouteRequests.length]);
+    cats.push(['assignments', 'Assignments', pendingAssignmentRequests.length]);
+  }
+  if(!cats.length) return `<h1 class="page-title">Fleet Approvals</h1><div class="empty">You don't have any approval categories assigned.</div>`;
+  const activeTab = cats.some(c=>c[0]===approvalsTab) ? approvalsTab : cats[0][0];
+  const actionBtns = (approveFn, rejectFn, id) => `
+    <button class="btn small" ${approvalsBusy?"disabled":""} onclick="${approveFn}('${id}','approved')">Approve</button>
+    <button class="btn small danger" ${approvalsBusy?"disabled":""} onclick="${rejectFn}('${id}','rejected')">Reject</button>`;
+  let body = "";
+  if(activeTab==='vehicles'){
+    const rows = pendingVehicleApprovals.map(v=>`
+      <tr>
+        <td><b>${v.reg}</b></td><td>${v.make||''} ${v.model||''}</td><td>${v.vehicleType||''} / ${v.fuelType||''}</td>
+        <td>${v.submittedByName||'-'}</td><td>${v.submittedAt? new Date(v.submittedAt).toLocaleDateString('en-GB') : '-'}</td>
+        <td>${actionBtns('decideVehicleApproval','decideVehicleApproval',v.id)}</td>
+      </tr>`).join("");
+    body = `<table><tr><th>Vehicle</th><th>Make/Model</th><th>Type/Fuel</th><th>Submitted by</th><th>Date</th><th></th></tr>
+    ${rows || "<tr><td colspan='6' class='empty'>Nothing pending.</td></tr>"}</table>`;
+  } else if(activeTab==='drivers'){
+    const rows = pendingDriverApprovals.map(d=>`
+      <tr>
+        <td><b>${d.name}</b></td><td>${d.phone||'-'}</td><td>${d.licenseNumber||'-'}</td>
+        <td>${d.submittedByName||'-'}</td><td>${d.submittedAt? new Date(d.submittedAt).toLocaleDateString('en-GB') : '-'}</td>
+        <td>${actionBtns('decideDriverApproval','decideDriverApproval',d.id)}</td>
+      </tr>`).join("");
+    body = `<table><tr><th>Driver</th><th>Phone</th><th>License</th><th>Submitted by</th><th>Date</th><th></th></tr>
+    ${rows || "<tr><td colspan='6' class='empty'>Nothing pending.</td></tr>"}</table>`;
+  } else if(activeTab==='routes'){
+    const rows = pendingRouteRequests.map(r=>`
+      <tr>
+        <td>${r.clientName}</td><td>${r.routeNumber||'-'} - ${r.name}</td>
+        <td>${r.requestedByName||'-'}</td><td>${r.createdAt? new Date(r.createdAt).toLocaleDateString('en-GB') : '-'}</td>
+        <td>${actionBtns('decideRouteRequest','decideRouteRequest',r.id)}</td>
+      </tr>`).join("");
+    body = `<table><tr><th>Company</th><th>Route</th><th>Submitted by</th><th>Date</th><th></th></tr>
+    ${rows || "<tr><td colspan='5' class='empty'>Nothing pending.</td></tr>"}</table>`;
+  } else {
+    const rows = pendingAssignmentRequests.map(r=>`
+      <tr>
+        <td><b>${r.vehicleReg}</b></td><td>${r.clientName}</td><td>${r.routeNumber||r.routeName}</td><td>${r.driverName}</td>
+        <td>${r.requestedByName||'-'}</td><td>${r.createdAt? new Date(r.createdAt).toLocaleDateString('en-GB') : '-'}</td>
+        <td>${actionBtns('decideAssignmentRequest','decideAssignmentRequest',r.id)}</td>
+      </tr>`).join("");
+    body = `<table><tr><th>Vehicle</th><th>Company</th><th>Route</th><th>Driver</th><th>Submitted by</th><th>Date</th><th></th></tr>
+    ${rows || "<tr><td colspan='7' class='empty'>Nothing pending.</td></tr>"}</table>`;
+  }
   return `
   <h1 class="page-title">Fleet Approvals</h1>
-  <div class="banner">Vehicles, drivers, routes and assignments submitted by Area Supervisors land here first - they aren't usable anywhere else in the app until approved.</div>
-  ${canSeeVehicles ? `
-  <div class="card">
-    <h2 class="section-title">Pending Vehicles (${pendingVehicleApprovals.length})</h2>
-    <table><tr><th>Vehicle</th><th>Make/Model</th><th>Type/Fuel</th><th>Submitted by</th><th>Date</th><th></th></tr>
-    ${vehicleRows || "<tr><td colspan='6' class='empty'>Nothing pending.</td></tr>"}
-    </table>
-  </div>` : ''}
-  ${canSeeDrivers ? `
-  <div class="card">
-    <h2 class="section-title">Pending Drivers (${pendingDriverApprovals.length})</h2>
-    <table><tr><th>Driver</th><th>Phone</th><th>License</th><th>Submitted by</th><th>Date</th><th></th></tr>
-    ${driverRows || "<tr><td colspan='6' class='empty'>Nothing pending.</td></tr>"}
-    </table>
-  </div>` : ''}
-  ${canSeeRoutesAndAssignments ? `
-  <div class="card">
-    <h2 class="section-title">Pending Route Proposals (${pendingRouteRequests.length})</h2>
-    <table><tr><th>Company</th><th>Route</th><th>Submitted by</th><th>Date</th><th></th></tr>
-    ${routeRequestRows || "<tr><td colspan='5' class='empty'>Nothing pending.</td></tr>"}
-    </table>
+  <div class="filter-chip-row">
+    ${cats.map(([key,label,count])=>`<button type="button" class="filter-chip ${activeTab===key?'active':''}" onclick="setApprovalsTab('${key}')">${label} <span class="count">${count}</span></button>`).join("")}
   </div>
-  <div class="card">
-    <h2 class="section-title">Pending Assignment Requests (${pendingAssignmentRequests.length})</h2>
-    <table><tr><th>Vehicle</th><th>Company</th><th>Route</th><th>Driver</th><th>Submitted by</th><th>Date</th><th></th></tr>
-    ${assignmentRequestRows || "<tr><td colspan='7' class='empty'>Nothing pending.</td></tr>"}
-    </table>
-  </div>` : ''}
+  <div class="card">${body}</div>
   `;
 }
 async function decideVehicleApproval(vehicleId, status){
