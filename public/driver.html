@@ -9,25 +9,28 @@
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@1,500;1,600;1,700&display=swap" rel="stylesheet">
 <style>
   :root{
-    /* Padma Sri Travels brand palette - see index.html for the full note. */
-    --ink:#2A1410; --accent:#5D110B; --accent-dark:#3E0B07; --accent-light:#F0DCC0; --green:#2E7D32;
-    --amber:#B8860B; --red:#c0392b; --grey:#7A6A5C; --bg:#FBF3E6; --card:#ffffff;
-    --border:#E8D6BB; --purple:#6C63FF; --purple-dark:#4A43C7; --purple-light:#E7E5FF;
-    --gold:#C9A227; --gold-light:#F6ECD2;
+    /* Console design language - see index.html for the full note. Same
+       tokens as the staff app so the driver/workshop portal reads as part
+       of the same product, not a different app. */
+    --ink:#1A1A18; --accent:#1B4D3E; --accent-dark:#123529; --accent-light:#E4EEE8; --green:#2E7D32;
+    --amber:#B8860B; --red:#C0392B; --grey:#6B6B62; --bg:#F7F6F2; --card:#ffffff;
+    --border:#E6E3DB; --purple:#6C63FF; --purple-dark:#4A43C7; --purple-light:#E7E5FF;
+    --gold:#C9A227; --gold-light:#F6ECD2; --wordmark:#7A2115;
+    --label-track:.09em; --label-size:11px;
     --on-accent:#ffffff; --on-accent-rgb:255,255,255; --accent-text:var(--accent);
   }
   *{box-sizing:border-box;}
-  body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;-webkit-tap-highlight-color:transparent;}
+  body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);-webkit-tap-highlight-color:transparent;}
   .accent-script{font-family:'Playfair Display',Georgia,serif;font-style:italic;font-weight:600;}
   #app{max-width:480px;margin:0 auto;min-height:100vh;background:var(--bg);padding-bottom:40px;}
-  header.topbar{background:var(--ink);color:#fff;padding:16px 18px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;}
-  header.topbar .brand{font-weight:700;font-size:17px;display:flex;align-items:center;gap:8px;}
+  header.topbar{background:var(--card);color:var(--ink);padding:16px 18px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10;border-bottom:1px solid var(--border);}
+  header.topbar .brand{font-weight:800;font-size:15px;display:flex;align-items:center;gap:8px;color:var(--wordmark);}
   header.topbar .brand .brand-logo{height:26px;width:auto;display:block;}
-  header.topbar .who{font-size:12.5px;opacity:.9;text-align:right;}
+  header.topbar .who{font-size:var(--label-size);color:var(--grey);text-align:right;text-transform:uppercase;letter-spacing:var(--label-track);font-weight:700;}
   main{padding:16px;}
-  .card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:18px;margin-bottom:16px;box-shadow:0 4px 14px rgba(43,46,31,.06);}
-  h1.page-title{font-size:19px;margin:2px 0 16px;color:var(--ink);text-align:center;}
-  h2.section-title{font-size:15px;margin:0 0 12px;color:var(--ink);}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;margin-bottom:16px;box-shadow:none;}
+  h1.page-title{font-size:19px;font-weight:800;margin:2px 0 16px;color:var(--ink);text-align:center;}
+  h2.section-title{font-size:10.5px;margin:0 0 12px;color:var(--grey);text-transform:uppercase;letter-spacing:var(--label-track);font-weight:800;border-bottom:1px solid var(--border);padding-bottom:8px;}
   .muted{color:var(--grey);font-size:12.5px;}
   /* Company Hierarchy tree (see Profile tab) - same pure-CSS nested-list
      technique as the staff app, sized down for a narrow phone screen. */
@@ -48,15 +51,15 @@
   .org-box .org-phone{font-size:9.5px;color:var(--grey);}
   .org-box.org-vacant{border-style:dashed;color:var(--grey);font-style:italic;}
   .org-box.org-summary{background:var(--accent-light);}
-  .banner{background:#FBF3D6;border:1px solid #EBDA9B;color:#7a5a00;padding:12px 14px;border-radius:14px;font-size:13.5px;margin-bottom:16px;}
-  .banner.error{background:#fbe4e1;border-color:#eab3ab;color:#7a2115;}
-  .banner.ok{background:#E9F3DC;border-color:#C4DBA0;color:#3A5220;}
+  .banner{background:#FBF1DE;border:1px solid #EEDDB8;color:#8A5F16;padding:12px 14px;border-radius:12px;font-size:13.5px;margin-bottom:16px;}
+  .banner.error{background:#FBEAE6;border-color:#F3C6BA;color:#A83B1C;}
+  .banner.ok{background:var(--accent-light);border-color:#CFE3D8;color:var(--accent-dark);}
   .field{margin-bottom:16px;}
-  .field label{display:block;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--grey);margin-bottom:6px;font-weight:600;}
+  .field label{display:block;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--grey);margin-bottom:6px;font-weight:700;}
   .field input{width:100%;padding:14px 12px;border:1px solid var(--border);background:#fff;border-radius:14px;font-size:18px;text-align:center;letter-spacing:1px;}
   .field select{width:100%;padding:14px 12px;border:1px solid var(--border);background:#fff;border-radius:14px;font-size:15px;text-align:left;letter-spacing:normal;}
   .field.left input{text-align:left;letter-spacing:normal;font-size:15px;}
-  .big-btn{width:100%;background:var(--accent);color:var(--on-accent);border:none;padding:16px;border-radius:16px;font-size:16px;font-weight:700;cursor:pointer;}
+  .big-btn{width:100%;background:var(--accent);color:var(--on-accent);border:none;padding:16px;border-radius:14px;font-size:14.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;cursor:pointer;}
   .big-btn:hover{background:var(--accent-dark);}
   .big-btn:disabled{opacity:.45;cursor:not-allowed;}
   .big-btn.secondary{background:#fff;color:var(--accent-text);border:2px solid var(--accent-text);}
@@ -75,17 +78,17 @@
   .trip-item .date{font-weight:700;color:var(--ink);font-size:14px;}
   .trip-item .desc{font-size:13px;color:#333;margin-top:2px;}
   .trip-item .meta{font-size:11.5px;color:var(--grey);margin-top:4px;}
-  .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;margin-top:6px;}
-  .badge.upcoming{background:#FBF3D6;color:var(--amber);}
-  .badge.in_progress{background:var(--purple-light);color:var(--purple);}
-  .badge.completed{background:#E9F3DC;color:var(--green);}
-  .badge.pending{background:#FBF3D6;color:var(--amber);}
-  .badge.approved{background:#E9F3DC;color:var(--green);}
-  .badge.rejected{background:#fbe4e1;color:var(--red);}
-  .badge.cancelled{background:#fbe4e1;color:var(--red);}
+  .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:10.5px;font-weight:800;margin-top:6px;text-transform:uppercase;letter-spacing:.05em;border:1px solid transparent;}
+  .badge.upcoming{background:#FBF1DE;color:#9C6B10;border-color:#EEDDB8;}
+  .badge.in_progress{background:var(--purple-light);color:var(--purple-dark);border-color:#D6D3FF;}
+  .badge.completed{background:var(--accent-light);color:var(--accent);border-color:#CFE3D8;}
+  .badge.pending{background:#FBF1DE;color:#9C6B10;border-color:#EEDDB8;}
+  .badge.approved{background:var(--accent-light);color:var(--accent);border-color:#CFE3D8;}
+  .badge.rejected{background:#FBEAE6;color:var(--red);border-color:#F3C6BA;}
+  .badge.cancelled{background:#FBEAE6;color:var(--red);border-color:#F3C6BA;}
   .driver-tabbar{display:flex;gap:6px;overflow-x:auto;margin-bottom:14px;-webkit-overflow-scrolling:touch;padding-bottom:2px;}
-  .driver-tabbar button{flex:0 0 auto;background:#fff;border:1px solid var(--border);color:var(--grey);padding:9px 14px;border-radius:20px;font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;}
-  .driver-tabbar button.active{background:var(--accent-light);color:var(--ink);border-color:var(--accent-light);font-weight:700;}
+  .driver-tabbar button{flex:0 0 auto;background:#fff;border:1px solid var(--border);color:var(--grey);padding:9px 14px;border-radius:20px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;cursor:pointer;white-space:nowrap;}
+  .driver-tabbar button.active{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:800;}
   .trip-point{margin-top:10px;padding:10px 12px;background:#FCFBF2;border:1px solid var(--border);border-radius:12px;}
   .trip-point-label{font-size:11px;font-weight:700;color:var(--accent-text);text-transform:uppercase;letter-spacing:.4px;}
   .trip-point a{font-size:12px;}
@@ -93,7 +96,7 @@
   .doc-row:last-child{border-bottom:none;}
   .doc-row .dl-link{background:var(--accent);color:var(--on-accent);padding:7px 12px;border-radius:8px;font-size:12px;font-weight:600;text-decoration:none;white-space:nowrap;}
   table{width:100%;border-collapse:collapse;font-size:12.5px;}
-  table th{text-align:left;padding:7px 5px;color:var(--ink);border-bottom:2px solid var(--border);font-size:11.5px;}
+  table th{text-align:left;padding:7px 5px;color:var(--grey);border-bottom:1px solid var(--border);font-size:10px;text-transform:uppercase;letter-spacing:var(--label-track);font-weight:800;}
   table td{padding:7px 5px;border-bottom:1px solid #F1ECD4;}
   .trip-actions{margin-top:10px;display:flex;gap:8px;}
   .trip-actions button{flex:1;padding:9px;border-radius:10px;border:1px solid var(--accent-text);background:#fff;color:var(--accent-text);font-size:12.5px;font-weight:600;cursor:pointer;}
