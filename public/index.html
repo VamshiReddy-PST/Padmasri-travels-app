@@ -14,73 +14,88 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
   :root{
-    /* Padma Sri Travels brand palette - deep maroon (sampled straight from
-       the compass-rose mandala logo, #5D110B) with warm gold/parchment
-       accents, replacing the old olive-green placeholder theme. */
-    --ink:#2A1410; --accent:#5D110B; --accent-dark:#3E0B07; --accent-light:#F0DCC0; --green:#2E7D32;
-    --amber:#B8860B; --red:#c0392b; --grey:#7A6A5C; --bg:#FBF3E6; --card:#ffffff;
-    --border:#E8D6BB; --purple:#6C63FF; --purple-dark:#4A43C7; --purple-light:#E7E5FF;
-    --gold:#C9A227; --gold-light:#F6ECD2;
+    /* Console design language - a flat, minimal "operations console" look
+       (cream/off-white canvas, white bordered cards, a solid dark-green
+       pill for the active sidebar item, small-caps grey labels with wide
+       tracking everywhere, a maroon wordmark) replacing the old
+       maroon-gradient/glass theme. --mono is used for the top-bar clock
+       and anywhere a technical/tabular reading benefits from fixed-width
+       digits. --label-track/-size are the shared "eyebrow" text treatment
+       (uppercase, letter-spaced, small, grey) used for nav items, table
+       headers, kpi labels, and section eyebrows throughout. */
+    --ink:#1A1A18; --accent:#1B4D3E; --accent-dark:#123529; --accent-light:#E4EEE8; --green:#2E7D32;
+    --amber:#B8860B; --red:#C0392B; --grey:#6B6B62; --bg:#F7F6F2; --card:#ffffff;
+    --border:#E6E3DB; --purple:#6C63FF; --purple-dark:#4A43C7; --purple-light:#E7E5FF;
+    --gold:#C9A227; --gold-light:#F6ECD2; --wordmark:#7A2115;
+    --mono:'JetBrains Mono','SFMono-Regular',Menlo,Consolas,monospace;
+    --label-track:.09em; --label-size:11px;
     /* Custom theme support (see applyTheme() in the script below) - default
-       values here are the brand maroon/gold palette above, so nothing
-       changes until someone actively picks a different preset in Settings.
+       values here are the console palette above, so nothing changes until
+       someone actively picks a different preset in Settings.
        --on-accent(-rgb) is the text color to use ON TOP of an
-       --accent-colored background (sidebar, buttons); --accent-text is for
-       when --accent is used as foreground text/borders on the normal
-       cream/white page instead - kept as a separate variable because a
-       light accent (e.g. white or lime) needs different fallback logic for
-       each of those two uses. */
+       --accent-colored background (active nav pill, primary buttons);
+       --accent-text is for when --accent is used as foreground text/borders
+       on the normal cream/white page instead - kept as a separate variable
+       because a light accent (e.g. white or lime) needs different fallback
+       logic for each of those two uses. */
     --on-accent:#ffffff; --on-accent-rgb:255,255,255; --accent-text:var(--accent);
   }
   *{box-sizing:border-box;}
-  body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:#1a1a1a;overflow-x:hidden;
-    /* Subtle warm texture instead of a flat fill - two soft radial washes
-       (gold top-left, maroon bottom-right) that sit behind every screen at
-       ~2% opacity, giving the app a bit of depth/richness without ever
-       competing with page content for attention. */
-    background-image:radial-gradient(circle at 8% 4%, rgba(201,162,39,.07), transparent 40%), radial-gradient(circle at 96% 92%, rgba(93,17,11,.06), transparent 45%);
-    background-attachment:fixed;
-  }
+  body{margin:0;font-family:'Poppins',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);overflow-x:hidden;}
   .accent-script{font-family:'Playfair Display',Georgia,serif;font-style:italic;font-weight:600;}
-  #app{min-height:100vh;background:#F3E7D3;display:flex;align-items:stretch;}
-  /* ---- Left sidebar shell (replaces the old top tab bar) ----
-     A floating, rounded "glass" panel inset from the edges rather than a
-     flush-edge bar - soft gradient body, frosted/translucent pill buttons
-     that lift with a slight springy overshoot on hover (the "genie pop"
-     the Owner asked for - kept subtle, not a literal window-warp effect).
-     Desktop: fixed ~228px column, sticky full-height.
+  #app{min-height:100vh;background:var(--bg);display:flex;align-items:stretch;}
+  /* ---- Left sidebar shell ----
+     Flush, flat, white, thin right border - no floating panel, no
+     gradient, no shadow. Logo block, then a user-identity card, then the
+     nav list (active item = solid --accent pill), then a Sign Out pill at
+     the very bottom. Desktop: fixed ~232px column, sticky full-height.
      Mobile (<960px): becomes an off-canvas drawer (see .sidebar.open and
      .app-topbar below), toggled by the hamburger button that only shows
      on narrow screens. */
-  .sidebar{width:228px;flex:none;background:var(--accent);color:var(--on-accent);display:flex;flex-direction:column;position:sticky;top:14px;height:calc(100vh - 28px);margin:14px 0 14px 14px;border-radius:22px;overflow:hidden;z-index:30;box-shadow:0 14px 34px rgba(20,22,12,.28);}
-  .sidebar-brand{padding:20px 18px 14px;font-weight:700;font-size:16px;display:flex;align-items:center;gap:8px;flex:none;}
-  .sidebar-brand .dot{width:9px;height:9px;border-radius:50%;background:rgba(var(--on-accent-rgb),.55);display:inline-block;}
-  .sidebar-nav{flex:1;overflow-y:auto;padding:4px 0 14px;}
-  .sidebar-group-header{width:calc(100% - 20px);margin:8px 10px 2px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;background:transparent;border:none;border-radius:12px;color:inherit;font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:600;opacity:.72;cursor:pointer;font-family:inherit;transition:transform .22s cubic-bezier(.34,1.56,.64,1),background .2s ease,opacity .2s ease;}
-  .sidebar-group-header:hover{opacity:1;background:rgba(var(--on-accent-rgb),.09);backdrop-filter:blur(8px) saturate(160%);transform:scale(1.03) translateX(1px);}
-  .sidebar-chevron{display:inline-block;font-size:9px;transition:transform .25s ease;}
+  .sidebar{width:232px;flex:none;background:var(--card);color:var(--ink);display:flex;flex-direction:column;position:sticky;top:0;height:100vh;border-right:1px solid var(--border);overflow:hidden;z-index:30;}
+  .sidebar-brand{padding:20px 20px 16px;display:flex;align-items:center;gap:10px;flex:none;border-bottom:1px solid var(--border);}
+  .sidebar-brand .brand-logo{height:30px;margin:0;}
+  .sidebar-brand-text{line-height:1.15;}
+  .sidebar-brand-name{font-weight:800;font-size:14.5px;color:var(--wordmark);letter-spacing:.02em;}
+  .sidebar-brand-sub{font-size:9.5px;color:var(--grey);letter-spacing:.22em;font-weight:600;}
+  .sidebar-user{display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--border);flex:none;}
+  .sidebar-user-avatar{width:36px;height:36px;border-radius:10px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex:none;}
+  .sidebar-user-name{font-weight:700;font-size:13px;color:var(--ink);line-height:1.3;}
+  .sidebar-user-role{font-size:var(--label-size);color:var(--accent);letter-spacing:var(--label-track);text-transform:uppercase;font-weight:700;margin-top:1px;}
+  .sidebar-nav{flex:1;overflow-y:auto;padding:10px 0 14px;}
+  .sidebar-group-header{width:calc(100% - 20px);margin:6px 10px 2px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;background:transparent;border:none;border-radius:8px;color:var(--grey);font-size:10.5px;text-transform:uppercase;letter-spacing:var(--label-track);font-weight:700;cursor:pointer;font-family:inherit;transition:background .15s ease,color .15s ease;}
+  .sidebar-group-header:hover{background:var(--bg);color:var(--ink);}
+  .sidebar-chevron{display:inline-block;font-size:9px;transition:transform .2s ease;}
   .sidebar-chevron.open{transform:rotate(90deg);}
-  .sidebar-group-items{display:grid;grid-template-rows:0fr;transition:grid-template-rows .3s cubic-bezier(.4,0,.2,1);}
+  .sidebar-group-items{display:grid;grid-template-rows:0fr;transition:grid-template-rows .25s ease;}
   .sidebar-group-items.open{grid-template-rows:1fr;}
   .sidebar-group-items-inner{overflow:hidden;min-height:0;}
-  .sidebar-link{display:flex;align-items:center;gap:10px;margin:2px 10px;padding:9px 12px;border-radius:12px;color:rgba(var(--on-accent-rgb),.78);font-size:13.5px;cursor:pointer;text-decoration:none;transition:transform .22s cubic-bezier(.34,1.56,.64,1),background .2s ease,box-shadow .2s ease,color .2s ease;}
-  .sidebar-link .ic{width:18px;text-align:center;font-size:14px;flex:none;}
-  .sidebar-link:hover{background:rgba(var(--on-accent-rgb),.10);backdrop-filter:blur(8px) saturate(160%);color:var(--on-accent);transform:scale(1.035) translateX(2px);box-shadow:0 6px 16px rgba(0,0,0,.2);}
-  .sidebar-link.active{background:rgba(var(--on-accent-rgb),.16);backdrop-filter:blur(8px) saturate(160%);color:var(--on-accent);font-weight:600;box-shadow:0 4px 14px rgba(0,0,0,.16);}
-  .sidebar-foot{padding:14px 16px 16px;border-top:1px solid rgba(var(--on-accent-rgb),.1);font-size:12px;flex:none;}
-  .sidebar-foot .who-name{font-weight:600;color:var(--on-accent);font-size:13px;}
-  .sidebar-foot .who-role{opacity:.7;margin-top:1px;}
-  .sidebar-foot button{width:100%;margin-top:8px;background:rgba(var(--on-accent-rgb),.1);border:1px solid rgba(var(--on-accent-rgb),.18);color:var(--on-accent);padding:8px;border-radius:12px;font-size:12px;cursor:pointer;transition:transform .2s cubic-bezier(.34,1.56,.64,1),background .2s ease;}
-  .sidebar-foot button:hover{background:rgba(var(--on-accent-rgb),.2);transform:scale(1.02);}
-  .sidebar-foot button.logout{background:rgba(192,57,43,.24);border-color:rgba(192,57,43,.4);}
-  .sidebar-foot button.logout:hover{background:rgba(192,57,43,.4);}
+  .sidebar-link{display:flex;align-items:center;gap:10px;margin:2px 10px;padding:9px 12px;border-radius:9px;color:#4A4A44;font-size:12.5px;font-weight:600;letter-spacing:.02em;cursor:pointer;text-decoration:none;transition:background .15s ease,color .15s ease;}
+  .sidebar-link .ic{width:18px;text-align:center;font-size:13px;flex:none;}
+  .sidebar-link:hover{background:var(--accent-light);color:var(--accent-dark);}
+  .sidebar-link.active{background:var(--accent);color:#fff;font-weight:700;box-shadow:0 2px 8px rgba(27,77,62,.28);}
+  .sidebar-foot{padding:14px 16px 16px;border-top:1px solid var(--border);font-size:12px;flex:none;}
+  .sidebar-foot button{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--ink);padding:9px;border-radius:10px;font-size:11.5px;font-weight:700;letter-spacing:var(--label-track);text-transform:uppercase;cursor:pointer;transition:background .15s ease;}
+  .sidebar-foot button:hover{background:var(--accent-light);}
+  .sidebar-foot button + button{margin-top:8px;}
+  .sidebar-foot button.logout{background:#FBEAE6;border-color:#F3C6BA;color:#B4491F;}
+  .sidebar-foot button.logout:hover{background:#F7DCD3;}
   .sidebar-backdrop{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:25;}
-  .app-col{flex:1;min-width:0;display:flex;flex-direction:column;min-height:100vh;background:#fff;margin:14px 14px 14px 0;border-radius:22px;box-shadow:0 8px 26px rgba(20,22,12,.06);}
-  .app-topbar{display:none;align-items:center;gap:12px;background:var(--ink);color:#fff;padding:12px 16px;position:sticky;top:0;z-index:20;border-radius:22px 22px 0 0;}
-  .app-topbar .brand{font-weight:700;font-size:15px;display:flex;align-items:center;gap:7px;}
-  .app-topbar .brand .dot{width:8px;height:8px;border-radius:50%;background:var(--accent-light);display:inline-block;}
-  button.sidebar-toggle{background:rgba(255,255,255,.12);border:none;color:#fff;width:34px;height:34px;border-radius:12px;font-size:16px;cursor:pointer;flex:none;transition:transform .2s cubic-bezier(.34,1.56,.64,1);}
-  button.sidebar-toggle:hover{transform:scale(1.06);}
+  .app-col{flex:1;min-width:0;display:flex;flex-direction:column;min-height:100vh;background:var(--bg);}
+  /* ---- Persistent top bar ---- present on every screen (not just mobile):
+     section eyebrow on the left, a live-updating clock + system-status pill
+     on the right - matching the reference console's header strip. */
+  .app-topbar{display:flex;align-items:center;justify-content:space-between;gap:14px;background:var(--card);color:var(--ink);padding:14px 26px;position:sticky;top:0;z-index:20;border-bottom:1px solid var(--border);flex-wrap:wrap;}
+  .app-topbar .brand{display:none;}
+  .topbar-left{display:flex;align-items:center;gap:10px;min-width:0;}
+  .topbar-title{font-size:12.5px;font-weight:800;letter-spacing:var(--label-track);text-transform:uppercase;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .topbar-right{display:flex;align-items:center;gap:16px;flex-wrap:wrap;}
+  .topbar-clock{text-align:right;line-height:1.25;}
+  .topbar-clock-label{font-size:9.5px;color:var(--grey);letter-spacing:var(--label-track);text-transform:uppercase;font-weight:700;}
+  .topbar-clock-value{font-family:var(--mono);font-size:12.5px;color:var(--ink);font-weight:600;}
+  .topbar-status-pill{display:inline-flex;align-items:center;gap:5px;background:var(--accent-light);color:var(--accent);border:1px solid #CFE3D8;padding:6px 12px;border-radius:20px;font-size:10.5px;font-weight:800;letter-spacing:var(--label-track);text-transform:uppercase;}
+  .topbar-status-pill::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;box-shadow:0 0 0 3px rgba(46,125,50,.18);}
+  button.sidebar-toggle{background:var(--bg);border:1px solid var(--border);color:var(--ink);width:34px;height:34px;border-radius:9px;font-size:15px;cursor:pointer;flex:none;display:none;}
   /* Fluid by default: main fills whatever width .app-col actually has (a
      16" MacBook and a 13" laptop both just get more/less breathing room),
      with a generous cap + auto-centering only so lines of text don't stretch
@@ -92,31 +107,30 @@
      put no matter how far right you scroll a table. main's height is
      intrinsic (auto), so this never introduces an unwanted vertical
      scrollbar of its own. */
-  main{padding:22px 28px 60px;width:100%;max-width:1440px;margin:0 auto;box-sizing:border-box;overflow-x:auto;}
+  main{padding:24px 28px 60px;width:100%;max-width:1440px;margin:0 auto;box-sizing:border-box;overflow-x:auto;}
   @media(max-width:1180px){
     main{max-width:100%;padding:20px 22px 50px;}
   }
   @media(max-width:960px){
-    #app{background:#fff;}
-    .sidebar{position:fixed;left:0;top:0;height:calc(100vh - 20px);margin:10px;transform:translateX(calc(-100% - 10px));transition:transform .25s cubic-bezier(.34,1.56,.64,1);box-shadow:0 20px 40px rgba(0,0,0,.35);}
+    .sidebar{position:fixed;left:0;top:0;height:100vh;transform:translateX(-100%);transition:transform .25s ease;box-shadow:0 20px 40px rgba(0,0,0,.25);}
     .sidebar.open{transform:translateX(0);}
-    .app-col{margin:0;border-radius:0;}
-    .app-topbar{display:flex;border-radius:0;}
+    button.sidebar-toggle{display:block;}
     .sidebar-backdrop.open{display:block;}
     main{padding:16px 14px 50px;}
+    .app-topbar{padding:12px 14px;}
   }
-  .card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px 18px;margin-bottom:16px;box-shadow:0 4px 14px rgba(43,46,31,.05);}
-  h1.page-title{font-size:20px;margin:4px 0 16px;color:var(--ink);}
-  h2.section-title{font-size:15px;margin:0 0 10px;color:var(--ink);border-bottom:2px solid var(--accent-light);padding-bottom:6px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin-bottom:16px;box-shadow:none;}
+  h1.page-title{font-size:21px;font-weight:800;margin:4px 0 16px;color:var(--ink);}
+  h2.section-title{font-size:10.5px;margin:0 0 12px;color:var(--grey);border-bottom:1px solid var(--border);padding-bottom:8px;text-transform:uppercase;letter-spacing:var(--label-track);font-weight:800;}
   .grid{display:grid;gap:14px;}
   .grid.cols-4{grid-template-columns:repeat(4,1fr);}
   .grid.cols-3{grid-template-columns:repeat(3,1fr);}
   .grid.cols-2{grid-template-columns:repeat(2,1fr);}
   @media(max-width:900px){.grid.cols-4{grid-template-columns:repeat(2,1fr);}.grid.cols-3{grid-template-columns:repeat(2,1fr);}}
   @media(max-width:600px){.grid.cols-4,.grid.cols-3,.grid.cols-2{grid-template-columns:1fr;}}
-  .kpi{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px;}
-  .kpi .num{font-size:26px;font-weight:700;color:var(--ink);}
-  .kpi .label{font-size:12px;color:var(--grey);margin-top:2px;}
+  .kpi{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;}
+  .kpi .num{font-size:26px;font-weight:800;color:var(--ink);}
+  .kpi .label{font-size:var(--label-size);color:var(--grey);margin-top:5px;text-transform:uppercase;letter-spacing:var(--label-track);font-weight:700;}
   .kpi.warn .num{color:var(--amber);}
   .kpi.bad .num{color:var(--red);}
   .kpi.good .num{color:var(--green);}
@@ -158,16 +172,16 @@
   .replay-inputs{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;}
   .replay-inputs label{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--grey);}
   .replay-inputs input{padding:7px 9px;border:1px solid var(--border);border-radius:8px;font-size:12.5px;font-family:inherit;}
-  .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;}
-  .badge.pending{background:#FBF3D6;color:var(--amber);}
-  .badge.approved{background:#E9F3DC;color:var(--green);}
-  .badge.rejected{background:#fbe4e1;color:var(--red);}
-  .badge.pass{background:#E9F3DC;color:var(--green);}
-  .badge.fail{background:#fbe4e1;color:var(--red);}
-  .badge.ok{background:#E9F3DC;color:var(--green);}
-  .badge.low{background:#fbe4e1;color:var(--red);}
-  .badge.in_process{background:var(--purple-light);color:var(--purple-dark);}
-  .badge.completed{background:#E9F3DC;color:var(--green);}
+  .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;border:1px solid transparent;}
+  .badge.pending{background:#FBF1DE;color:#9C6B10;border-color:#EEDDB8;}
+  .badge.approved{background:var(--accent-light);color:var(--accent);border-color:#CFE3D8;}
+  .badge.rejected{background:#FBEAE6;color:var(--red);border-color:#F3C6BA;}
+  .badge.pass{background:var(--accent-light);color:var(--accent);border-color:#CFE3D8;}
+  .badge.fail{background:#FBEAE6;color:var(--red);border-color:#F3C6BA;}
+  .badge.ok{background:var(--accent-light);color:var(--accent);border-color:#CFE3D8;}
+  .badge.low{background:#FBEAE6;color:var(--red);border-color:#F3C6BA;}
+  .badge.in_process{background:var(--purple-light);color:var(--purple-dark);border-color:#D6D3FF;}
+  .badge.completed{background:var(--accent-light);color:var(--accent);border-color:#CFE3D8;}
   /* Company Hierarchy - pure-CSS org chart tree (nested lists with
      pseudo-element connector lines), classic technique, no JS layout/SVG
      library needed. Scrolls horizontally on narrow screens since a full
@@ -196,10 +210,10 @@
   .letterhead-frame-wrap{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:#fff;}
   .letterhead-frame-wrap iframe{width:100%;height:calc(100vh - 220px);min-height:520px;border:0;display:block;}
   table{width:100%;border-collapse:collapse;font-size:13px;}
-  table th{text-align:left;background:var(--accent-light);color:var(--ink);padding:8px 10px;font-size:12px;}
-  table td{padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
-  table tr:hover td{background:#FCFBF2;}
-  .btn{background:var(--accent);color:var(--on-accent);border:none;padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer;font-weight:600;}
+  table th{text-align:left;background:transparent;color:var(--grey);padding:8px 10px;font-size:10.5px;text-transform:uppercase;letter-spacing:var(--label-track);font-weight:800;border-bottom:1px solid var(--border);}
+  table td{padding:10px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
+  table tr:hover td{background:var(--bg);}
+  .btn{background:var(--accent);color:var(--on-accent);border:none;padding:9px 16px;border-radius:9px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;cursor:pointer;}
   .btn:hover{background:var(--accent-dark);}
   .btn.secondary{background:#fff;color:var(--accent-text);border:1px solid var(--accent-text);}
   .btn.danger{background:var(--red);}
@@ -214,7 +228,8 @@
   .check-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #F1ECD4;gap:10px;flex-wrap:wrap;}
   .check-row .label{font-size:13.5px;flex:1;min-width:180px;}
   .check-row .controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
-  select,input[type=text],input[type=date],input[type=number],input[type=tel]{padding:6px 8px;border:1px solid var(--border);border-radius:8px;font-size:13px;}
+  select,input[type=text],input[type=date],input[type=number],input[type=tel]{padding:8px 10px;border:1px solid var(--border);border-radius:9px;font-size:13px;font-family:inherit;background:#fff;color:var(--ink);}
+  select:focus,input:focus,textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-light);}
   .toggle{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;}
   .toggle button{border:none;background:#fff;padding:5px 10px;font-size:12px;cursor:pointer;}
   .toggle button.active-ok{background:var(--green);color:#fff;}
@@ -264,17 +279,17 @@
   .portal-footnote{text-align:center;color:#a7ab86;font-size:11.5px;margin-top:20px;position:relative;z-index:1;}
   .portal-back{background:transparent;border:none;color:var(--accent);font-size:12.5px;cursor:pointer;padding:0 0 14px;display:flex;align-items:center;gap:4px;font-weight:600;}
   .portal-back:hover{text-decoration:underline;}
-  .field{margin-bottom:12px;}
-  .field label{display:block;font-size:12px;color:var(--grey);margin-bottom:4px;}
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:var(--label-size);color:var(--grey);margin-bottom:5px;text-transform:uppercase;letter-spacing:var(--label-track);font-weight:700;}
   .field input,.field select{width:100%;}
-  .banner{background:#FBF3D6;border:1px solid #EBDA9B;color:#7a5a00;padding:10px 14px;border-radius:10px;font-size:12.5px;margin-bottom:16px;}
-  .banner.error{background:#fbe4e1;border-color:#eab3ab;color:#7a2115;}
+  .banner{background:#FBF1DE;border:1px solid #EEDDB8;color:#8A5F16;padding:11px 15px;border-radius:10px;font-size:12.5px;margin-bottom:16px;}
+  .banner.error{background:#FBEAE6;border-color:#F3C6BA;color:#A83B1C;}
   .muted{color:var(--grey);font-size:12px;}
   .flex-between{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;}
   .empty{text-align:center;color:var(--grey);padding:30px 10px;font-size:13px;}
   .charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
   @media(max-width:900px){.charts-grid{grid-template-columns:1fr;}}
-  .footer-note{font-size:11px;color:#9a9576;text-align:center;padding:20px;}
+  .footer-note{font-size:11px;color:var(--grey);text-align:center;padding:20px;}
   .selfie-thumb{width:40px;height:40px;border-radius:50%;object-fit:cover;border:2px solid var(--border);}
   .clock-btns{display:flex;gap:10px;flex-wrap:wrap;}
   .clock-status{padding:14px;border-radius:12px;background:var(--accent-light);font-size:13px;margin-bottom:14px;}
@@ -300,10 +315,10 @@
   .modal-panel{background:#fff;border-radius:12px;max-width:680px;width:100%;max-height:88vh;overflow:auto;padding:18px 20px 20px;box-shadow:0 12px 40px rgba(0,0,0,.35);}
   .modal-panel-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:10px;}
   .modal-panel-topbar h3{margin:0;font-size:16px;}
-  .modal-panel-topbar button{background:var(--accent-light);border:1px solid var(--border);color:var(--ink);padding:6px 12px;border-radius:8px;font-size:13px;cursor:pointer;flex-shrink:0;}
+  .modal-panel-topbar button{background:var(--bg);border:1px solid var(--border);color:var(--ink);padding:7px 13px;border-radius:8px;font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;cursor:pointer;flex-shrink:0;}
   /* ---- Vehicle Tracking (minimal card list, GPS/health) ---- */
   .filter-chip-row{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;margin-bottom:12px;-webkit-overflow-scrolling:touch;}
-  .filter-chip{flex-shrink:0;padding:7px 14px;border-radius:20px;border:1.5px solid var(--border);background:#fff;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap;color:var(--ink);}
+  .filter-chip{flex-shrink:0;padding:7px 14px;border-radius:20px;border:1.5px solid var(--border);background:#fff;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;cursor:pointer;white-space:nowrap;color:var(--ink);}
   .filter-chip .count{margin-left:5px;opacity:.65;}
   .filter-chip.active{background:var(--accent);border-color:var(--accent);color:#fff;}
   .track-card{display:flex;border-radius:12px;overflow:hidden;margin-bottom:10px;border:1px solid var(--border);background:#fff;cursor:pointer;}
@@ -1327,35 +1342,97 @@ function toggleSidebar(force){
   sb.classList.toggle("open", open);
   if(bd) bd.classList.toggle("open", open);
 }
+// Initial(s) for the small square avatar in the sidebar's user-identity
+// block - first letter of the first two words of the name (falls back to
+// a single letter for a one-word name), matching the reference console's
+// "V" / "K" style avatars.
+function userInitials(name){
+  const parts = String(name||"").trim().split(/\s+/).filter(Boolean);
+  if(!parts.length) return "?";
+  return (parts[0][0] + (parts[1] ? parts[1][0] : "")).toUpperCase();
+}
+// The page-eyebrow shown top-left of the persistent top bar - the label of
+// whichever tab is currently active, upper-cased. Falls back to the tab key
+// itself if it's somehow not in this role's own tab list.
+function currentTabLabel(){
+  const tabs = tabsFor(currentUser.role);
+  const found = tabs.find(([k])=>k===view.tab);
+  return found ? found[1].replace(/^[^\w]+\s*/,'') : (view.tab||"");
+}
+// Live-updating clock in the top bar, styled after the reference console's
+// "LIVE SYSTEM COORDINATES" readout - ticks once a second for as long as
+// the #topbarClock element exists; harmlessly no-ops once it doesn't
+// (e.g. logged out), so this is started once and just left running rather
+// than restarted on every render.
+let _topbarClockTimer = null;
+function topbarClockText(){
+  const d = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+function startTopbarClock(){
+  if(_topbarClockTimer) return;
+  _topbarClockTimer = setInterval(()=>{
+    const el = document.getElementById("topbarClock");
+    if(el) el.textContent = topbarClockText();
+  }, 1000);
+}
 async function render(){
   const app = document.getElementById("app");
   const u = currentUser;
   const tabs = tabsFor(u.role);
   app.innerHTML = `
     <aside class="sidebar" id="sidebar">
-      <div class="sidebar-brand"><img class="brand-logo" src="logo-mark.png" alt="" /> Padmasri <span class="accent-script">Travels</span></div>
+      <div class="sidebar-brand">
+        <img class="brand-logo" src="logo-mark.png" alt="" />
+        <div class="sidebar-brand-text">
+          <div class="sidebar-brand-name">Padma Sri</div>
+          <div class="sidebar-brand-sub">Travels</div>
+        </div>
+      </div>
+      <div class="sidebar-user">
+        <div class="sidebar-user-avatar">${userInitials(u.name)}</div>
+        <div>
+          <div class="sidebar-user-name">${u.name}</div>
+          <div class="sidebar-user-role">${roleLabel(u.role)}</div>
+        </div>
+      </div>
       <nav class="sidebar-nav">${sidebarNavHtml(tabs)}</nav>
       <div class="sidebar-foot">
-        <div class="who-name">${u.name}</div>
-        <div class="who-role">${roleLabel(u.role)}</div>
         <button onclick="goto('change_password')">Change Password</button>
-        <button class="logout" onclick="doLogout()">Log out</button>
+        <button class="logout" onclick="doLogout()">&#9211; Sign Out</button>
       </div>
     </aside>
     <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="toggleSidebar(false)"></div>
     <div class="app-col">
       <header class="app-topbar">
-        <button class="sidebar-toggle" onclick="toggleSidebar()">&#9776;</button>
-        <div class="brand"><img class="brand-logo" src="logo-mark.png" alt="" /> Padmasri <span class="accent-script">Travels</span></div>
+        <div class="topbar-left">
+          <button class="sidebar-toggle" onclick="toggleSidebar()">&#9776;</button>
+          <div class="topbar-title" id="topbarTitle">${currentTabLabel()}</div>
+        </div>
+        <div class="topbar-right">
+          <div class="topbar-clock">
+            <div class="topbar-clock-label">Live System Time</div>
+            <div class="topbar-clock-value" id="topbarClock">${topbarClockText()}</div>
+          </div>
+          <span class="topbar-status-pill">System Active</span>
+        </div>
       </header>
       <main id="main"><div class="empty">Loading...</div></main>
       <div class="footer-note">Shared data - everyone signed into this app sees the same fleet records.</div>
     </div>
   `;
+  startTopbarClock();
   await renderMain();
 }
 async function switchTab(tab){ view = {tab, name:"home"}; ownerAssignUnlocked = false; assignmentsViewDate = todayStr(); await render(); window.scrollTo(0,0); }
-async function goto(name, params){ view = Object.assign({tab: view.tab}, {name}, params||{}); await renderMain(); window.scrollTo(0,0); }
+async function goto(name, params){
+  view = Object.assign({tab: view.tab}, {name}, params||{});
+  const titleEl = document.getElementById("topbarTitle");
+  if(titleEl) titleEl.textContent = currentTabLabel();
+  await renderMain();
+  window.scrollTo(0,0);
+}
 
 // Stops every live-map auto-refresh timer and destroys the Leaflet map
 // instances they were driving - called at the very top of renderMain(), the
