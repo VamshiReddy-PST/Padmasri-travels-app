@@ -166,6 +166,25 @@
      map underneath it. */
   .vehicle-mini-map .leaflet-container, .fleet-map .leaflet-container{touch-action:none;}
   .bus-marker-icon{background:transparent;border:none;}
+  /* ---- Multi-step wizard (Add Vehicle / Add Driver / Add Staff) ----
+     One shared component so all three "add" flows look and behave
+     identically: a numbered/checkmarked step strip up top, a card of
+     fields for the current step, Previous/Save & Next controls, and a
+     centered success card on completion. Matches the reference app's
+     driver-edit wizard styling. */
+  .stepper{display:flex;align-items:flex-start;border:1px solid var(--border);border-radius:14px;background:var(--card);padding:18px 22px;margin-bottom:16px;overflow-x:auto;}
+  .stepper-item{display:flex;align-items:center;gap:10px;flex:1;min-width:150px;}
+  .stepper-item:not(:last-child)::after{content:'';flex:1;height:1px;background:var(--border);margin:0 12px;align-self:center;min-width:20px;}
+  .stepper-circle{width:26px;height:26px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;border:2px solid var(--border);color:var(--grey);background:#fff;}
+  .stepper-item.done .stepper-circle{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .stepper-item.active .stepper-circle{border-color:var(--accent);color:var(--accent);}
+  .stepper-text{line-height:1.25;white-space:nowrap;}
+  .stepper-title{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:var(--label-track);color:var(--grey);}
+  .stepper-item.active .stepper-title, .stepper-item.done .stepper-title{color:var(--ink);}
+  .stepper-sub{font-size:10px;color:var(--grey);margin-top:1px;}
+  .wizard-actions{display:flex;justify-content:space-between;margin-top:18px;}
+  .wizard-success{max-width:440px;margin:50px auto;text-align:center;}
+  .wizard-success .icon{width:60px;height:60px;border-radius:50%;background:var(--accent-light);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 16px;}
   .replay-inputs{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;}
   .replay-inputs label{display:flex;flex-direction:column;gap:3px;font-size:11.5px;color:var(--grey);}
   .replay-inputs input{padding:7px 9px;border:1px solid var(--border);border-radius:8px;font-size:12.5px;font-family:inherit;}
@@ -1244,18 +1263,18 @@ function tabsForInner(role){
   // request, they (plus Data Team and Owner) are the only roles that can
   // approve odometer/fuel readings. See ODOMETER_VERIFY_ROLES and
   // FUEL_CROSS_VERIFY_ROLES in server.js for the matching backend gate.
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["fleet_health","🚦 Fleet Health"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["assignments","Overview"],["fleet_health","🚦 Fleet Health"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["fleet_list","Fleet"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["fleet_list","Fleet"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   // Operations Manager deliberately has no odometer_verify/fuel_verify tab -
   // per the Owner's explicit request, Ops Manager has no role in approving
   // odometer or fuel readings (they previously had odometer_verify; removed
   // on request).
-  if(role==="ops_manager") return [["operations","Operations"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["fleet_health","🚦 Fleet Health"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="data_team") return [["corrections","Corrections"],["expenses_view","Expenses"],["assignments","Overview"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["fleet_health","🚦 Fleet Health"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="ops_manager") return [["operations","Operations"],["overview","Overview"],["expenses","Expenses"],["fleet_list","Fleet"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="data_team") return [["corrections","Corrections"],["overview","Overview"],["expenses_view","Expenses"],["fleet_list","Fleet"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["dashboard","Dashboard"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["assignments","Overview"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["fleet_health","🚦 Fleet Health"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="owner") return [["overview","Overview"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["fleet_list","Fleet"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="admin") return [["admin_dashboard","Dashboard"],["admin_vehicles","Vehicles"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="admin") return [["overview","Overview"],["fleet_list","Fleet"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   return [];
 }
@@ -1279,8 +1298,8 @@ const SIDEBAR_GROUP_META = {
   tools:   {icon:"🧭", label:"Reports & Tools"},
 };
 const TAB_GROUP_MAP = {
-  my_vehicles:"fleet", onboarding:"fleet", admin_vehicles:"fleet", usage:"fleet",
-  assignments:"fleet", routes:"fleet", subvendor_expenses:"fleet",
+  my_vehicles:"fleet", onboarding:"fleet", admin_vehicles:"fleet", usage:"fleet", overview:"fleet",
+  assignments:"fleet", fleet_list:"fleet", add_vehicle:"fleet", routes:"fleet", subvendor_expenses:"fleet",
   odometer_verify:"fleet", fuel_verify:"fleet", fleet_health:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
   subvendors:"fleet", hierarchy:"fleet",
   trips:"trips", my_attendance:"trips", attendance:"trips", my_expenses:"trips", queue:"trips",
@@ -1473,6 +1492,9 @@ async function routeView(){
   if(tab==="fuel_verify") return fuelVerificationScreen();
   if(tab==="gps_link") return gpsLinkScreen();
   if(tab==="fleet_health") return view.name==="vehicle_tracking_detail" ? vehicleTrackingDetailScreen(view.vehicleId) : fleetHealthScreen();
+  if(tab==="overview") return minimalOverviewScreen();
+  if(tab==="fleet_list") return view.name==="vehicle_tracking_detail" ? vehicleTrackingDetailScreen(view.vehicleId) : fleetListScreen();
+  if(tab==="add_vehicle") return addVehicleWizardScreen();
   if(tab==="transport") return transportScreen();
   if(tab==="repairs") return repairRequestsScreen();
   if(tab==="workshop") return workshopScreen();
@@ -1510,7 +1532,7 @@ async function routeView(){
     if(tab==="assignments") return assignmentsScreen();
     if(tab==="trips") return tripsScreen();
     if(tab==="subvendors") return subvendorsScreen();
-    if(tab==="people") return peopleScreen();
+    if(tab==="people") return view.name==="add_driver_wizard" ? addDriverWizardScreen() : (view.name==="add_staff_wizard" ? addStaffWizardScreen() : peopleScreen());
     if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : (view.name==="vehicle_detail" ? vehicleExpenditureScreen(view.vehicleId) : reportsScreen());
     if(tab==="backup") return backupDownloadsScreen();
   }
@@ -1519,12 +1541,12 @@ async function routeView(){
     if(tab==="expenses_view") return expensesScreen(false);
     if(tab==="assignments") return assignmentsScreen();
     if(tab==="trips") return tripsScreen();
-    if(tab==="people") return peopleScreen();
+    if(tab==="people") return view.name==="add_driver_wizard" ? addDriverWizardScreen() : (view.name==="add_staff_wizard" ? addStaffWizardScreen() : peopleScreen());
     if(tab==="audit") return auditScreen();
   }
   if(role==="hr"){
     if(tab==="attendance") return hrAttendanceScreen();
-    if(tab==="people") return peopleScreen();
+    if(tab==="people") return view.name==="add_driver_wizard" ? addDriverWizardScreen() : (view.name==="add_staff_wizard" ? addStaffWizardScreen() : peopleScreen());
   }
   if(role==="owner"){
     if(tab==="dashboard") return view.name==="dashboard_detail" ? dashboardDetailScreen(view.metric) : (view.name==="vehicle_status" ? vehicleTodayStatusScreen(view.vehicleId) : ownerDashboardScreen());
@@ -1532,7 +1554,7 @@ async function routeView(){
     if(tab==="assignments") return assignmentsScreen();
     if(tab==="trips") return tripsScreen();
     if(tab==="subvendors") return subvendorsScreen();
-    if(tab==="people") return peopleScreen();
+    if(tab==="people") return view.name==="add_driver_wizard" ? addDriverWizardScreen() : (view.name==="add_staff_wizard" ? addStaffWizardScreen() : peopleScreen());
     if(tab==="attendance") return hrAttendanceScreen();
     if(tab==="audit") return auditScreen();
     if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : (view.name==="vehicle_detail" ? vehicleExpenditureScreen(view.vehicleId) : reportsScreen());
@@ -3483,6 +3505,220 @@ const VEHICLE_TYPES = ["Bus","Cab","Ambulance","Tempo Traveller","Towing Vehicle
 function vehicleTypeOptionsHtml(selected){
   return VEHICLE_TYPES.map(t=>`<option value="${t}" ${selected===t?'selected':''}>${t}</option>`).join("");
 }
+
+// ---- Shared step-wizard component (Add Vehicle / Add Driver / Add Staff) ----
+// One look, one behavior for every multi-step "add" flow in the app: a
+// numbered/checkmarked step strip, a card of fields for the current step,
+// Previous/Save & Next controls, and a centered success card at the end.
+function stepperHtml(steps, currentIdx){
+  return `<div class="stepper">${steps.map((s,i)=>{
+    const state = i<currentIdx ? 'done' : i===currentIdx ? 'active' : '';
+    const circle = i<currentIdx ? '&#10003;' : (i+1);
+    return `<div class="stepper-item ${state}">
+      <div class="stepper-circle">${circle}</div>
+      <div class="stepper-text"><div class="stepper-title">${s.title}</div><div class="stepper-sub">${s.sub}</div></div>
+    </div>`;
+  }).join("")}</div>`;
+}
+function wizardSuccessHtml(title, message, btnLabel, btnOnclick){
+  return `<div class="wizard-success"><div class="icon">&#10003;</div><h2 style="margin:0 0 8px;">${title}</h2><p class="muted" style="margin-bottom:20px;">${message}</p><button class="btn" onclick="${btnOnclick}">${btnLabel}</button></div>`;
+}
+
+// ---- Add Vehicle wizard (3 steps: Basic Info -> Compliance Documents ->
+// Additional Details). Same backend calls as the old single "every field
+// required" form (POST /vehicles, PATCH /vehicles/:id/docs, PATCH
+// /vehicles/:id/details) - just spread across steps that save as you go, so
+// nothing is lost if you stop partway through. Site/Area Supervisor's
+// vehicle still goes through the existing approval queue exactly as
+// before (see submittedBy/approvalStatus on the server) - they only get
+// Step 1, since documents/RTO details aren't theirs to set until Data
+// Team/Owner approves and takes the vehicle live.
+let vehicleWizard = {step:0, vehicleId:null, busy:false, done:false, pending:false, reg:''};
+function vehicleWizardStepsForRole(){
+  if(["site_supervisor","area_supervisor"].includes(currentUser.role)) return VEHICLE_WIZARD_STEPS.slice(0,1);
+  return VEHICLE_WIZARD_STEPS;
+}
+const VEHICLE_WIZARD_STEPS = [
+  {title:"Basic Information", sub:"Identity & registration"},
+  {title:"Compliance Documents", sub:"Permit, Insurance, Fitness, Tax, PUC"},
+  {title:"Additional Details", sub:"Other documents & remarks"},
+];
+function startVehicleWizard(){ vehicleWizard = {step:0, vehicleId:null, busy:false, done:false, pending:false, reg:''}; goto('add_vehicle'); }
+function vehicleWizardBack(){ if(vehicleWizard.step>0){ vehicleWizard.step--; renderMain(); } }
+async function addVehicleWizardScreen(){
+  const steps = vehicleWizardStepsForRole();
+  if(vehicleWizard.done){
+    return vehicleWizard.pending
+      ? wizardSuccessHtml("Vehicle Submitted for Approval", `${vehicleWizard.reg} has been sent to Data Team/Owner for approval before it's usable.`, "Done", "goto('fleet_list')")
+      : wizardSuccessHtml("Vehicle Registered Successfully", `${vehicleWizard.reg} has been added to the fleet registry.`, "View All Vehicles", "goto('fleet_list')");
+  }
+  const step = vehicleWizard.step;
+  const body = step===0 ? vehicleWizardStep1Html() : step===1 ? vehicleWizardStep2Html() : vehicleWizardStep3Html();
+  return `
+  <h1 class="page-title">Register Vehicle</h1>
+  ${steps.length>1 ? stepperHtml(steps, step) : ''}
+  <div class="card">${body}</div>
+  `;
+}
+function vehicleWizardStep1Html(){
+  return `
+  <div class="grid cols-2">
+    <div class="f"><label>Registration number *</label><input type="text" id="vw_reg" placeholder="TS 09 XX 1234" required /></div>
+    <div class="f"><label>Vehicle Type *</label><select id="vw_vehicleType" required onchange="onVwVehicleTypeChange()"><option value="">- select -</option>${vehicleTypeOptionsHtml("")}</select></div>
+    <div class="f"><label>Fuel Type *</label><select id="vw_fuelType" required><option value="">- select -</option><option value="Diesel">Diesel</option><option value="Petrol">Petrol</option><option value="CNG">CNG</option><option value="EV">EV</option><option value="Hybrid">Hybrid</option></select></div>
+    <div class="f"><label>Usage *</label><select id="vw_usage" required><option value="fixed_route">Fixed Route</option><option value="client_on_demand">Client on demand</option><option value="booking">Booking</option></select></div>
+    <div class="f"><label>Make *</label><input type="text" id="vw_make" placeholder="e.g. Tata" required /></div>
+    <div class="f"><label>Model *</label><input type="text" id="vw_model" placeholder="e.g. Winger" required /></div>
+    <div class="f"><label>Engine No. *</label><input type="text" id="vw_engineNo" required /></div>
+    <div class="f"><label>Chassis No. *</label><input type="text" id="vw_chassisNo" required /></div>
+    <div class="f"><label>RC Date (registration date) *</label><input type="date" id="vw_rcDate" required /></div>
+    <div class="f"><label>Seating Capacity *</label><input type="number" id="vw_seating" min="1" required /></div>
+  </div>
+  <div class="wizard-actions">
+    <span></span>
+    <button class="btn" ${vehicleWizard.busy?'disabled':''} onclick="vehicleWizardStep1Submit()">${vehicleWizard.busy?'<span class="spinner"></span>':'Save &amp; Next &rsaquo;'}</button>
+  </div>`;
+}
+function onVwVehicleTypeChange(){
+  const typeEl = document.getElementById("vw_vehicleType");
+  const fuelEl = document.getElementById("vw_fuelType");
+  if(!typeEl || !fuelEl) return;
+  if(typeEl.value === "Bus"){ fuelEl.value = "Diesel"; fuelEl.disabled = true; } else { fuelEl.disabled = false; }
+}
+async function vehicleWizardStep1Submit(){
+  const g = id => document.getElementById(id).value;
+  const body = {
+    reg:g('vw_reg'), vehicleType:g('vw_vehicleType'), fuelType:g('vw_fuelType'), usage:g('vw_usage'),
+    make:g('vw_make'), model:g('vw_model'), engineNo:g('vw_engineNo'), chassisNo:g('vw_chassisNo'),
+    rcDate:g('vw_rcDate'), seatingCapacity:g('vw_seating'),
+  };
+  const labels = {reg:"Registration number", vehicleType:"Vehicle Type", fuelType:"Fuel Type", usage:"Usage", make:"Make", model:"Model", engineNo:"Engine No", chassisNo:"Chassis No", rcDate:"RC Date", seatingCapacity:"Seating Capacity"};
+  const missing = Object.entries(labels).filter(([k])=>!String(body[k]||"").trim()).map(([,l])=>l);
+  if(missing.length){ alert("Missing required field(s): "+missing.join(", ")); return; }
+  vehicleWizard.busy = true; await renderMain();
+  try{
+    const v = await api("/vehicles", {method:"POST", body: JSON.stringify(body)});
+    vehicleWizard.vehicleId = v.id; vehicleWizard.reg = v.reg;
+    const liveRoles = ["ops_manager","data_team","owner","admin"];
+    const isLive = liveRoles.includes(currentUser.role);
+    if(isLive) vehicles.push(v);
+    vehicleWizard.pending = !isLive;
+    const steps = vehicleWizardStepsForRole();
+    if(steps.length<=1) vehicleWizard.done = true; else vehicleWizard.step = 1;
+  }catch(e){ alert(e.message); }
+  vehicleWizard.busy = false; await renderMain();
+}
+function vehicleWizardDocFieldsHtml(docType){
+  return `
+  <div class="check-row">
+    <div class="label"><b>${docType.replace(/([A-Z])/g,' $1').trim()}</b></div>
+    <div class="controls">
+      <input type="text" placeholder="Number" id="vw_doc_${docType}_number" style="width:140px" />
+      <input type="date" id="vw_doc_${docType}_expiry" style="width:150px" />
+      ${docType==="Permit" ? `
+        <label style="margin-left:6px;font-size:12px;"><input type="checkbox" id="vw_doc_Permit_state" onchange="onVwPermitStateToggle()" /> State Permit</label>
+        <input type="number" placeholder="# Districts (1-2)" min="1" max="2" id="vw_doc_Permit_districtCount" style="width:120px" />
+        <input type="text" placeholder="District names" id="vw_doc_Permit_districtNames" style="width:180px" />
+      ` : ''}
+      <input type="file" accept="image/*,application/pdf" id="vw_doc_${docType}_copy" style="width:180px" />
+    </div>
+  </div>`;
+}
+function onVwPermitStateToggle(){
+  const stateChecked = document.getElementById('vw_doc_Permit_state').checked;
+  const c = document.getElementById('vw_doc_Permit_districtCount');
+  const n = document.getElementById('vw_doc_Permit_districtNames');
+  if(c) c.disabled = stateChecked;
+  if(n) n.disabled = stateChecked;
+}
+async function vehicleWizardSaveDocs(docTypes){
+  for(const docType of docTypes){
+    const numberEl = document.getElementById(`vw_doc_${docType}_number`);
+    const expiryEl = document.getElementById(`vw_doc_${docType}_expiry`);
+    const number = numberEl ? numberEl.value : '';
+    const expiry = expiryEl ? expiryEl.value : '';
+    const fileEl = document.getElementById(`vw_doc_${docType}_copy`);
+    const dataUrl = fileEl ? await readFileAsDataUrl(fileEl) : null;
+    if(!number && !expiry && !dataUrl) continue; // nothing entered for this doc type - skip rather than write blanks
+    const body = {docType, number, expiry};
+    if(docType==="Permit"){
+      const stateEl = document.getElementById('vw_doc_Permit_state');
+      body.isStatePermit = stateEl ? stateEl.checked : false;
+      if(!body.isStatePermit){
+        const cEl = document.getElementById('vw_doc_Permit_districtCount');
+        const nEl = document.getElementById('vw_doc_Permit_districtNames');
+        body.districtCount = cEl ? cEl.value : '';
+        body.districtNames = nEl ? nEl.value : '';
+      }
+    }
+    if(dataUrl) body.copy = dataUrl;
+    const v = await api(`/vehicles/${vehicleWizard.vehicleId}/docs`, {method:"PATCH", body: JSON.stringify(body)});
+    const idx = vehicles.findIndex(x=>x.id===v.id); if(idx>=0) vehicles[idx]=v;
+  }
+}
+function vehicleWizardStep2Html(){
+  const docTypes = ["Permit","Insurance","Fitness","Tax","PUC"];
+  return `
+  <p class="muted" style="margin-top:0;">Fill in whichever documents you have on hand now - anything left blank can be added later from the Fleet page.</p>
+  ${docTypes.map(vehicleWizardDocFieldsHtml).join("")}
+  <div class="wizard-actions">
+    <button class="btn secondary" onclick="vehicleWizardBack()">&larr; Previous</button>
+    <button class="btn" ${vehicleWizard.busy?'disabled':''} onclick="vehicleWizardStep2Submit()">${vehicleWizard.busy?'<span class="spinner"></span>':'Save &amp; Next &rsaquo;'}</button>
+  </div>`;
+}
+async function vehicleWizardStep2Submit(){
+  vehicleWizard.busy = true; await renderMain();
+  try{
+    await vehicleWizardSaveDocs(["Permit","Insurance","Fitness","Tax","PUC"]);
+    vehicleWizard.step = 2;
+  }catch(e){ alert(e.message); }
+  vehicleWizard.busy = false; await renderMain();
+}
+function vehicleWizardStep3Html(){
+  const docTypes = ["TemporaryPermit","BorderTax","PoliceCityPermission"];
+  return `
+  ${docTypes.map(vehicleWizardDocFieldsHtml).join("")}
+  <div class="grid cols-2" style="margin-top:10px;">
+    <div class="f"><label>Registered Owner Name</label><input type="text" id="vw_ownerName" /></div>
+    <div class="f"><label>RTO Area</label>
+      <select id="vw_rtoArea" onchange="onVwRtoAreaChange()"><option value="">- select -</option>${RTO_AREAS.map(a=>`<option value="${a}">${a}</option>`).join("")}</select>
+      <input type="text" id="vw_rtoAreaOther" placeholder="Enter RTO area" style="display:none;margin-top:6px;" />
+    </div>
+    <div class="f"><label>Month &amp; Year of Manufacture</label>
+      <select id="vw_manufactureMonth" style="width:130px"><option value="">Month</option>${MONTH_NAMES.map(m=>`<option value="${m}">${m}</option>`).join("")}</select>
+      <input type="number" id="vw_manufactureYear" placeholder="Year" min="1980" max="${new Date().getFullYear()+1}" style="width:90px" />
+    </div>
+    <div class="f" style="flex-basis:100%;"><label>Remarks</label><textarea id="vw_remarks" rows="2"></textarea></div>
+  </div>
+  <div class="wizard-actions">
+    <button class="btn secondary" onclick="vehicleWizardBack()">&larr; Previous</button>
+    <button class="btn" ${vehicleWizard.busy?'disabled':''} onclick="vehicleWizardStep3Submit()">${vehicleWizard.busy?'<span class="spinner"></span>':'&#10003; Register Vehicle'}</button>
+  </div>`;
+}
+function onVwRtoAreaChange(){
+  const sel = document.getElementById('vw_rtoArea');
+  const other = document.getElementById('vw_rtoAreaOther');
+  if(sel && other) other.style.display = sel.value==="Other" ? '' : 'none';
+}
+async function vehicleWizardStep3Submit(){
+  vehicleWizard.busy = true; await renderMain();
+  try{
+    await vehicleWizardSaveDocs(["TemporaryPermit","BorderTax","PoliceCityPermission"]);
+    const g = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+    const rtoSel = g('vw_rtoArea');
+    const detailsBody = {
+      ownerName: g('vw_ownerName'), manufactureMonth: g('vw_manufactureMonth'), manufactureYear: g('vw_manufactureYear'),
+      rtoArea: rtoSel==="Other" ? g('vw_rtoAreaOther') : rtoSel, remarks: g('vw_remarks'),
+    };
+    if(Object.values(detailsBody).some(val=>String(val||"").trim())){
+      const v = await api(`/vehicles/${vehicleWizard.vehicleId}/details`, {method:"PATCH", body: JSON.stringify(detailsBody)});
+      const idx = vehicles.findIndex(x=>x.id===v.id); if(idx>=0) vehicles[idx]=v;
+    }
+    vehicleWizard.done = true;
+  }catch(e){ alert(e.message); }
+  vehicleWizard.busy = false; await renderMain();
+}
+
 async function toggleVehicleDetails(vehicleId){
   const opening = editingVehicleId !== vehicleId;
   editingVehicleId = opening ? vehicleId : null;
@@ -3893,26 +4129,280 @@ async function peopleScreen(){
     <table><tr><th>Name</th><th>Role</th><th>Area / Supervises</th><th>Email</th><th>Mobile Number</th><th>Date of Joining</th><th></th></tr>${rows || `<tr><td colspan="7" class="empty">No staff match your search.</td></tr>`}</table>
 
     ${canEditAtAll ? `
-    <form class="inline-form" onsubmit="return ${editing ? 'saveEditPerson(event)' : 'addPerson(event)'}">
-      <div class="f"><label>Name</label><input type="text" id="newPersonName" value="${editing? editing.name : ''}" required /></div>
-      <div class="f"><label>Role</label><select id="newPersonRole">${roleOptionsHtml(editing? editing.role : 'site_supervisor', myRole)}</select></div>
-      <div class="f"><label>Area (if Area Supervisor)</label><select id="newPersonSite">${siteOptionsHtml(editing? editing.siteId : null)}</select></div>
-      <div class="f"><label>Email</label><input type="email" id="newPersonEmail" value="${editing? (editing.email||'') : ''}" style="width:200px" /></div>
-      <div class="f"><label>Mobile Number</label><input type="tel" id="newPersonPhone" value="${editing? (editing.phone||'') : ''}" style="width:130px" /></div>
-      <div class="f"><label>Date of Joining</label><input type="date" id="newPersonDoj" value="${editing? (editing.dateOfJoining||'') : ''}" style="width:140px" /></div>
-      ${editing ? '' : `<div class="f"><label>Temporary Password</label><input type="password" id="newPersonPassword" required autocomplete="new-password" /></div>`}
-      <button class="btn small" type="submit">${editing? 'Save changes' : '+ Add person'}</button>
-      ${editing? `<button type="button" class="btn small secondary" onclick="cancelEditPerson()">Cancel</button>` : ''}
+    ${editing ? `
+    <form class="inline-form" onsubmit="return saveEditPerson(event)">
+      <div class="f"><label>Name</label><input type="text" id="newPersonName" value="${editing.name}" required /></div>
+      <div class="f"><label>Role</label><select id="newPersonRole">${roleOptionsHtml(editing.role, myRole)}</select></div>
+      <div class="f"><label>Area (if Area Supervisor)</label><select id="newPersonSite">${siteOptionsHtml(editing.siteId)}</select></div>
+      <div class="f"><label>Email</label><input type="email" id="newPersonEmail" value="${editing.email||''}" style="width:200px" /></div>
+      <div class="f"><label>Mobile Number</label><input type="tel" id="newPersonPhone" value="${editing.phone||''}" style="width:130px" /></div>
+      <div class="f"><label>Date of Joining</label><input type="date" id="newPersonDoj" value="${editing.dateOfJoining||''}" style="width:140px" /></div>
+      <button class="btn small" type="submit">Save changes</button>
+      <button type="button" class="btn small secondary" onclick="cancelEditPerson()">Cancel</button>
     </form>
-    ${editing ? '' : passwordHintsHtml()}
-    <div class="muted" style="margin-top:6px;">${editing? `Editing ${editing.name} - use "Reset Password" to change their login password (Owner only).` : "This is a temporary password - they'll be required to set their own the first time they log in. Either an email or a mobile number is required so they have something to sign in with."}</div>
-    ${myRole==="hr" ? `<div class="muted">Only the Owner can create or edit Owner or HR accounts.</div>` : ""}
-    ${myRole==="ops_manager" ? `<div class="muted">Only the Owner can create or edit Owner, Operations Manager, or HR accounts.</div>` : ""}
+    <div class="muted" style="margin-top:6px;">Editing ${editing.name} - use "Reset Password" to change their login password (Owner only).</div>
+    ` : `<button class="btn small" style="margin-top:10px;" onclick="startStaffWizard()">+ Add Staff</button>`}
+    ${myRole==="hr" ? `<div class="muted" style="margin-top:6px;">Only the Owner can create or edit Owner or HR accounts.</div>` : ""}
+    ${myRole==="ops_manager" ? `<div class="muted" style="margin-top:6px;">Only the Owner can create or edit Owner, Operations Manager, or HR accounts.</div>` : ""}
     ` : `<div class="muted" style="margin-top:6px;">You have view-only access to People - only the Owner, Operations Manager, and HR can make changes here.</div>`}
     ` : ""}
   </div>
   ${await driversCardHtml()}`;
 }
+// ---- Add Staff wizard (2 steps: Personal Info -> Role & Access). Same
+// backend call as the old single form (POST /users) - just split so the
+// temporary password/role decision doesn't compete for attention with the
+// basic contact fields. ----
+let staffWizard = {step:0, busy:false, done:false, name:''};
+const STAFF_WIZARD_STEPS = [
+  {title:"Personal Information", sub:"Name & contact"},
+  {title:"Role & Access", sub:"Login, role, area"},
+];
+function startStaffWizard(){ staffWizard = {step:0, busy:false, done:false, name:''}; goto('add_staff_wizard'); }
+function staffWizardBack(){ if(staffWizard.step>0){ staffWizard.step--; renderMain(); } }
+async function addStaffWizardScreen(){
+  if(staffWizard.done){
+    return wizardSuccessHtml("Staff Account Created", `${staffWizard.name} can now sign in with the temporary password you set - they'll be asked to choose their own on first login.`, "View All Staff", "goto('people')");
+  }
+  const step = staffWizard.step;
+  const body = step===0 ? staffWizardStep1Html() : staffWizardStep2Html();
+  return `
+  <h1 class="page-title">Add Staff</h1>
+  ${stepperHtml(STAFF_WIZARD_STEPS, step)}
+  <div class="card">${body}</div>
+  `;
+}
+function staffWizardStep1Html(){
+  return `
+  <div class="grid cols-2">
+    <div class="f"><label>Name *</label><input type="text" id="sw_name" required /></div>
+    <div class="f"><label>Email</label><input type="email" id="sw_email" style="width:200px" /></div>
+    <div class="f"><label>Mobile Number</label><input type="tel" id="sw_phone" style="width:130px" /></div>
+    <div class="f"><label>Date of Joining</label><input type="date" id="sw_doj" style="width:140px" /></div>
+  </div>
+  <p class="muted">Either an email or a mobile number is required so they have something to sign in with.</p>
+  <div class="wizard-actions">
+    <span></span>
+    <button class="btn" onclick="staffWizardStep1Next()">Save &amp; Next &rsaquo;</button>
+  </div>`;
+}
+function staffWizardStep1Next(){
+  const name = document.getElementById('sw_name').value;
+  const email = document.getElementById('sw_email').value;
+  const phone = document.getElementById('sw_phone').value;
+  if(!String(name||'').trim()){ alert("Name is required."); return; }
+  if(!String(email||'').trim() && !String(phone||'').trim()){ alert("Either an email or a mobile number is required."); return; }
+  staffWizard.step = 1;
+  renderMain();
+}
+function staffWizardStep2Html(){
+  return `
+  <div class="grid cols-2">
+    <div class="f"><label>Role *</label><select id="sw_role">${roleOptionsHtml('site_supervisor', currentUser.role)}</select></div>
+    <div class="f"><label>Area (if Area Supervisor)</label><select id="sw_site">${siteOptionsHtml(null)}</select></div>
+    <div class="f" style="flex-basis:100%;"><label>Temporary Password *</label><input type="password" id="sw_password" required autocomplete="new-password" /></div>
+  </div>
+  ${passwordHintsHtml()}
+  <p class="muted">This is a temporary password - they'll be required to set their own the first time they log in.</p>
+  <div class="wizard-actions">
+    <button class="btn secondary" onclick="staffWizardBack()">&larr; Previous</button>
+    <button class="btn" ${staffWizard.busy?'disabled':''} onclick="staffWizardStep2Submit()">${staffWizard.busy?'<span class="spinner"></span>':'&#10003; Create Staff Account'}</button>
+  </div>`;
+}
+async function staffWizardStep2Submit(){
+  const password = document.getElementById("sw_password").value;
+  const policyErr = passwordPolicyError(password);
+  if(policyErr){ alert(policyErr); return; }
+  const body = {
+    name: document.getElementById('sw_name').value,
+    role: document.getElementById('sw_role').value,
+    siteId: document.getElementById('sw_site').value || null,
+    email: document.getElementById('sw_email') ? document.getElementById('sw_email').value : '',
+    phone: document.getElementById('sw_phone') ? document.getElementById('sw_phone').value : '',
+    dateOfJoining: document.getElementById('sw_doj') ? document.getElementById('sw_doj').value : '',
+    password,
+  };
+  staffWizard.busy = true; await renderMain();
+  try{
+    const u = await api("/users", {method:"POST", body: JSON.stringify(body)});
+    meta.users.push(u);
+    staffWizard.name = u.name;
+    staffWizard.done = true;
+  }catch(e){ alert(e.message); }
+  staffWizard.busy = false; await renderMain();
+}
+
+// ---- Add Driver wizard (4 steps: Personal Info -> License & Identity ->
+// Compliance -> Payroll). Same backend calls as the old single form (POST
+// /drivers to create, then PATCH /drivers/:id per step to fill in the
+// richer HR fields) - split so a long onboarding form doesn't have to be
+// finished in one sitting. ----
+let driverWizard = {step:0, driverId:null, busy:false, done:false, name:''};
+const DRIVER_WIZARD_STEPS = [
+  {title:"Personal Information", sub:"Name, contact & level"},
+  {title:"License & Identity", sub:"License, Aadhar, PAN"},
+  {title:"Compliance", sub:"ESI, PF, verification & certs"},
+  {title:"Payroll", sub:"Bank details"},
+];
+function startDriverWizard(){ driverWizard = {step:0, driverId:null, busy:false, done:false, name:''}; goto('add_driver_wizard'); }
+function driverWizardBack(){ if(driverWizard.step>0){ driverWizard.step--; renderMain(); } }
+async function addDriverWizardScreen(){
+  if(driverWizard.done){
+    return wizardSuccessHtml("Driver Added Successfully", `${driverWizard.name}'s profile and documents have been saved to the registry.`, "View All Drivers", "goto('people')");
+  }
+  const step = driverWizard.step;
+  const body = step===0 ? driverWizardStep1Html() : step===1 ? driverWizardStep2Html() : step===2 ? driverWizardStep3Html() : driverWizardStep4Html();
+  return `
+  <h1 class="page-title">Add Driver</h1>
+  ${stepperHtml(DRIVER_WIZARD_STEPS, step)}
+  <div class="card">${body}</div>
+  `;
+}
+function driverDocFieldHtml(label, numberId, opts){
+  opts = opts || {};
+  return `
+  <div class="check-row">
+    <div class="label"><b>${label}</b></div>
+    <div class="controls">
+      <input type="text" placeholder="Number" id="${numberId}_number" style="width:150px" />
+      ${opts.date ? `<input type="date" id="${numberId}_date" style="width:150px" />` : ''}
+      <input type="file" accept="image/*,application/pdf" id="${numberId}_copy" style="width:180px" />
+    </div>
+  </div>`;
+}
+function driverWizardStep1Html(){
+  return `
+  <div class="grid cols-2">
+    <div class="f"><label>Driver name *</label><input type="text" id="dw_name" required /></div>
+    <div class="f"><label>Mobile Number</label><input type="tel" id="dw_phone" style="width:130px" /></div>
+    <div class="f"><label>Date of Joining</label><input type="date" id="dw_doj" style="width:140px" /></div>
+    <div class="f"><label>Driving Level</label><select id="dw_level"><option value="">- select -</option>${DRIVING_LEVELS.map(l=>`<option value="${l}">${l}</option>`).join("")}</select></div>
+    <div class="f" style="flex-basis:100%;"><label>Home Address</label><input type="text" id="dw_address" style="width:100%;max-width:420px;" /></div>
+    <div class="f" style="flex-basis:100%;"><label>Remarks</label><textarea id="dw_remarks" rows="2"></textarea></div>
+  </div>
+  <div class="wizard-actions">
+    <span></span>
+    <button class="btn" ${driverWizard.busy?'disabled':''} onclick="driverWizardStep1Submit()">${driverWizard.busy?'<span class="spinner"></span>':'Save &amp; Next &rsaquo;'}</button>
+  </div>`;
+}
+async function driverWizardStep1Submit(){
+  const name = document.getElementById('dw_name').value;
+  if(!String(name||'').trim()){ alert("Driver name is required."); return; }
+  driverWizard.busy = true; await renderMain();
+  try{
+    const d = await api("/drivers", {method:"POST", body: JSON.stringify({
+      name, phone: document.getElementById('dw_phone').value, dateOfJoining: document.getElementById('dw_doj').value,
+    })});
+    driverWizard.driverId = d.id; driverWizard.name = d.name;
+    meta.drivers.push(d);
+    const level = document.getElementById('dw_level').value;
+    const address = document.getElementById('dw_address').value;
+    const remarks = document.getElementById('dw_remarks').value;
+    if(level || address || remarks){
+      const updated = await api(`/drivers/${d.id}`, {method:"PATCH", body: JSON.stringify({drivingLevel: level||undefined, homeAddress: address||undefined, remarks: remarks||undefined})});
+      const idx = meta.drivers.findIndex(x=>x.id===d.id); if(idx>=0) meta.drivers[idx]=updated;
+    }
+    driverWizard.step = 1;
+  }catch(e){ alert(e.message); }
+  driverWizard.busy = false; await renderMain();
+}
+function driverWizardStep2Html(){
+  return `
+  <div class="check-row">
+    <div class="label"><b>Driving License</b></div>
+    <div class="controls">
+      <input type="text" placeholder="License Number" id="dw_license_number" style="width:150px" />
+      <input type="date" id="dw_license_expiry" style="width:150px" />
+      <input type="file" accept="image/*,application/pdf" id="dw_license_copy" style="width:180px" />
+    </div>
+  </div>
+  ${driverDocFieldHtml("Aadhar Card", "dw_aadhar")}
+  ${driverDocFieldHtml("PAN Card", "dw_pan")}
+  <div class="wizard-actions">
+    <button class="btn secondary" onclick="driverWizardBack()">&larr; Previous</button>
+    <button class="btn" ${driverWizard.busy?'disabled':''} onclick="driverWizardStep2Submit()">${driverWizard.busy?'<span class="spinner"></span>':'Save &amp; Next &rsaquo;'}</button>
+  </div>`;
+}
+async function driverWizardStep2Submit(){
+  driverWizard.busy = true; await renderMain();
+  try{
+    const g = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+    const body = { licenseNumber: g('dw_license_number'), licenseExpiry: g('dw_license_expiry'), aadharNumber: g('dw_aadhar_number'), panNumber: g('dw_pan_number') };
+    const licenseCopy = await readFileAsDataUrl(document.getElementById('dw_license_copy'));
+    const aadharCopy = await readFileAsDataUrl(document.getElementById('dw_aadhar_copy'));
+    const panCopy = await readFileAsDataUrl(document.getElementById('dw_pan_copy'));
+    if(licenseCopy) body.licenseCopy = licenseCopy;
+    if(aadharCopy) body.aadharCopy = aadharCopy;
+    if(panCopy) body.panCopy = panCopy;
+    const updated = await api(`/drivers/${driverWizard.driverId}`, {method:"PATCH", body: JSON.stringify(body)});
+    const idx = meta.drivers.findIndex(x=>x.id===driverWizard.driverId); if(idx>=0) meta.drivers[idx]=updated;
+    driverWizard.step = 2;
+  }catch(e){ alert(e.message); }
+  driverWizard.busy = false; await renderMain();
+}
+function driverWizardStep3Html(){
+  return `
+  ${driverDocFieldHtml("ESI Certificate", "dw_esi")}
+  ${driverDocFieldHtml("PF Certificate", "dw_pf")}
+  <div class="check-row"><div class="label"><b>UAN Number</b></div><div class="controls"><input type="text" id="dw_uan_number" style="width:150px" /></div></div>
+  ${driverDocFieldHtml("Police Verification", "dw_police", {date:true})}
+  ${driverDocFieldHtml("Health Record", "dw_health", {date:true})}
+  ${driverDocFieldHtml("Training Certificate", "dw_training", {date:true})}
+  <div class="wizard-actions">
+    <button class="btn secondary" onclick="driverWizardBack()">&larr; Previous</button>
+    <button class="btn" ${driverWizard.busy?'disabled':''} onclick="driverWizardStep3Submit()">${driverWizard.busy?'<span class="spinner"></span>':'Save &amp; Next &rsaquo;'}</button>
+  </div>`;
+}
+async function driverWizardStep3Submit(){
+  driverWizard.busy = true; await renderMain();
+  try{
+    const g = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+    const body = {
+      esiNumber: g('dw_esi_number'), pfNumber: g('dw_pf_number'), uanNumber: g('dw_uan_number'),
+      policeVerificationNumber: g('dw_police_number'), policeVerificationDate: g('dw_police_date'),
+      healthRecordNumber: g('dw_health_number'), healthRecordDate: g('dw_health_date'),
+      trainingCertNumber: g('dw_training_number'), trainingCertDate: g('dw_training_date'),
+    };
+    for(const [key, id] of [['esiCertificate','dw_esi_copy'],['pfCertificate','dw_pf_copy'],['policeVerificationCopy','dw_police_copy'],['healthRecordCopy','dw_health_copy'],['trainingCertCopy','dw_training_copy']]){
+      const el = document.getElementById(id);
+      const dataUrl = el ? await readFileAsDataUrl(el) : null;
+      if(dataUrl) body[key] = dataUrl;
+    }
+    const updated = await api(`/drivers/${driverWizard.driverId}`, {method:"PATCH", body: JSON.stringify(body)});
+    const idx = meta.drivers.findIndex(x=>x.id===driverWizard.driverId); if(idx>=0) meta.drivers[idx]=updated;
+    driverWizard.step = 3;
+  }catch(e){ alert(e.message); }
+  driverWizard.busy = false; await renderMain();
+}
+function driverWizardStep4Html(){
+  return `
+  <div class="grid cols-2">
+    <div class="f"><label>Bank Account Number</label><input type="text" id="dw_bank_account" style="width:180px" /></div>
+    <div class="f"><label>IFSC</label><input type="text" id="dw_bank_ifsc" style="width:130px" /></div>
+    <div class="f"><label>Account Holder Name</label><input type="text" id="dw_bank_holder" style="width:200px" /></div>
+    <div class="f"><label>Cancelled Cheque</label><input type="file" accept="image/*,application/pdf" id="dw_bank_cheque" style="width:180px" /></div>
+  </div>
+  <div class="wizard-actions">
+    <button class="btn secondary" onclick="driverWizardBack()">&larr; Previous</button>
+    <button class="btn" ${driverWizard.busy?'disabled':''} onclick="driverWizardStep4Submit()">${driverWizard.busy?'<span class="spinner"></span>':'&#10003; Finish'}</button>
+  </div>`;
+}
+async function driverWizardStep4Submit(){
+  driverWizard.busy = true; await renderMain();
+  try{
+    const g = id => { const el = document.getElementById(id); return el ? el.value : ''; };
+    const body = { bankAccountNumber: g('dw_bank_account'), bankIfsc: g('dw_bank_ifsc'), bankAccountHolderName: g('dw_bank_holder') };
+    const cheque = await readFileAsDataUrl(document.getElementById('dw_bank_cheque'));
+    if(cheque) body.bankCheque = cheque;
+    if(Object.values(body).some(v=>String(v||"").trim())){
+      const updated = await api(`/drivers/${driverWizard.driverId}`, {method:"PATCH", body: JSON.stringify(body)});
+      const idx = meta.drivers.findIndex(x=>x.id===driverWizard.driverId); if(idx>=0) meta.drivers[idx]=updated;
+    }
+    driverWizard.done = true;
+  }catch(e){ alert(e.message); }
+  driverWizard.busy = false; await renderMain();
+}
+
 async function addPerson(evt){
   evt.preventDefault();
   const password = document.getElementById("newPersonPassword").value;
@@ -4046,19 +4536,7 @@ async function driversCardHtml(){
     ${rows || "<tr><td colspan='9' class='empty'>No drivers match your search.</td></tr>"}
     </table>
     ${canEditAtAll ? `
-    <form class="inline-form" onsubmit="return addDriverFull(event)">
-      <div class="f"><label>New driver name</label><input type="text" id="newDriverFullName" required /></div>
-      <div class="f"><label>Mobile Number</label><input type="tel" id="newDriverFullPhone" style="width:130px" /></div>
-      <div class="f"><label>License Number</label><input type="text" id="newDriverFullLicense" style="width:130px" /></div>
-      <div class="f"><label>Aadhar Number</label><input type="text" id="newDriverFullAadhar" style="width:130px" /></div>
-      <div class="f"><label>Date of Joining</label><input type="date" id="newDriverFullDoj" style="width:140px" /></div>
-      <div class="f"><label>Driving Level</label><select id="newDriverFullLevel">
-        <option value="">- select -</option>
-        ${DRIVING_LEVELS.map(l=>`<option value="${l}">${l}</option>`).join("")}
-      </select></div>
-      <button class="btn small" type="submit">+ Add driver</button>
-    </form>
-    <div class="muted" style="margin-top:6px;">ESI/PF/UAN numbers and certificate uploads can be added afterward via "Details" above.</div>
+    <button class="btn small" style="margin-top:10px;" onclick="startDriverWizard()">+ Add Driver</button>
     ` : ""}
     ` : ""}
   </div>`;
@@ -6906,6 +7384,12 @@ function closeTheftDetail(){
 // page shell and navigation were consolidated.
 let fleetHealthTab = 'tracking';
 function setFleetHealthTab(t){ fleetHealthTab = t; renderMain(); }
+// Opens Alerts / Fuel Theft & Mileage / Document Reminders on a specific
+// sub-tab. Not in the sidebar anymore now that Fleet (fleetListScreen) is
+// the primary vehicle page - reached instead via links from Overview and
+// the Fleet page's "More" button, so this content stays one click away
+// without taking up its own permanent nav slot.
+function openFleetHealthTab(subtab){ fleetHealthTab = subtab||'tracking'; goto('home', {tab:'fleet_health'}); }
 async function fleetHealthScreen(){
   const tabs = [['tracking','📍 Tracking'],['alerts','🚨 Alerts'],['fuel_theft','⛽ Fuel Theft & Mileage'],['doc_reminders','📋 Document Reminders']];
   const tabRow = `<div class="detail-tab-row">${tabs.map(([k,l])=>`<div class="detail-tab ${fleetHealthTab===k?'active':''}" onclick="setFleetHealthTab('${k}')">${l}</div>`).join("")}</div>`;
@@ -6918,6 +7402,174 @@ async function fleetHealthScreen(){
   <h1 class="page-title">🚦 Fleet Health</h1>
   ${tabRow}
   ${body}
+  `;
+}
+
+// ---- Fleet (Page 2): one table combining vehicle list, assignment,
+// health and live tracking - replaces My Vehicles / Overview-Assignments /
+// Fleet Health's Tracking tab / Admin Vehicles, which each showed a
+// different slice of the same vehicle list. One row expands to show a
+// vehicle's live speed/fuel/health (auto-refreshing via the same
+// liveTrackingCardHtml used elsewhere) plus - for roles allowed to -
+// its client/route/area/supervisor/driver assignment, right there instead
+// of on a separate screen. ----
+let fleetFilters = {status:'all', client:'', area:'', brand:'', seating:'', supervisor:'', fuel:'', mileage:''};
+function setFleetFilter(key, value){ fleetFilters[key] = value; renderMain(); }
+function resetFleetFilters(){ fleetFilters = {status:'all', client:'', area:'', brand:'', seating:'', supervisor:'', fuel:'', mileage:''}; renderMain(); }
+let fleetExpandedVehicleId = null;
+function toggleFleetRow(vehicleId){ fleetExpandedVehicleId = fleetExpandedVehicleId===vehicleId ? null : vehicleId; renderMain(); }
+async function fleetRowDetailHtml(vehicleId, canAssign){
+  const v = vehicles.find(x=>x.id===vehicleId);
+  if(!v) return "";
+  const liveCard = await liveTrackingCardHtml(vehicleId);
+  const client = v.clientId ? meta.clients.find(c=>c.id===v.clientId) : null;
+  const clientRoutes = client ? (client.routes||[]) : [];
+  const assignHtml = canAssign ? `
+  <div class="card" style="margin-top:12px;background:var(--bg);">
+    <h2 class="section-title">Assignment</h2>
+    <div class="grid cols-3">
+      <div class="f"><label>Client</label><select onchange="assignField('${v.id}','clientId', this.value||null)">
+        <option value="">- none (internal) -</option>
+        ${meta.clients.map(c=>`<option value="${c.id}" ${v.clientId===c.id?'selected':''}>${c.name}</option>`).join("")}
+      </select></div>
+      <div class="f"><label>Route</label><select ${!client?'disabled':''} onchange="assignField('${v.id}','routeId', this.value||null)">
+        <option value="">${client? '- select route -' : '- select client first -'}</option>
+        ${clientRoutes.map(r=>`<option value="${r.id}" ${v.routeId===r.id?'selected':''}>${r.routeNumber||'(no number)'} - ${r.name}</option>`).join("")}
+      </select></div>
+      <div class="f"><label>Area</label><select onchange="assignField('${v.id}','siteId', this.value||null)">
+        <option value="">- unassigned -</option>
+        ${meta.sites.map(s=>`<option value="${s.id}" ${v.siteId===s.id?'selected':''}>${s.name}</option>`).join("")}
+      </select></div>
+      <div class="f"><label>Supervisor</label><select onchange="assignField('${v.id}','supervisorId', this.value||null)">
+        <option value="">- unassigned -</option>
+        ${meta.users.filter(u=>u.role==='site_supervisor').map(u=>`<option value="${u.id}" ${v.supervisorId===u.id?'selected':''}>${u.name}</option>`).join("")}
+      </select></div>
+      <div class="f"><label>Driver</label><select onchange="assignField('${v.id}','driverId', this.value||null)">
+        <option value="">- unassigned -</option>
+        ${meta.drivers.map(d=>`<option value="${d.id}" ${v.driverId===d.id?'selected':''}>${d.name}</option>`).join("")}
+      </select></div>
+      <div class="f"><label>Usage</label><select onchange="assignField('${v.id}','usage', this.value)">
+        <option value="fixed_route" ${v.usage==='fixed_route'?'selected':''}>Fixed Route</option>
+        <option value="client_on_demand" ${v.usage==='client_on_demand'?'selected':''}>Client on demand</option>
+        <option value="booking" ${v.usage==='booking'?'selected':''}>Booking</option>
+      </select></div>
+    </div>
+  </div>` : '';
+  return `
+  <div style="padding:10px 0;">
+    ${liveCard}
+    ${assignHtml}
+    <div class="controls" style="margin-top:10px;flex-wrap:wrap;">
+      <button class="btn small secondary" onclick="goto('vehicle_status',{vehicleId:'${v.id}'})">📋 Today's Status</button>
+      <button class="btn small secondary" onclick="goto('fuel_graph',{vehicleId:'${v.id}'})">⛽ Fuel Pattern</button>
+      ${canAssign ? `<button class="btn small secondary" onclick="toggleVehicleDetails('${v.id}')">${editingVehicleId===v.id?'Close Documents':'📄 Manage Documents'}</button>` : ''}
+      ${currentUser.role==="owner" ? `<button class="btn small danger" onclick="markVehicleSoldOut('${v.id}','${(v.reg||'').replace(/'/g,"\\'")}')">Mark Sold Out</button>` : ''}
+    </div>
+    ${editingVehicleId===v.id ? await vehicleDetailsEditorHtml(v.id) : ''}
+  </div>`;
+}
+async function fleetListScreen(){
+  const canAssign = ["ops_manager","data_team","owner"].includes(currentUser.role);
+  const canRegister = ["ops_manager","data_team","owner","admin","site_supervisor","area_supervisor"].includes(currentUser.role);
+  let fleetLive = {vehicles:[]};
+  try{ fleetLive = await api('/fleet/live-tracking'); }catch(e){ fleetLive = {vehicles:[], error:e.message}; }
+  _lastFleetLiveVehicles = fleetLive.vehicles || [];
+  const liveById = {};
+  _lastFleetLiveVehicles.forEach(d=>{ liveById[d.vehicleId] = d; });
+  let activeTheftIds = new Set();
+  try{ const alerts = await api('/fuel-theft-alerts?status=active'); activeTheftIds = new Set(alerts.map(a=>a.vehicleId)); }catch(e){ /* non-essential for this list */ }
+
+  const activeVehicles = vehicles.filter(v=>!v.soldOut);
+  const rows = activeVehicles.map(v=>{
+    const d = liveById[v.id];
+    const status = trackingStatusOf(d);
+    const issues = vehicleIssueCount(v);
+    const health = activeTheftIds.has(v.id) ? 'alert' : (issues>0 ? 'issue' : 'good');
+    const belowMileage = !!(v.avgMileage && v.avgMileage.value!=null && v.standardMileage!=null && v.avgMileage.value < v.standardMileage);
+    return {v, d, status, issues, health, belowMileage};
+  });
+
+  const counts = {all:rows.length, moving:0, idling:0, parked:0, offline:0, no_gps:0, unassigned:0};
+  rows.forEach(r=>{ counts[r.status]++; if(!r.v.driverId) counts.unassigned++; });
+
+  const brands = [...new Set(activeVehicles.map(v=>v.make).filter(Boolean))].sort();
+  const seatings = [...new Set(activeVehicles.map(v=>v.seatingCapacity).filter(v=>v!=null))].sort((a,b)=>a-b);
+
+  const filtered = rows.filter(r=>{
+    const v = r.v;
+    if(fleetFilters.status!=='all'){
+      if(fleetFilters.status==='unassigned'){ if(v.driverId) return false; }
+      else if(r.status!==fleetFilters.status) return false;
+    }
+    if(fleetFilters.client && v.clientId!==fleetFilters.client) return false;
+    if(fleetFilters.area && v.siteId!==fleetFilters.area) return false;
+    if(fleetFilters.brand && v.make!==fleetFilters.brand) return false;
+    if(fleetFilters.seating && String(v.seatingCapacity)!==fleetFilters.seating) return false;
+    if(fleetFilters.supervisor && v.supervisorId!==fleetFilters.supervisor) return false;
+    if(fleetFilters.fuel && v.fuelType!==fleetFilters.fuel) return false;
+    if(fleetFilters.mileage==='below' && !r.belowMileage) return false;
+    if(fleetFilters.mileage==='ok' && r.belowMileage) return false;
+    return true;
+  }).filter(r=>matchesSearch('fleet_list', r.v.reg, r.v.make, r.v.model, r.v.vehicleType, r.v.route));
+
+  const chip = (key,label) => `<button type="button" class="filter-chip ${fleetFilters.status===key?'active':''}" onclick="setFleetFilter('status','${key}')">${label} <span class="count">${counts[key]||0}</span></button>`;
+  const filterSelect = (key, label, options) => `
+    <select onchange="setFleetFilter('${key}', this.value)" style="min-width:130px;">
+      <option value="">${label}</option>
+      ${options.map(([val,text])=>`<option value="${val}" ${fleetFilters[key]===String(val)?'selected':''}>${text}</option>`).join("")}
+    </select>`;
+  const filterBar = `
+  <div class="controls" style="flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+    ${filterSelect('client','Client (all)', meta.clients.map(c=>[c.id,c.name]))}
+    ${filterSelect('area','Area (all)', meta.sites.map(s=>[s.id,s.name]))}
+    ${filterSelect('brand','Brand (all)', brands.map(b=>[b,b]))}
+    ${filterSelect('seating','Seating (all)', seatings.map(s=>[s,s+' seats']))}
+    ${filterSelect('supervisor','Supervisor (all)', meta.users.filter(u=>u.role==='site_supervisor').map(u=>[u.id,u.name]))}
+    ${filterSelect('fuel','Fuel (all)', ["Diesel","Petrol","CNG","EV","Hybrid"].map(f=>[f,f]))}
+    ${filterSelect('mileage','Mileage (all)', [['below','Below standard'],['ok','At/above standard']])}
+    <button class="btn small secondary" onclick="resetFleetFilters()">Clear filters</button>
+  </div>`;
+
+  const rowHtml = async (r) => {
+    const v = r.v, d = r.d;
+    const speed = d && d.speedKmh!=null ? `${d.speedKmh} km/h` : '';
+    return `
+    <tr id="fleet-row-${v.id}"${vehicleRowStyleAttr(v)}>
+      <td><b>${v.reg}</b> ${quickEditBtnHtml(`toggleFleetRow('${v.id}')`, fleetExpandedVehicleId===v.id)}${avgMileageBadgeHtml(v)}${vehicleAssignmentWarningHtml(v)}</td>
+      <td>${v.make||'-'} ${v.model||''}</td>
+      <td>${v.vehicleType||'-'}</td>
+      <td>${v.fuelType||'-'}</td>
+      <td>${v.seatingCapacity!=null?v.seatingCapacity:'-'}</td>
+      <td>${v.siteId? siteName(v.siteId) : '<span class="muted">-</span>'}</td>
+      <td>${v.clientId? clientName(v.clientId) : '<span class="muted">Internal</span>'}</td>
+      <td>${v.driverId? driverName(v.driverId) : '<span class="muted">Unassigned</span>'}</td>
+      <td><span class="track-pill ${r.status}">${TRACKING_STATUS_LABEL[r.status]}</span>${speed?`<div class="muted" style="font-size:11px;">${speed}</div>`:''}</td>
+    </tr>
+    ${fleetExpandedVehicleId===v.id ? `<tr><td colspan="9">${await fleetRowDetailHtml(v.id, canAssign)}</td></tr>` : ''}`;
+  };
+  const rowsHtml = (await Promise.all(filtered.map(rowHtml))).join("");
+
+  return `
+  <div class="flex-between" style="margin-bottom:6px;flex-wrap:wrap;gap:8px;">
+    <h1 class="page-title" style="margin-bottom:0;">Fleet</h1>
+    <div class="controls">
+      <button class="btn small secondary" onclick="openFleetMapFullscreen(_lastFleetLiveVehicles)">🗺️ Map View</button>
+      <button class="btn small secondary" onclick="openFleetHealthTab('alerts')">🚨 Alerts, Fuel Theft &amp; Document Reminders</button>
+      ${canRegister ? `<button class="btn small" onclick="startVehicleWizard()">+ Register Vehicle</button>` : ''}
+    </div>
+  </div>
+  ${fleetLive.error? `<div class="banner error">${fleetLive.error}</div>` : ''}
+  <div class="filter-chip-row">
+    ${chip('all','All')}${chip('moving','Moving')}${chip('idling','Idling')}${chip('parked','Parked')}${chip('unassigned','Unassigned')}${chip('offline','Offline')}${chip('no_gps','No GPS')}
+  </div>
+  ${filterBar}
+  ${searchBoxHtml('fleet_list','Search by reg, make, model, route...', activeVehicles.length)}
+  ${searchResultCountHtml('fleet_list', filtered.length, activeVehicles.length)}
+  <div class="card">
+    <table><tr><th>Vehicle</th><th>Make/Model</th><th>Type</th><th>Fuel</th><th>Seats</th><th>Area</th><th>Client</th><th>Driver</th><th>Status</th></tr>
+    ${filtered.length ? rowsHtml : `<tr><td colspan="9" class="empty">No vehicles match these filters.</td></tr>`}
+    </table>
+  </div>
   `;
 }
 
@@ -7211,6 +7863,59 @@ function initTransportPinMap(officeLat, officeLng){
   setTimeout(()=>map.invalidateSize(), 150);
 }
 
+// ---- Page 1: minimal Overview (landing page for every role that has any
+// vehicle-related tab). Deliberately narrow - only what needs a daily
+// glance: how many documents need renewing soon, the live fleet map, BA
+// (breathalyzer) test failures today, open vehicle complaints, and any
+// temporary drivers currently in use. Everything else that used to live on
+// the old dense Owner Dashboard (compliance %, expense breakdowns, idle
+// vehicles, uniform issues, leave requests, etc.) is still real data - it
+// just lives on the specific screen it's actually about (Fleet, Payroll,
+// People, Reports) instead of being repeated here too. ----
+async function minimalOverviewScreen(){
+  const docRows = documentReminderRows();
+  const renewalsDue = docRows.filter(r=>r.daysLeft<30).length;
+  const breathFailList = dashboardMetricRows("breath_fail");
+  let repairRows = [];
+  try{ repairRows = await api("/repair-requests"); }catch(e){ /* non-essential for this glance */ }
+  const openComplaints = repairRows.filter(r=>["requested","assigned"].includes(r.status));
+  const tempDriverExpenses = expenses.filter(e=>e.category==="Temporary Driver" && e.status!=="rejected");
+
+  let fleetLive = {vehicles:[]};
+  try{ fleetLive = await api('/fleet/live-tracking'); }catch(e){ fleetLive = {vehicles:[], error:e.message}; }
+  const fleetMapCard = fleetMapCardHtml(fleetLive);
+  if(fleetLive.vehicles && fleetLive.vehicles.length) setTimeout(()=>renderFleetMapMarkers(fleetLive.vehicles), 0);
+
+  const tempRows = tempDriverExpenses.slice(0,8).map(e=>{
+    const v = e.vehicleId ? vehicles.find(x=>x.id===e.vehicleId) : null;
+    return `<tr>
+      <td>${e.submittedAt? new Date(e.submittedAt).toLocaleDateString('en-GB') : '-'}</td>
+      <td>${v? v.reg : '-'}</td>
+      <td>${(e.tempDriver&&e.tempDriver.name) || '-'}</td>
+      <td>${(e.tempDriver&&e.tempDriver.phone) || '-'}</td>
+      <td>₹${e.amount}</td>
+      <td><span class="badge ${e.status}">${(e.status||'').toUpperCase()}</span></td>
+    </tr>`;
+  }).join("");
+
+  return `
+  <h1 class="page-title">Overview</h1>
+  <div class="grid cols-3" style="margin-bottom:14px;">
+    <div class="kpi ${renewalsDue>0?'warn':'good'}" style="cursor:pointer" onclick="openFleetHealthTab('doc_reminders')" title="Click to see the full list">
+      <div class="num">${renewalsDue}</div><div class="label">Vehicle Renewals Due (30d)</div>
+    </div>
+    <div class="kpi ${breathFailList.length>0?'bad':'good'}"><div class="num">${breathFailList.length}</div><div class="label">BA Test Failed (today)</div></div>
+    <div class="kpi ${openComplaints.length>0?'warn':'good'}" style="cursor:pointer" onclick="switchTab('repairs')" title="Click to open Repair Requests">
+      <div class="num">${openComplaints.length}</div><div class="label">Open Vehicle Complaints</div>
+    </div>
+  </div>
+  ${fleetMapCard}
+  <div class="card">
+    <h2 class="section-title">Temporary Drivers ${tempDriverExpenses.length? `(${tempDriverExpenses.length})` : ''}</h2>
+    ${tempRows ? `<table><tr><th>Date</th><th>Vehicle</th><th>Temp Driver</th><th>Phone</th><th>Amount</th><th>Status</th></tr>${tempRows}</table>${tempDriverExpenses.length>8?`<div class="muted" style="margin-top:6px;">+ ${tempDriverExpenses.length-8} more - see Reports for the full history.</div>`:''}` : `<div class="empty">No temporary drivers arranged recently.</div>`}
+  </div>
+  `;
+}
 async function ownerDashboardScreen(){
   // Always land on the dashboard with the Live Fleet Map showing every
   // vehicle - any Running/Idle/Parked filter picked on a previous visit
