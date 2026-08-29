@@ -1271,18 +1271,18 @@ function tabsForInner(role){
   // request, they (plus Data Team and Owner) are the only roles that can
   // approve odometer/fuel readings. See ODOMETER_VERIFY_ROLES and
   // FUEL_CROSS_VERIFY_ROLES in server.js for the matching backend gate.
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["fleet_list","Fleet"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["fleet_list","Fleet"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["repairs","Repair Requests"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["fleet_list","Fleet"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   // Operations Manager deliberately has no odometer_verify/fuel_verify tab -
   // per the Owner's explicit request, Ops Manager has no role in approving
   // odometer or fuel readings (they previously had odometer_verify; removed
   // on request).
-  if(role==="ops_manager") return [["operations","Operations"],["overview","Overview"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="data_team") return [["corrections","Corrections"],["overview","Overview"],["expenses_view","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["overview","Overview"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["payroll","Payroll"]];
+  if(role==="ops_manager") return [["operations","Operations"],["overview","Overview"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="data_team") return [["corrections","Corrections"],["overview","Overview"],["expenses_view","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="owner") return [["overview","Overview"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="admin") return [["overview","Overview"],["fleet_list","Fleet"],["organisation","Organisation"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="admin") return [["overview","Overview"],["fleet_list","Fleet"],["organisation","Organisation"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
   // Billing - new role, per the Owner's explicit request: the only staff
   // tier (besides Owner) that can see/upload a client's GST/PAN/bank/
   // agreement documents on the Organisation page (see CLIENT_FINANCE_ROLES
@@ -1316,7 +1316,7 @@ const TAB_GROUP_MAP = {
   odometer_verify:"fleet", fuel_verify:"fleet", fleet_health:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
   subvendors:"fleet", hierarchy:"fleet",
   trips:"trips", my_attendance:"trips", attendance:"trips", my_expenses:"trips", queue:"trips",
-  expenses:"finance", expenses_view:"finance", payroll:"finance", backup:"finance",
+  expenses:"finance", expenses_view:"finance", payroll:"finance", backup:"finance", kiosk:"finance",
   people:"people", approvals:"people", corrections:"people", audit:"people", organisation:"people",
   reports:"tools", smart_assistant:"tools", letterhead:"tools",
   dashboard:"tools", admin_dashboard:"tools", operations:"tools",
@@ -1508,12 +1508,13 @@ async function routeView(){
   if(view.name==="change_password") return changePasswordScreen();
   if(view.name==="fuel_graph") return fuelGraphScreen(view.vehicleId);
   if(tab==="payroll") return payrollScreen();
+  if(tab==="kiosk") return view.name==="generate_payslip_wizard" ? addPayslipWizardScreen() : kioskScreen();
   if(tab==="odometer_verify") return odometerVerificationScreen();
   if(tab==="fuel_verify") return fuelVerificationScreen();
   if(tab==="gps_link") return gpsLinkScreen();
   if(tab==="fleet_health") return view.name==="vehicle_tracking_detail" ? vehicleTrackingDetailScreen(view.vehicleId) : fleetHealthScreen();
   if(tab==="overview") return minimalOverviewScreen();
-  if(tab==="fleet_list") return view.name==="vehicle_tracking_detail" ? vehicleTrackingDetailScreen(view.vehicleId) : fleetListScreen();
+  if(tab==="fleet_list") return view.name==="vehicle_tracking_detail" ? vehicleTrackingDetailScreen(view.vehicleId) : (view.name==="add_vehicle" ? addVehicleWizardScreen() : fleetListScreen());
   if(tab==="add_vehicle") return addVehicleWizardScreen();
   if(tab==="organisation") return view.name==="add_client_wizard" ? addClientWizardScreen() : organisationScreen();
   if(tab==="transport") return transportScreen();
@@ -7762,6 +7763,212 @@ async function clientWizardStep3Submit(){
     clientWizard.done = true;
   }catch(e){ alert(e.message); }
   clientWizard.busy = false; await renderMain();
+}
+
+// ---- Kiosk (Payslips + Client Billing) ----
+// Two things HR/Ops/Data Team/Owner check on repeatedly, put on one page:
+// generating a payslip (walked through as a wizard, per the Owner's "wizard
+// wherever required" instruction) and the Kiosk billing panel - computed
+// client billing runs (real km/trip usage x the client's package rate, see
+// computeClientBillingUsage() in server.js) that need sign-off from both the
+// relevant Site Supervisor(s) and Data Team before they're approved.
+let kioskTab = 'payslips';
+function setKioskTab(t){ kioskTab = t; renderMain(); }
+async function kioskScreen(){
+  return `
+  <h1 class="page-title">Kiosk</h1>
+  <div class="filter-chip-row">
+    <button type="button" class="filter-chip ${kioskTab==='payslips'?'active':''}" onclick="setKioskTab('payslips')">Payslips</button>
+    <button type="button" class="filter-chip ${kioskTab==='billing'?'active':''}" onclick="setKioskTab('billing')">Client Billing</button>
+  </div>
+  ${kioskTab==='payslips' ? await kioskPayslipsHtml() : await kioskBillingHtml()}
+  `;
+}
+async function kioskPayslipsHtml(){
+  const summary = await fetchPayrollSummary(payrollMonth);
+  const rows = summary ? summary.rows : [];
+  return `
+  <div class="flex-between" style="margin-bottom:8px;flex-wrap:wrap;gap:8px;">
+    <div class="f"><label>Month</label><input type="month" value="${payrollMonth}" onchange="setPayrollMonth(this.value)" /></div>
+    ${canEditPayrollFrontend() ? `<button class="btn small" onclick="startPayslipWizard()">+ Generate Payslip</button>` : ''}
+  </div>
+  ${await myPayslipCardHtml()}
+  ${rows.length ? `
+  <div class="card">
+    <table><tr><th>Name</th><th>Type</th><th>Net Pay</th><th></th></tr>
+    ${rows.map(r=>`
+      <tr>
+        <td>${r.name}</td><td>${r.subLabel}</td>
+        <td>${r.hasProfile?money(r.netPay):'<span class="muted">No formula set</span>'}</td>
+        <td><button class="btn small secondary" onclick="downloadPayslip('${r.personType}','${r.personId}','pdf')">PDF</button></td>
+      </tr>`).join("")}
+    </table>
+  </div>` : ''}`;
+}
+const PAYSLIP_WIZARD_STEPS = [
+  {title:"Period & Employee", sub:"Choose person & month"},
+  {title:"Earnings & Deductions", sub:"Review one-time entries"},
+  {title:"Review & Generate", sub:"Final payslip"},
+];
+let payslipWizard = {step:0, busy:false, done:false, personType:'', personId:'', month:'', name:''};
+function startPayslipWizard(){ payslipWizard = {step:0, busy:false, done:false, personType:'', personId:'', month: payrollMonth, name:''}; goto('generate_payslip_wizard'); }
+async function addPayslipWizardScreen(){
+  if(payslipWizard.done){
+    return `
+    <div class="wizard-success">
+      <div class="icon">✓</div>
+      <h2>Payslip Ready</h2>
+      <p>${payslipWizard.name}'s payslip for ${payslipWizard.month} is ready.</p>
+      <div class="controls" style="justify-content:center;margin-top:14px;">
+        <button class="btn small secondary" onclick="downloadPayslip('${payslipWizard.personType}','${payslipWizard.personId}','pdf')">PDF</button>
+        <button class="btn small secondary" onclick="downloadPayslip('${payslipWizard.personType}','${payslipWizard.personId}','csv')">CSV</button>
+        <button class="btn small secondary" onclick="downloadPayslip('${payslipWizard.personType}','${payslipWizard.personId}','xlsx')">Excel</button>
+      </div>
+      <button class="btn" style="margin-top:14px;" onclick="goto('kiosk')">Back to Kiosk</button>
+    </div>`;
+  }
+  const step = payslipWizard.step;
+  const body = step===0 ? await payslipWizardStep1Html() : step===1 ? await payslipWizardStep2Html() : await payslipWizardStep3Html();
+  return `
+  <h1 class="page-title">Generate Payslip</h1>
+  ${stepperHtml(PAYSLIP_WIZARD_STEPS, step)}
+  <div class="card">${body}</div>
+  `;
+}
+async function payslipWizardStep1Html(){
+  let people = [];
+  try{ people = await api("/payroll/people"); }catch(e){ people = []; }
+  return `
+  <div class="grid cols-2">
+    <div class="f"><label>Employee / Driver *</label><select id="pw_person" required>
+      <option value="">- select -</option>
+      ${people.map(p=>`<option value="${p.personType}:${p.personId}" ${payslipWizard.personType===p.personType&&payslipWizard.personId===p.personId?'selected':''}>${p.name} (${p.subLabel})</option>`).join("")}
+    </select></div>
+    <div class="f"><label>Month *</label><input type="month" id="pw_month" value="${payslipWizard.month||payrollMonth}" required /></div>
+  </div>
+  <div class="wizard-actions">
+    <span></span>
+    <button class="btn" onclick="payslipWizardStep1Next()">Next &rsaquo;</button>
+  </div>`;
+}
+function payslipWizardStep1Next(){
+  const sel = document.getElementById('pw_person').value;
+  const month = document.getElementById('pw_month').value;
+  if(!sel || !month){ alert("Employee and Month are required."); return; }
+  const [personType, personId] = sel.split(':');
+  payslipWizard.personType = personType; payslipWizard.personId = personId; payslipWizard.month = month;
+  payrollMonth = month;
+  payslipWizard.step = 1;
+  renderMain();
+}
+async function payslipWizardStep2Html(){
+  const [profile, payslip] = await Promise.all([
+    fetchPayrollProfile(payslipWizard.personType, payslipWizard.personId),
+    fetchPayslip(payslipWizard.personType, payslipWizard.personId, payslipWizard.month),
+  ]);
+  const canEdit = canEditPayrollFrontend();
+  return `
+  <h3 style="margin-top:0;">${payslip?payslip.name:''} - ${payslipWizard.month}</h3>
+  ${payslipTableHtml(payslip)}
+  ${canEdit ? `
+  <h3>Add One-Time Entry</h3>
+  <form class="inline-form" onsubmit="return addPayslipWizardAdhoc(event)">
+    <div class="f"><label>Category</label><select id="pw_adhoc_cat">${PAYROLL_ADHOC_CATEGORIES.map(c=>`<option value="${c.key}">${c.label}</option>`).join("")}</select></div>
+    <div class="f"><label>Amount</label><input type="number" min="1" id="pw_adhoc_amt" required style="width:100px" /></div>
+    <div class="f"><label>Note</label><input type="text" id="pw_adhoc_note" style="width:160px" /></div>
+    <button class="btn small" type="submit">+ Add</button>
+  </form>
+  ` : (!profile ? `<div class="muted">No payroll formula set up for this person yet - only HR can add one.</div>` : '')}
+  <div class="wizard-actions">
+    <button class="btn small secondary" type="button" onclick="payslipWizard.step=0; renderMain();">&lsaquo; Back</button>
+    <button class="btn" onclick="payslipWizard.step=2; renderMain();">Next &rsaquo;</button>
+  </div>`;
+}
+async function addPayslipWizardAdhoc(evt){
+  evt.preventDefault();
+  const category = document.getElementById('pw_adhoc_cat').value;
+  const amount = document.getElementById('pw_adhoc_amt').value;
+  const note = document.getElementById('pw_adhoc_note').value;
+  try{
+    await api("/payroll/adhoc", {method:"POST", body: JSON.stringify({personType: payslipWizard.personType, personId: payslipWizard.personId, month: payslipWizard.month, category, amount: Number(amount), note})});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function payslipWizardStep3Html(){
+  const payslip = await fetchPayslip(payslipWizard.personType, payslipWizard.personId, payslipWizard.month);
+  payslipWizard.name = payslip ? payslip.name : '';
+  return `
+  <h3 style="margin-top:0;">Final Payslip - ${payslipWizard.name} (${payslipWizard.month})</h3>
+  ${payslipTableHtml(payslip)}
+  <div class="wizard-actions">
+    <button class="btn small secondary" type="button" onclick="payslipWizard.step=1; renderMain();">&lsaquo; Back</button>
+    <button class="btn" onclick="finishPayslipWizard()">Finish</button>
+  </div>`;
+}
+function finishPayslipWizard(){ payslipWizard.done = true; renderMain(); }
+
+// ---- Kiosk: Client Billing panel ----
+let kioskBillingClientId = null;
+function setKioskBillingClient(id){ kioskBillingClientId = id; renderMain(); }
+async function kioskBillingHtml(){
+  if(!meta.clients.length) return `<div class="card"><div class="empty">No clients onboarded yet - add one in <a onclick="switchTab('organisation')" style="cursor:pointer;">Organisation</a> first.</div></div>`;
+  const canGenerate = ["ops_manager","data_team","owner"].includes(currentUser.role);
+  const clientId = kioskBillingClientId || meta.clients[0].id;
+  const client = meta.clients.find(c=>c.id===clientId);
+  let runs = [];
+  try{ runs = await api(`/clients/${clientId}/billing-runs`); }catch(e){ runs = []; }
+  runs = runs.slice().sort((a,b)=> b.generatedAt.localeCompare(a.generatedAt));
+  return `
+  <div class="f" style="margin-bottom:10px;max-width:280px;"><label>Client</label><select onchange="setKioskBillingClient(this.value)">
+    ${meta.clients.map(c=>`<option value="${c.id}" ${clientId===c.id?'selected':''}>${c.name}</option>`).join("")}
+  </select></div>
+  ${!client.package.billingModel || !client.package.rateAmount ? `<div class="banner" style="margin-bottom:10px;">This client has no billing model/rate set yet - add one from <a onclick="switchTab('organisation')" style="cursor:pointer;">Organisation</a> to get a computed amount (usage will still be tracked at ₹0).</div>` : ''}
+  ${canGenerate ? `
+  <div class="card">
+    <h2 class="section-title">Generate Billing Run</h2>
+    <form class="inline-form" onsubmit="return generateBillingRun(event,'${clientId}')">
+      <div class="f"><label>From</label><input type="date" id="kb_from" required /></div>
+      <div class="f"><label>To</label><input type="date" id="kb_to" required /></div>
+      <button class="btn small" type="submit">Generate</button>
+    </form>
+  </div>` : ''}
+  <div class="card">
+    <h2 class="section-title">Billing Runs</h2>
+    <table><tr><th>Period</th><th>Usage</th><th>Amount</th><th>Status</th><th></th></tr>
+    ${runs.map(r=>billingRunRowHtml(r)).join("") || `<tr><td colspan="5" class="empty">No billing runs generated yet.</td></tr>`}
+    </table>
+  </div>`;
+}
+function billingRunRowHtml(r){
+  const needsMySupervisorApproval = currentUser.role==='site_supervisor' && !r.supervisorApprovals.some(a=>a.supervisorId===currentUser.id);
+  const needsDataTeamApproval = currentUser.role==='data_team' && !r.dataTeamApproval;
+  const canApprove = needsMySupervisorApproval || needsDataTeamApproval;
+  return `<tr>
+    <td>${r.fromDate} &rarr; ${r.toDate}</td>
+    <td>${r.usage.totals.km} km, ${r.usage.totals.trips} trips, ${r.usage.totals.daysOperated} days</td>
+    <td>${money(r.computedAmount)}</td>
+    <td><span class="pill" style="background:${r.status==='approved'?'var(--accent-light)':'#fff3e0'};color:${r.status==='approved'?'var(--accent-dark)':'#b45309'};">${r.status==='approved'?'Approved':'Pending Approval'}</span>
+      <div class="muted" style="font-size:11px;margin-top:2px;">${r.dataTeamApproval?'Data Team ✓':'Data Team pending'} &middot; ${r.supervisorApprovals.length} supervisor(s) approved</div>
+    </td>
+    <td>${canApprove ? `<button class="btn small" onclick="approveBillingRun('${r.id}')">Approve</button>` : ''}</td>
+  </tr>`;
+}
+async function generateBillingRun(evt, clientId){
+  evt.preventDefault();
+  const fromDate = document.getElementById('kb_from').value;
+  const toDate = document.getElementById('kb_to').value;
+  try{
+    await api(`/clients/${clientId}/billing-runs`, {method:"POST", body: JSON.stringify({fromDate, toDate})});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function approveBillingRun(runId){
+  try{
+    await api(`/billing-runs/${runId}/approve`, {method:"POST"});
+    await renderMain();
+  }catch(e){ alert(e.message); }
 }
 
 async function fleetListScreen(){

@@ -380,6 +380,11 @@ function backfillDefaults() {
         workingDaysPerMonth: null,
         rotationType: "", // "free" (vehicle rotates across clients/jobs) or "on_call" (dedicated to this client)
         notes: "",
+        // ₹ rate applied to a Kiosk billing run - per km (km_based), per
+        // trip/route run (trip_based/route_based), or a flat amount for the
+        // whole period (package_capped). Blank until Ops Manager/Data Team/
+        // Owner sets it from the Organisation page.
+        rateAmount: null,
       };
     } else {
       if (c.package.vehicleCount === undefined) c.package.vehicleCount = 0;
@@ -390,6 +395,7 @@ function backfillDefaults() {
       if (c.package.workingDaysPerMonth === undefined) c.package.workingDaysPerMonth = null;
       if (c.package.rotationType === undefined) c.package.rotationType = "";
       if (c.package.notes === undefined) c.package.notes = "";
+      if (c.package.rateAmount === undefined) c.package.rateAmount = null;
     }
     if (c.onboardingComplete === undefined) c.onboardingComplete = !!(c.package && c.package.rotationType); // pre-existing clients count as already onboarded
     if (c.createdAt === undefined) c.createdAt = null;
@@ -558,6 +564,13 @@ function backfillDefaults() {
   if (!Array.isArray(db.trips)) db.trips = [];
   if (!Array.isArray(db.driverLocationLogs)) db.driverLocationLogs = [];
   if (!db.payrollApprovals) db.payrollApprovals = {};
+  // Kiosk - client billing runs: a computed, dated usage+amount record per
+  // client, generated on demand from real km/trip data (see
+  // computeClientBillingUsage() near the Kiosk endpoints below), that must
+  // be signed off by both the relevant Site Supervisor(s) and Data Team
+  // before it's considered approved/invoiceable - see the Owner's explicit
+  // instruction on the Kiosk billing panel.
+  if (!Array.isArray(db.clientBillingRuns)) db.clientBillingRuns = [];
   (db.trips || []).forEach((t) => {
     // pickupPoint/dropPoint are what the driver app's Current Trip tab
     // actually displays now - older trips (from before this existed) only
@@ -2513,6 +2526,7 @@ function newClientRecord(name) {
       workingDaysPerMonth: null,
       rotationType: "",
       notes: "",
+      rateAmount: null,
     },
     onboardingComplete: false,
     createdAt: nowIso(),
@@ -2647,7 +2661,7 @@ app.patch(
   h(async (req, res) => {
     const client = db.clients.find((c) => c.id === req.params.id);
     if (!client) return res.status(404).json({ error: "Client not found." });
-    const { vehicleCount, seatingCapacities, billingModel, kmCap, workingDaysPerWeek, workingDaysPerMonth, rotationType, notes, markOnboarded } = req.body || {};
+    const { vehicleCount, seatingCapacities, billingModel, kmCap, workingDaysPerWeek, workingDaysPerMonth, rotationType, notes, markOnboarded, rateAmount } = req.body || {};
     if (vehicleCount !== undefined) client.package.vehicleCount = Math.max(0, Number(vehicleCount) || 0);
     if (Array.isArray(seatingCapacities)) client.package.seatingCapacities = seatingCapacities.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0);
     if (billingModel !== undefined) {
@@ -2666,6 +2680,7 @@ app.patch(
       client.package.rotationType = rotationType || "";
     }
     if (notes !== undefined) client.package.notes = notes || "";
+    if (rateAmount !== undefined) client.package.rateAmount = rateAmount === null || rateAmount === "" ? null : Number(rateAmount);
     if (markOnboarded) client.onboardingComplete = true;
     await audit(req.user, "update_client_package", `${req.user.name} updated the contracted package for ${client.name}`);
     res.json(publicClient(client, req.user.role));
@@ -2682,6 +2697,178 @@ app.get(
     const client = db.clients.find((c) => c.id === req.params.id);
     if (!client) return res.status(404).json({ error: "Client not found." });
     res.json(publicClient(client, req.user.role));
+  })
+);
+
+// ---------- KIOSK - CLIENT BILLING RUNS ----------
+// Computes real vehicle-running usage (km driven, trips run, days operated)
+// for a client over a date range, from the same driverShifts/trips data the
+// rest of the app already uses (see accrueKmIncomeIfNeeded() above for the
+// existing per-shift km pattern this mirrors). A shift only records
+// driverId, not vehicleId, so - same simplification the subvendor income
+// engine already makes - usage is attributed to whichever vehicle each
+// driver is CURRENTLY assigned to. That's a real limitation for a driver
+// who has since moved to a different vehicle, but this fleet's
+// driver-vehicle pairings are long-lived in practice (see visibleVehiclesFor
+// and friends elsewhere in this file, which make the same assumption).
+function computeClientBillingUsage(clientId, fromDate, toDate) {
+  const clientVehicles = db.vehicles.filter((v) => v.clientId === clientId && !v.soldOut);
+  const vehicleBreakdown = clientVehicles.map((v) => {
+    const shifts = v.driverId
+      ? db.driverShifts.filter((s) => {
+          if (s.driverId !== v.driverId) return false;
+          const d = (s.odometerCloseAt || s.loginAt || "").slice(0, 10);
+          return d >= fromDate && d <= toDate;
+        })
+      : [];
+    let km = 0;
+    let daysOperated = 0;
+    shifts.forEach((s) => {
+      if (typeof s.odometerOpen === "number" && typeof s.odometerClose === "number") {
+        const dist = s.odometerClose - s.odometerOpen;
+        if (dist > 0) {
+          km += dist;
+          daysOperated++;
+        }
+      }
+    });
+    const trips = db.trips.filter((t) => t.vehicleId === v.id && t.date >= fromDate && t.date <= toDate).length;
+    return {
+      vehicleId: v.id,
+      reg: v.reg,
+      supervisorId: v.supervisorId || null,
+      driverId: v.driverId || null,
+      km: Math.round(km * 10) / 10,
+      trips,
+      daysOperated,
+    };
+  });
+  const totals = vehicleBreakdown.reduce(
+    (acc, r) => {
+      acc.km += r.km;
+      acc.trips += r.trips;
+      acc.daysOperated += r.daysOperated;
+      return acc;
+    },
+    { km: 0, trips: 0, daysOperated: 0 }
+  );
+  totals.km = Math.round(totals.km * 10) / 10;
+  return { vehicleBreakdown, totals };
+}
+// Turns the computed usage into a ₹ amount using the client's package rate
+// - the unit the rate is "per" depends on the client's chosen billingModel.
+// package_capped is a flat amount for the period (the whole point of a
+// package is the price doesn't move with usage, up to the km cap) - so it
+// ignores usage entirely once a rate is set.
+function computeClientBillingAmount(client, usage) {
+  const rate = Number(client.package.rateAmount) || 0;
+  if (!rate) return 0;
+  const model = client.package.billingModel;
+  if (model === "km_based") return Math.round(rate * usage.totals.km);
+  if (model === "trip_based" || model === "route_based") return Math.round(rate * usage.totals.trips);
+  if (model === "package_capped") return Math.round(rate);
+  return 0;
+}
+const BILLING_RUN_GENERATE_ROLES = ADMIN_ROLES; // ops_manager, data_team, owner
+// A billing run needs sign-off from every Site Supervisor whose vehicle(s)
+// actually contributed usage to it (an uninvolved supervisor has nothing to
+// verify), plus Data Team - per the Owner's explicit instruction that both
+// must approve before a run counts as invoiceable.
+function billingRunNeededSupervisorIds(run) {
+  return new Set(run.usage.vehicleBreakdown.filter((v) => v.supervisorId && (v.km > 0 || v.trips > 0)).map((v) => v.supervisorId));
+}
+function billingRunIsFullyApproved(run) {
+  const needed = billingRunNeededSupervisorIds(run);
+  const approved = new Set(run.supervisorApprovals.map((a) => a.supervisorId));
+  const allSupervisorsIn = [...needed].every((id) => approved.has(id));
+  return !!run.dataTeamApproval && allSupervisorsIn;
+}
+app.post(
+  "/api/clients/:id/billing-runs",
+  requireAuth,
+  requireRole(...BILLING_RUN_GENERATE_ROLES),
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.params.id);
+    if (!client) return res.status(404).json({ error: "Client not found." });
+    const { fromDate, toDate } = req.body || {};
+    if (!fromDate || !toDate || fromDate > toDate) return res.status(400).json({ error: "A valid fromDate/toDate range is required." });
+    const usage = computeClientBillingUsage(client.id, fromDate, toDate);
+    const run = {
+      id: uid("cbr"),
+      clientId: client.id,
+      clientName: client.name,
+      fromDate,
+      toDate,
+      billingModel: client.package.billingModel,
+      rateAmount: Number(client.package.rateAmount) || 0,
+      usage,
+      computedAmount: 0,
+      status: "pending_approval",
+      supervisorApprovals: [],
+      dataTeamApproval: null,
+      generatedBy: req.user.id,
+      generatedByName: req.user.name,
+      generatedAt: nowIso(),
+    };
+    run.computedAmount = computeClientBillingAmount(client, usage);
+    db.clientBillingRuns.push(run);
+    await audit(req.user, "generate_client_billing_run", `${req.user.name} generated a billing run for ${client.name} (${fromDate} to ${toDate}, ~₹${run.computedAmount})`);
+    res.json(run);
+  })
+);
+// Every role that can see the Kiosk billing panel: the two approvers
+// (site_supervisor scoped to their own vehicles below, data_team) plus the
+// people who generate runs in the first place.
+app.get(
+  "/api/clients/:id/billing-runs",
+  requireAuth,
+  requireRole(...ADMIN_ROLES, "billing", "site_supervisor"),
+  h(async (req, res) => {
+    let runs = db.clientBillingRuns.filter((r) => r.clientId === req.params.id);
+    if (req.user.role === "site_supervisor") {
+      runs = runs.filter((r) => billingRunNeededSupervisorIds(r).has(req.user.id));
+    }
+    res.json(runs);
+  })
+);
+// Everything still awaiting the current user's own sign-off, across every
+// client - this is what the Kiosk's "Needs Your Approval" list is built
+// from, so a Site Supervisor or Data Team member doesn't have to go
+// client-by-client looking for pending runs.
+app.get(
+  "/api/billing-runs/pending-approvals",
+  requireAuth,
+  requireRole("site_supervisor", "data_team"),
+  h(async (req, res) => {
+    let runs = db.clientBillingRuns.filter((r) => r.status !== "approved");
+    if (req.user.role === "site_supervisor") {
+      runs = runs.filter((r) => billingRunNeededSupervisorIds(r).has(req.user.id) && !r.supervisorApprovals.some((a) => a.supervisorId === req.user.id));
+    } else {
+      runs = runs.filter((r) => !r.dataTeamApproval);
+    }
+    res.json(runs);
+  })
+);
+app.post(
+  "/api/billing-runs/:id/approve",
+  requireAuth,
+  requireRole("site_supervisor", "data_team"),
+  h(async (req, res) => {
+    const run = db.clientBillingRuns.find((r) => r.id === req.params.id);
+    if (!run) return res.status(404).json({ error: "Billing run not found." });
+    if (req.user.role === "site_supervisor") {
+      if (!billingRunNeededSupervisorIds(run).has(req.user.id)) {
+        return res.status(403).json({ error: "None of your vehicles contributed usage to this billing run." });
+      }
+      if (!run.supervisorApprovals.some((a) => a.supervisorId === req.user.id)) {
+        run.supervisorApprovals.push({ supervisorId: req.user.id, name: req.user.name, approvedAt: nowIso() });
+      }
+    } else {
+      run.dataTeamApproval = { userId: req.user.id, name: req.user.name, approvedAt: nowIso() };
+    }
+    run.status = billingRunIsFullyApproved(run) ? "approved" : "pending_approval";
+    await audit(req.user, "approve_client_billing_run", `${req.user.name} approved the ${run.clientName} billing run (${run.fromDate} to ${run.toDate})${run.status === "approved" ? " - now fully approved" : ""}`);
+    res.json(run);
   })
 );
 
