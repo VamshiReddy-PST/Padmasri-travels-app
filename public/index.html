@@ -9,7 +9,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@1,500;1,600;1,700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.32.0/plotly.min.js"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
@@ -6518,6 +6517,28 @@ async function fuelGraphScreen(vehicleId){
     };
   }
 
+  // Day-by-day km run vs fuel used, for the "Total Running KM vs Fuel
+  // Utilised" bar chart below - built from the same points already fetched
+  // for the line graph, no extra request needed. A day only counts if it
+  // has both a first and last odometer/fuel reading (need two points to get
+  // a delta), same "complete cycle" honesty rule the fill-to-fill mileage
+  // engine already follows.
+  const dailyBuckets = (() => {
+    const byDay = {};
+    points.forEach(p=>{
+      const day = p.ts.slice(0,10);
+      if(!byDay[day]) byDay[day] = {fuel:[], odo:[]};
+      if(p.fuel!=null) byDay[day].fuel.push(p.fuel);
+      if(p.odometer!=null) byDay[day].odo.push(p.odometer);
+    });
+    return Object.keys(byDay).sort().map(day=>{
+      const d = byDay[day];
+      const km = d.odo.length>=2 ? Math.round((d.odo[d.odo.length-1]-d.odo[0])*10)/10 : null;
+      const fuelUsed = d.fuel.length>=2 ? Math.round((d.fuel[0]-d.fuel[d.fuel.length-1])*10)/10 : null;
+      return {day, km, fuelUsed};
+    }).filter(b=>b.km!=null || b.fuelUsed!=null);
+  })();
+
   const spatialPoints = points.filter(p=>p.fuel!=null && p.odometer!=null);
 
   // Fill-to-fill average mileage for this same window - the objective,
@@ -6552,11 +6573,14 @@ async function fuelGraphScreen(vehicleId){
     </div>`;
   }
 
-  setTimeout(()=>{ drawFuelChart(points, {showFuel, showOdo, fillMask, theftMask}); drawFuel3D(spatialPoints); }, 0);
+  setTimeout(()=>{ drawFuelChart(points, {showFuel, showOdo, fillMask, theftMask}); drawKmFuelChart(dailyBuckets); }, 0);
 
   return `
   <button class="btn secondary small" onclick="goto('vehicle_status',{vehicleId:'${v.id}'})">&larr; Back to ${v.reg}</button>
-  <h1 class="page-title">⛽ ${v.reg} - Fuel Pattern</h1>
+  <div class="flex-between" style="flex-wrap:wrap;gap:8px;">
+    <h1 class="page-title" style="margin-bottom:0;">⛽ ${v.reg} - Fuel Pattern</h1>
+    <button class="btn small secondary" onclick="downloadFuelGraphCsv('${v.id}')">⬇ Download Data (CSV)</button>
+  </div>
   <div class="card">
     <div class="grid cols-4">
       <div class="field"><label>From date</label><input type="date" id="fg_from" value="${from}" max="${today}" /></div>
@@ -6603,12 +6627,16 @@ async function fuelGraphScreen(vehicleId){
         <div class="kpi"><div class="num">${avgMileage.completeCycleCount}</div><div class="label">Complete fill-to-fill cycles</div></div>
       </div>` : `<div class="empty">${(avgMileage && avgMileage.note) || 'Not enough refuel events detected in this window yet for a reliable average - needs at least 2 full-ups.'}</div>`}
   </div>
-  ${spatialPoints.length>1 ? `
   <div class="card">
-    <h2 class="section-title">3D view: fuel &times; odometer &times; time</h2>
-    <p class="muted" style="margin-bottom:10px;">Drag to rotate. Each point is a reading - height is the fuel level, depth is the odometer reading, and the line runs forward through time; hover a point for the exact values.</p>
-    <div id="fuelGraph3d" style="height:420px;"></div>
-  </div>` : ""}
+    <h2 class="section-title">Total running kilometers vs fuel utilised</h2>
+    <p class="muted" style="margin-bottom:10px;">Day by day across ${fmtDMY(from)} to ${fmtDMY(to)} - kilometers run (odometer delta) against fuel used (net consumption) for that same day.</p>
+    ${dailyBuckets.length ? `<canvas id="fuelGraphKmFuelCanvas" height="90"></canvas>` :
+      `<div class="empty">Not enough daily readings in this window to chart kilometers vs fuel yet.</div>`}
+  </div>
+  <div class="card">
+    <h2 class="section-title">Harsh braking events</h2>
+    <div class="empty">Not available - this requires Fleetx driver-behavior/camera data, which isn't integrated for this fleet yet.</div>
+  </div>
   `;
 }
 function loadFuelGraph(vehicleId){
@@ -6676,29 +6704,47 @@ function drawFuelChart(points, opts){
     }
   });
 }
-// 3D scatter (Plotly) - x is time, y is odometer, z is fuel level, so the
-// line traces how fuel behaves against distance travelled as the trip
-// progresses. A flat/rising wall while the odometer keeps climbing is
-// normal consumption; a sudden vertical drop with the odometer barely
-// moving is exactly the pattern a theft or a stop-and-siphon leaves behind.
-function drawFuel3D(points){
-  const el = document.getElementById('fuelGraph3d');
-  if(!el || typeof Plotly==='undefined') return;
-  Plotly.newPlot(el, [{
-    type: 'scatter3d', mode: 'lines+markers',
-    x: points.map(p=>p.ts), y: points.map(p=>p.odometer), z: points.map(p=>p.fuel),
-    text: points.map(p=>`${new Date(p.ts).toLocaleString('en-IN')}<br>Fuel: ${p.fuel} L<br>Odometer: ${p.odometer} km`),
-    hoverinfo: 'text',
-    marker: { size: 3, color: points.map(p=>p.fuel), colorscale: 'YlOrRd', reversescale: true },
-    line: { color: '#4C6A2B', width: 3 },
-  }], {
-    margin: { l:0, r:0, b:0, t:10 },
-    scene: {
-      xaxis: { title: 'Time', type: 'date' },
-      yaxis: { title: 'Odometer (km)' },
-      zaxis: { title: 'Fuel (L)' },
+// 2D bar chart - kilometers run vs fuel used, one bar pair per day in the
+// selected window. Replaces the old 3D Plotly scatter per the "graphical
+// representations only, no 3D maps" requirement.
+let _kmFuelChart = null;
+function drawKmFuelChart(dailyBuckets){
+  const el = document.getElementById('fuelGraphKmFuelCanvas');
+  if(!el) return;
+  if(_kmFuelChart){ _kmFuelChart.destroy(); _kmFuelChart = null; }
+  const labels = dailyBuckets.map(b=>fmtDMY(b.day));
+  _kmFuelChart = new Chart(el, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Kilometers run', yAxisID: 'yKm', data: dailyBuckets.map(b=>b.km), backgroundColor: '#b8860b' },
+        { label: 'Fuel utilised (L)', yAxisID: 'yFuel', data: dailyBuckets.map(b=>b.fuelUsed), backgroundColor: '#00A3A6' },
+      ],
     },
-  }, { displayModeBar: false, responsive: true });
+    options: {
+      scales: {
+        yKm: { beginAtZero: true, position: 'left', title: { display:true, text:'Kilometers' } },
+        yFuel: { beginAtZero: true, position: 'right', title: { display:true, text:'Fuel (L)' }, grid: { drawOnChartArea: false } },
+        x: { ticks: { maxTicksLimit: 10 } },
+      },
+    }
+  });
+}
+// Client-side CSV export of the currently-loaded window's readings - no
+// backend call needed since the data is already fetched into _fuelGraphPoints.
+function downloadFuelGraphCsv(vehicleId){
+  const points = _fuelGraphPoints || [];
+  if(!points.length){ alert('No data loaded for this window yet.'); return; }
+  const rows = [['Timestamp','Fuel (L)','Odometer (km)']];
+  points.forEach(p=>rows.push([p.ts, p.fuel!=null?p.fuel:'', p.odometer!=null?p.odometer:'']));
+  const csv = rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `fuel-data-${vehicleId}-${view.from||''}-to-${view.to||''}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ---------- Collapsible sections/cards (used app-wide) ----------
