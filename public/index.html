@@ -1519,7 +1519,7 @@ async function routeView(){
   if(tab==="organisation") return view.name==="add_client_wizard" ? addClientWizardScreen() : organisationScreen();
   if(tab==="transport") return transportScreen();
   if(tab==="repairs") return repairRequestsScreen();
-  if(tab==="workshop") return view.name==="log_workshop_purchase_wizard" ? logWorkshopPurchaseWizardScreen() : workshopScreen();
+  if(tab==="workshop") return view.name==="log_workshop_purchase_wizard" ? logWorkshopPurchaseWizardScreen() : (view.name==="complete_repair_wizard" ? completeRepairWizardScreen() : workshopScreen());
   if(tab==="smart_assistant") return smartAssistantScreen();
   if(tab==="hierarchy") return hierarchyScreen();
   if(tab==="letterhead") return letterheadScreen();
@@ -9900,8 +9900,7 @@ function workshopMyRepairCardHtml(r){
     <b>${r.vehicleReg}</b> - ${r.issueDescription} <span class="muted">(raised by ${r.raisedByName}, ${r.urgency} urgency)</span><br/>
     ${repairStatusBadge(r.status)}
     ${r.status==="assigned" ? `<button class="btn small" onclick="startRepairRequest('${r.id}')">Start Work</button>` : ""}
-    ${r.status==="in_progress" ? `<button class="btn small" onclick="openCompleteRepairForm('${r.id}')">Mark Complete</button>` : ""}
-    <div id="completeForm_${r.id}"></div>
+    ${r.status==="in_progress" ? `<button class="btn small" onclick="startCompleteRepairWizard('${r.id}','${(r.vehicleReg||'').replace(/'/g,"\\'")}')">Mark Complete</button>` : ""}
   </div>`;
 }
 async function startRepairRequest(id){
@@ -9910,51 +9909,101 @@ async function startRepairRequest(id){
     await renderMain();
   }catch(e){ alert(e.message); }
 }
-function openCompleteRepairForm(id){
-  const el = document.getElementById(`completeForm_${id}`);
-  if(!el) return;
-  el.innerHTML = `
-    <div class="inline-form" style="margin-top:8px;">
-      <div class="f" style="flex:2;min-width:220px;"><label>What was done</label><input type="text" id="wd_${id}" placeholder="e.g. Replaced front brake liners, topped up Adblue" /></div>
-    </div>
-    <div id="partsRows_${id}">
-      <div class="inline-form parts-row">
-        <div class="f"><label>Part/Consumable</label><input type="text" class="partName" placeholder="e.g. Adblue" /></div>
-        <div class="f"><label>Qty</label><input type="number" step="0.1" class="partQty" value="1" /></div>
-        <div class="f"><label>Unit</label><input type="text" class="partUnit" placeholder="e.g. Litres" /></div>
-        <div class="f"><label>Cost (Rs)</label><input type="number" class="partCost" /></div>
-      </div>
-    </div>
-    <button class="btn small secondary" type="button" onclick="addPartRow('${id}')">+ Add another part</button><br/>
-    <button class="btn" style="margin-top:8px;" onclick="submitCompleteRepair('${id}')">Submit &amp; Create Expense</button>`;
+// ---- Mark Repair Complete wizard - Work Done -> Parts Used -> Confirm.
+// Dynamic parts rows are kept in wizard state (not raw DOM manipulation),
+// matching the same pattern used by the Bulk Purchase wizard. Replaces the
+// old in-place expanding form under each repair row with a dedicated
+// full-page wizard, reached via startCompleteRepairWizard(id, vehicleReg). ----
+let completeRepairWizard = {step:0, busy:false, done:false, repairId:null, vehicleReg:'', workDone:'', parts:[{name:'',qty:1,unit:'',cost:''}]};
+const COMPLETE_REPAIR_WIZARD_STEPS = [
+  {title:"Work Done", sub:"What was fixed"},
+  {title:"Parts Used", sub:"Consumables & cost"},
+  {title:"Confirm", sub:"Review & submit"},
+];
+function startCompleteRepairWizard(id, vehicleReg){
+  completeRepairWizard = {step:0, busy:false, done:false, repairId:id, vehicleReg: vehicleReg||'', workDone:'', parts:[{name:'',qty:1,unit:'',cost:''}]};
+  goto('complete_repair_wizard');
 }
-function addPartRow(id){
-  const wrap = document.getElementById(`partsRows_${id}`);
-  const row = document.createElement("div");
-  row.className = "inline-form parts-row";
-  row.innerHTML = `
-    <div class="f"><label>Part/Consumable</label><input type="text" class="partName" /></div>
-    <div class="f"><label>Qty</label><input type="number" step="0.1" class="partQty" value="1" /></div>
-    <div class="f"><label>Unit</label><input type="text" class="partUnit" /></div>
-    <div class="f"><label>Cost (Rs)</label><input type="number" class="partCost" /></div>`;
-  wrap.appendChild(row);
+function completeRepairWizardBack(){ if(completeRepairWizard.step>0){ completeRepairWizard.step--; renderMain(); } }
+async function completeRepairWizardScreen(){
+  if(completeRepairWizard.done){
+    return wizardSuccessHtml("Repair Marked Complete", "The repair is closed out and a vehicle expense has been created from the parts cost, sent for approval.", "Back to Workshop", "goto('workshop')");
+  }
+  const step = completeRepairWizard.step;
+  const body = step===0 ? completeRepairWizardStep1Html() : step===1 ? completeRepairWizardStep2Html() : completeRepairWizardStep3Html();
+  return `
+  <h1 class="page-title">Mark Repair Complete${completeRepairWizard.vehicleReg ? ' - '+completeRepairWizard.vehicleReg : ''}</h1>
+  ${stepperHtml(COMPLETE_REPAIR_WIZARD_STEPS, step)}
+  <div class="card">${body}</div>
+  `;
 }
-async function submitCompleteRepair(id){
-  const workDone = document.getElementById(`wd_${id}`).value;
-  const rows = document.querySelectorAll(`#partsRows_${id} .parts-row`);
-  const partsUsed = Array.from(rows).map(row=>({
-    name: row.querySelector(".partName").value,
-    qty: Number(row.querySelector(".partQty").value)||1,
-    unit: row.querySelector(".partUnit").value,
-    cost: Number(row.querySelector(".partCost").value)||0,
-  })).filter(p=>p.name && p.cost>0);
+function completeRepairWizardStep1Html(){
+  const w = completeRepairWizard;
+  return `
+  <div class="f" style="max-width:520px;"><label>What was done *</label><input type="text" id="crw_workdone" value="${w.workDone||''}" placeholder="e.g. Replaced front brake liners, topped up Adblue" /></div>
+  <div class="wizard-actions">
+    <span></span>
+    <button class="btn" onclick="completeRepairWizardStep1Next()">Next &rsaquo;</button>
+  </div>`;
+}
+function completeRepairWizardStep1Next(){
+  const workDone = document.getElementById('crw_workdone').value;
   if(!workDone || !workDone.trim()){ alert("Describe the work that was done."); return; }
+  completeRepairWizard.workDone = workDone;
+  completeRepairWizard.step = 1;
+  renderMain();
+}
+function crwUpdatePart(idx, field, value){ completeRepairWizard.parts[idx][field] = value; }
+function crwAddPartRow(){ completeRepairWizard.parts.push({name:'',qty:1,unit:'',cost:''}); renderMain(); }
+function crwRemovePartRow(idx){ if(completeRepairWizard.parts.length>1){ completeRepairWizard.parts.splice(idx,1); renderMain(); } }
+function completeRepairWizardStep2Html(){
+  const rows = completeRepairWizard.parts.map((p,idx)=>`
+    <div class="inline-form parts-row">
+      <div class="f"><label>Part/Consumable</label><input type="text" value="${p.name||''}" placeholder="e.g. Adblue" oninput="crwUpdatePart(${idx},'name',this.value)" /></div>
+      <div class="f"><label>Qty</label><input type="number" step="0.1" value="${p.qty||1}" oninput="crwUpdatePart(${idx},'qty',this.value)" /></div>
+      <div class="f"><label>Unit</label><input type="text" value="${p.unit||''}" placeholder="e.g. Litres" oninput="crwUpdatePart(${idx},'unit',this.value)" /></div>
+      <div class="f"><label>Cost (Rs)</label><input type="number" value="${p.cost||''}" oninput="crwUpdatePart(${idx},'cost',this.value)" /></div>
+      ${completeRepairWizard.parts.length>1 ? `<button class="btn small secondary" type="button" onclick="crwRemovePartRow(${idx})">Remove</button>` : ""}
+    </div>`).join("");
+  return `
+  <div id="crwPartsRows">${rows}</div>
+  <button class="btn small secondary" type="button" onclick="crwAddPartRow()">+ Add another part</button>
+  <div class="wizard-actions">
+    <button class="btn secondary" onclick="completeRepairWizardBack()">&larr; Previous</button>
+    <button class="btn" onclick="completeRepairWizardStep2Next()">Next &rsaquo;</button>
+  </div>`;
+}
+function completeRepairWizardStep2Next(){
+  const valid = completeRepairWizard.parts.filter(p=>String(p.name||'').trim() && Number(p.cost)>0);
+  if(!valid.length){ alert("Add at least one part/consumable with its cost."); return; }
+  completeRepairWizard.step = 2;
+  renderMain();
+}
+function completeRepairWizardStep3Html(){
+  const w = completeRepairWizard;
+  const parts = w.parts.filter(p=>String(p.name||'').trim() && Number(p.cost)>0);
+  const total = parts.reduce((s,p)=>s+Number(p.cost||0),0);
+  return `
+  <p><b>Work done:</b> ${w.workDone}</p>
+  <table><tr><th>Part</th><th>Qty</th><th>Unit</th><th>Cost</th></tr>
+  ${parts.map(p=>`<tr><td>${p.name}</td><td>${p.qty}</td><td>${p.unit||'-'}</td><td>Rs ${Number(p.cost).toLocaleString('en-IN')}</td></tr>`).join("")}
+  </table>
+  <p style="margin-top:8px;"><b>Total parts cost: Rs ${total.toLocaleString('en-IN')}</b></p>
+  <div class="wizard-actions">
+    <button class="btn secondary" onclick="completeRepairWizardBack()">&larr; Previous</button>
+    <button class="btn" ${w.busy?'disabled':''} onclick="completeRepairWizardSubmit()">${w.busy?'<span class="spinner"></span>':'&#10003; Submit &amp; Create Expense'}</button>
+  </div>`;
+}
+async function completeRepairWizardSubmit(){
+  const w = completeRepairWizard;
+  const partsUsed = w.parts.filter(p=>String(p.name||'').trim() && Number(p.cost)>0).map(p=>({name:p.name, qty:Number(p.qty)||1, unit:p.unit, cost:Number(p.cost)||0}));
   if(!partsUsed.length){ alert("Add at least one part/consumable with its cost."); return; }
+  w.busy = true; await renderMain();
   try{
-    await api(`/repair-requests/${id}/complete`, {method:"PATCH", body: JSON.stringify({workDone, partsUsed})});
-    alert("Repair marked complete. A vehicle expense has been created and sent for approval.");
-    await renderMain();
+    await api(`/repair-requests/${w.repairId}/complete`, {method:"PATCH", body: JSON.stringify({workDone: w.workDone, partsUsed})});
+    w.done = true;
   }catch(e){ alert(e.message); }
+  w.busy = false; await renderMain();
 }
 async function assignRepairRequest(id){
   const sel = document.getElementById(`assignTo_${id}`);
@@ -10428,7 +10477,6 @@ Object.assign(window, {
   recordSubvendorPayment, settleSubvendorAdvance, recordMySubvendorPayment,
   toggleOdometerVerifyShowCompleted, verifyOdometerReading, manualOdometerEntry,
   submitRepairRequest, cancelRepairRequest, assignRepairRequest, startRepairRequest,
-  openCompleteRepairForm, addPartRow, submitCompleteRepair,
   addPurchaseItemRow, handleWorkshopInvoiceFile, submitWorkshopPurchase,
   openDocumentScanner, handleScannerFile, closeScannerModal, retakeScan, confirmScan, onWorkshopInvoiceScanned,
   toggleExpenditureBucket, openMileageDetail, openInsight,
