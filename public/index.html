@@ -1519,7 +1519,7 @@ async function routeView(){
   if(tab==="organisation") return view.name==="add_client_wizard" ? addClientWizardScreen() : organisationScreen();
   if(tab==="transport") return transportScreen();
   if(tab==="repairs") return repairRequestsScreen();
-  if(tab==="workshop") return workshopScreen();
+  if(tab==="workshop") return view.name==="log_workshop_purchase_wizard" ? logWorkshopPurchaseWizardScreen() : workshopScreen();
   if(tab==="smart_assistant") return smartAssistantScreen();
   if(tab==="hierarchy") return hierarchyScreen();
   if(tab==="letterhead") return letterheadScreen();
@@ -9762,30 +9762,11 @@ async function workshopScreen(){
 
   const purchaseForm = WORKSHOP_STAFF_ROLES.includes(role) ? `
   <div class="card">
-    <h2 class="section-title">Log a Bulk Purchase</h2>
-    <p class="muted">Add each item you bought, the total amount, and a photo/scan of the invoice - Finance can print it straight away.</p>
-    <div id="purchaseItemsRows">
-      <div class="inline-form purchase-item-row">
-        <div class="f"><label>Item</label><input type="text" class="wpItemName" placeholder="e.g. Adblue" /></div>
-        <div class="f"><label>Qty</label><input type="number" step="0.1" class="wpItemQty" placeholder="e.g. 4" /></div>
-        <div class="f"><label>Unit</label><input type="text" class="wpItemUnit" placeholder="e.g. Litres" /></div>
-      </div>
+    <div class="flex-between">
+      <h2 class="section-title" style="margin-bottom:0;">Log a Bulk Purchase</h2>
+      <button class="btn small" onclick="startWorkshopPurchaseWizard()">+ Log a Purchase</button>
     </div>
-    <button class="btn small secondary" type="button" onclick="addPurchaseItemRow()">+ Add another item</button>
-    <div class="inline-form" style="margin-top:10px;">
-      <div class="f"><label>Total Amount (Rs)</label><input type="number" id="wpTotalAmount" required /></div>
-      <div class="f" style="flex:2;min-width:220px;"><label>Notes (optional)</label><input type="text" id="wpNotes" /></div>
-    </div>
-    <div class="check-row" style="margin-top:8px;">
-      <div class="label">Invoice photo/scan</div>
-      <div class="controls">
-        <input type="file" id="wpInvoiceFile" accept="image/*,application/pdf" style="display:none;" onchange="handleWorkshopInvoiceFile(event)" />
-        <button class="btn small" type="button" onclick="openDocumentScanner(onWorkshopInvoiceScanned)">📷 Scan Document</button>
-        <button class="btn small secondary" type="button" onclick="document.getElementById('wpInvoiceFile').click()">Attach Photo (no scan)</button>
-        <span id="wpInvoicePreview" class="muted">No invoice attached yet</span>
-      </div>
-    </div>
-    <button class="btn" style="margin-top:10px;" onclick="submitWorkshopPurchase()">Log Purchase</button>
+    <p class="muted" style="margin-top:8px;">Add each item you bought, the total amount, and a photo/scan of the invoice - Finance can print it straight away.</p>
   </div>
   <div class="card">
     <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('workshop_purchases')" title="${isCardOpen('workshop_purchases')?'Click to collapse':'Click to expand'}">
@@ -9934,6 +9915,121 @@ async function submitWorkshopPurchase(){
     pendingWorkshopInvoice = null;
     await renderMain();
   }catch(e){ alert(e.message); }
+}
+// ---- Log a Bulk Purchase wizard - dynamic item rows kept in wizard state
+// (not raw DOM manipulation) so each step re-renders through the normal
+// renderMain() flow, matching every other wizard in the app. Items ->
+// Amount/Notes -> Invoice & Confirm. ----
+let workshopPurchaseWizard = {step:0, busy:false, done:false, items:[{name:'',qty:'',unit:''}], totalAmount:'', notes:'', invoice:null, invoiceLabel:''};
+const WORKSHOP_PURCHASE_WIZARD_STEPS = [
+  {title:"Items", sub:"What was bought"},
+  {title:"Amount & Notes", sub:"Total amount and notes"},
+  {title:"Invoice", sub:"Attach photo/scan & confirm"},
+];
+function startWorkshopPurchaseWizard(){ workshopPurchaseWizard = {step:0, busy:false, done:false, items:[{name:'',qty:'',unit:''}], totalAmount:'', notes:'', invoice:null, invoiceLabel:''}; goto('log_workshop_purchase_wizard'); }
+function workshopPurchaseWizardBack(){ if(workshopPurchaseWizard.step>0){ workshopPurchaseWizard.step--; renderMain(); } }
+async function logWorkshopPurchaseWizardScreen(){
+  if(workshopPurchaseWizard.done){
+    return wizardSuccessHtml("Purchase Logged", "The bulk purchase has been recorded with its invoice - Finance can view and print it.", "Back to Workshop", "goto('workshop')");
+  }
+  const step = workshopPurchaseWizard.step;
+  const body = step===0 ? workshopPurchaseWizardStep1Html() : step===1 ? workshopPurchaseWizardStep2Html() : workshopPurchaseWizardStep3Html();
+  return `
+  <h1 class="page-title">Log a Bulk Purchase</h1>
+  ${stepperHtml(WORKSHOP_PURCHASE_WIZARD_STEPS, step)}
+  <div class="card">${body}</div>
+  `;
+}
+function wpwUpdateItem(idx, field, value){ workshopPurchaseWizard.items[idx][field] = value; }
+function wpwAddItemRow(){ workshopPurchaseWizard.items.push({name:'',qty:'',unit:''}); renderMain(); }
+function wpwRemoveItemRow(idx){ if(workshopPurchaseWizard.items.length>1){ workshopPurchaseWizard.items.splice(idx,1); renderMain(); } }
+function workshopPurchaseWizardStep1Html(){
+  const rows = workshopPurchaseWizard.items.map((it,idx)=>`
+    <div class="inline-form purchase-item-row">
+      <div class="f"><label>Item</label><input type="text" value="${it.name||''}" placeholder="e.g. Adblue" oninput="wpwUpdateItem(${idx},'name',this.value)" /></div>
+      <div class="f"><label>Qty</label><input type="number" step="0.1" value="${it.qty||''}" placeholder="e.g. 4" oninput="wpwUpdateItem(${idx},'qty',this.value)" /></div>
+      <div class="f"><label>Unit</label><input type="text" value="${it.unit||''}" placeholder="e.g. Litres" oninput="wpwUpdateItem(${idx},'unit',this.value)" /></div>
+      ${workshopPurchaseWizard.items.length>1 ? `<button class="btn small secondary" type="button" onclick="wpwRemoveItemRow(${idx})">Remove</button>` : ""}
+    </div>`).join("");
+  return `
+  <p class="muted">Add each item you bought.</p>
+  <div id="wpwItemsRows">${rows}</div>
+  <button class="btn small secondary" type="button" onclick="wpwAddItemRow()">+ Add another item</button>
+  <div class="wizard-actions">
+    <span></span>
+    <button class="btn" onclick="workshopPurchaseWizardStep1Next()">Next &rsaquo;</button>
+  </div>`;
+}
+function workshopPurchaseWizardStep1Next(){
+  const valid = workshopPurchaseWizard.items.filter(i=>String(i.name||'').trim());
+  if(!valid.length){ alert("Add at least one item purchased."); return; }
+  workshopPurchaseWizard.step = 1;
+  renderMain();
+}
+function workshopPurchaseWizardStep2Html(){
+  const w = workshopPurchaseWizard;
+  return `
+  <div class="inline-form">
+    <div class="f"><label>Total Amount (Rs) *</label><input type="number" id="wpw_total" value="${w.totalAmount||''}" required /></div>
+    <div class="f" style="flex:2;min-width:220px;"><label>Notes (optional)</label><input type="text" id="wpw_notes" value="${w.notes||''}" /></div>
+  </div>
+  <div class="wizard-actions">
+    <button class="btn secondary" onclick="workshopPurchaseWizardBack()">&larr; Previous</button>
+    <button class="btn" onclick="workshopPurchaseWizardStep2Next()">Next &rsaquo;</button>
+  </div>`;
+}
+function workshopPurchaseWizardStep2Next(){
+  const totalAmount = Number(document.getElementById('wpw_total').value);
+  const notes = document.getElementById('wpw_notes').value;
+  if(!totalAmount || totalAmount<=0){ alert("Enter a valid total amount."); return; }
+  workshopPurchaseWizard.totalAmount = totalAmount;
+  workshopPurchaseWizard.notes = notes;
+  workshopPurchaseWizard.step = 2;
+  renderMain();
+}
+function wpwHandleInvoiceFile(e){
+  const file = e.target.files[0];
+  e.target.value = "";
+  if(!file) return;
+  downscaleImage(file, 900, 0.8, (dataUrl)=>{
+    workshopPurchaseWizard.invoice = dataUrl;
+    workshopPurchaseWizard.invoiceLabel = 'Invoice attached';
+    renderMain();
+  });
+}
+function wpwOnInvoiceScanned(pdfDataUrl){
+  workshopPurchaseWizard.invoice = pdfDataUrl;
+  workshopPurchaseWizard.invoiceLabel = 'Scanned invoice attached (PDF)';
+  renderMain();
+}
+function workshopPurchaseWizardStep3Html(){
+  const w = workshopPurchaseWizard;
+  return `
+  <p class="muted">Attach a photo or scan of the invoice - Finance can view/print it straight away.</p>
+  <div class="check-row">
+    <div class="label">Invoice photo/scan *</div>
+    <div class="controls">
+      <input type="file" id="wpwInvoiceFile" accept="image/*,application/pdf" style="display:none;" onchange="wpwHandleInvoiceFile(event)" />
+      <button class="btn small" type="button" onclick="openDocumentScanner(wpwOnInvoiceScanned)">📷 Scan Document</button>
+      <button class="btn small secondary" type="button" onclick="document.getElementById('wpwInvoiceFile').click()">Attach Photo (no scan)</button>
+      <span class="muted">${w.invoice ? (w.invoiceLabel||'Invoice attached') : 'No invoice attached yet'}</span>
+    </div>
+  </div>
+  <div class="wizard-actions">
+    <button class="btn secondary" onclick="workshopPurchaseWizardBack()">&larr; Previous</button>
+    <button class="btn" ${w.busy?'disabled':''} onclick="workshopPurchaseWizardSubmit()">${w.busy?'<span class="spinner"></span>':'&#10003; Log Purchase'}</button>
+  </div>`;
+}
+async function workshopPurchaseWizardSubmit(){
+  const w = workshopPurchaseWizard;
+  if(!w.invoice){ alert("Attach a photo/scan of the invoice before submitting."); return; }
+  w.busy = true; await renderMain();
+  try{
+    const items = w.items.filter(i=>String(i.name||'').trim()).map(i=>({name:i.name, qty: Number(i.qty)||1, unit:i.unit}));
+    await api("/workshop-purchases", {method:"POST", body: JSON.stringify({items, totalAmount: w.totalAmount, notes: w.notes, invoice: w.invoice})});
+    w.done = true;
+  }catch(e){ alert(e.message); }
+  w.busy = false; await renderMain();
 }
 
 // ================= PAYROLL =================
