@@ -95,6 +95,8 @@
   .topbar-status-pill{display:inline-flex;align-items:center;gap:5px;background:var(--accent-light);color:var(--accent);border:1px solid #CFE3D8;padding:6px 12px;border-radius:20px;font-size:10.5px;font-weight:800;letter-spacing:var(--label-track);text-transform:uppercase;}
   .topbar-status-pill::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;box-shadow:0 0 0 3px rgba(46,125,50,.18);}
   button.sidebar-toggle{background:var(--bg);border:1px solid var(--border);color:var(--ink);width:34px;height:34px;border-radius:9px;font-size:15px;cursor:pointer;flex:none;display:none;}
+  .topbar-back-btn{background:var(--card);border:1px solid var(--border);border-radius:8px;width:34px;height:34px;font-size:16px;cursor:pointer;color:var(--ink);display:flex;align-items:center;justify-content:center;flex:none;}
+  .topbar-back-btn:hover{background:var(--bg);}
   /* Truly full-width: main fills the entire remaining viewport next to the
      sidebar on every screen size, no cap/auto-centering - a 27" monitor
      gets a proportionally wider working area instead of a fixed column
@@ -229,7 +231,8 @@
   .letterhead-frame-wrap{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:#fff;}
   .letterhead-frame-wrap iframe{width:100%;height:calc(100vh - 220px);min-height:520px;border:0;display:block;}
   table{width:100%;border-collapse:collapse;font-size:13px;}
-  table th{text-align:left;background:transparent;color:var(--grey);padding:8px 10px;font-size:10.5px;text-transform:uppercase;letter-spacing:var(--label-track);font-weight:800;border-bottom:1px solid var(--border);}
+  table th{text-align:left;background:var(--card);color:var(--grey);padding:8px 10px;font-size:10.5px;text-transform:uppercase;letter-spacing:var(--label-track);font-weight:800;border-bottom:1px solid var(--border);position:sticky;top:var(--topbar-h,64px);z-index:5;}
+  .modal-panel table th, .scanner-modal table th{position:static;}
   table td{padding:10px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
   table tr:hover td{background:var(--bg);}
   .btn{background:var(--accent);color:var(--on-accent);border:none;padding:9px 16px;border-radius:9px;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;cursor:pointer;}
@@ -440,6 +443,12 @@ let odometerLogs = {};
 let leaves = [];
 let expenses = [];
 let view = { tab: null, name: "home" };
+// Simple back-stack: every switchTab()/goto() pushes the view being left
+// onto this array; goBack() pops it. Reset on login/logout so a new
+// session never inherits another user's navigation trail. Not persisted to
+// localStorage (only the current view is, via fleetLastView) - a page
+// reload starts with an empty stack, same as opening a fresh app.
+let viewHistory = [];
 let loading = false;
 let lastError = "";
 let loginPortal = null; // null = chooser screen, "staff" = staff/supervisor login form
@@ -942,6 +951,7 @@ async function boot(){
       }
     }catch(e){}
     if(!restoredView) view.tab = defaultTab(currentUser.role);
+    viewHistory = [];
     await loadCoreData();
     render();
   }catch(e){
@@ -969,6 +979,7 @@ function doLogout(silent){
   localStorage.removeItem("fleetLastView"); // don't hand the next person to log in (maybe a different user, same shared computer) whatever screen this session was looking at
   if(!silent) api("/logout", {method:"POST"}).catch(()=>{});
   view = {tab:null, name:"home"};
+  viewHistory = [];
   loginPortal = null;
   renderLogin();
 }
@@ -1441,6 +1452,7 @@ async function render(){
       <header class="app-topbar">
         <div class="topbar-left">
           <button class="sidebar-toggle" onclick="toggleSidebar()">&#9776;</button>
+          <button class="topbar-back-btn" onclick="goBack()" title="Back">&larr;</button>
           <div class="topbar-title" id="topbarTitle">${currentTabLabel()}</div>
         </div>
         <div class="topbar-right">
@@ -1456,14 +1468,51 @@ async function render(){
     </div>
   `;
   startTopbarClock();
+  updateTopbarHeightVar();
+  window.addEventListener('resize', updateTopbarHeightVar);
   await renderMain();
 }
-async function switchTab(tab){ view = {tab, name:"home"}; ownerAssignUnlocked = false; assignmentsViewDate = todayStr(); await render(); window.scrollTo(0,0); }
+// Table column headers stick just below the topbar while a long table
+// scrolls underneath (see "table th" CSS) - the offset has to match the
+// topbar's actual rendered height, which differs a little between desktop
+// and the mobile breakpoint's tighter padding, so it's measured rather
+// than hardcoded. Re-measured on every render() (topbar rebuilt fresh each
+// time) and on window resize (covers rotating a tablet, or crossing the
+// mobile breakpoint without a full reload).
+function updateTopbarHeightVar(){
+  const el = document.querySelector('.app-topbar');
+  if(el) document.documentElement.style.setProperty('--topbar-h', el.offsetHeight + 'px');
+}
+async function switchTab(tab){
+  if(view.tab!==null) viewHistory.push(view); // don't record the placeholder pre-login view
+  view = {tab, name:"home"}; ownerAssignUnlocked = false; assignmentsViewDate = todayStr(); await render(); window.scrollTo(0,0);
+}
 async function goto(name, params){
+  viewHistory.push(view);
   view = Object.assign({tab: view.tab}, {name}, params||{});
   const titleEl = document.getElementById("topbarTitle");
   if(titleEl) titleEl.textContent = currentTabLabel();
   await renderMain();
+  window.scrollTo(0,0);
+}
+// Back button (pinned in the topbar, every page) - pops the view being
+// left off viewHistory. Crosses tabs correctly: if the view we're
+// returning to belongs to a different tab than the one currently showing,
+// do a full render() so the sidebar's active-highlight and topbar both
+// update (same as switchTab does); otherwise a cheaper renderMain() alone
+// is enough (same as goto does), since only #main content changed.
+async function goBack(){
+  const fallback = () => { const tabs = tabsFor(currentUser.role); return tabs.length ? {tab: tabs[0][0], name:"home"} : view; };
+  const target = viewHistory.length ? viewHistory.pop() : fallback();
+  const sameTab = target.tab === view.tab;
+  view = target;
+  if(sameTab){
+    const titleEl = document.getElementById("topbarTitle");
+    if(titleEl) titleEl.textContent = currentTabLabel();
+    await renderMain();
+  } else {
+    await render();
+  }
   window.scrollTo(0,0);
 }
 
