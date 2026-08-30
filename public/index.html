@@ -129,6 +129,10 @@
   .kpi .label{font-size:var(--label-size);color:var(--grey);margin-top:5px;text-transform:uppercase;letter-spacing:var(--label-track);font-weight:700;}
   .kpi.warn .num{color:var(--amber);}
   .kpi.bad .num{color:var(--red);}
+  .verify-box{display:flex;flex-direction:column;margin-bottom:0;}
+  .verify-box-list{display:flex;flex-direction:column;gap:6px;margin:10px 0 2px;flex:1;}
+  .verify-box-item{font-size:12.5px;color:var(--ink);padding:7px 10px;background:var(--panel-alt,#f7f7f9);border-radius:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .verify-box-empty{font-size:12.5px;color:var(--grey);padding:6px 2px;}
   .kpi.good .num{color:var(--green);}
   .kpi.active{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-light);}
   /* Live Tracking card - a compact, Fleetx-style status strip: colored dot +
@@ -1271,16 +1275,16 @@ function tabsForInner(role){
   // request, they (plus Data Team and Owner) are the only roles that can
   // approve odometer/fuel readings. See ODOMETER_VERIFY_ROLES and
   // FUEL_CROSS_VERIFY_ROLES in server.js for the matching backend gate.
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["fleet_list","Fleet"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["repairs","Repair Requests"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["fleet_list","Fleet"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["verifications","Verifications"],["repairs","Repair Requests"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["fleet_list","Fleet"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   // Operations Manager deliberately has no odometer_verify/fuel_verify tab -
   // per the Owner's explicit request, Ops Manager has no role in approving
   // odometer or fuel readings (they previously had odometer_verify; removed
   // on request).
-  if(role==="ops_manager") return [["operations","Operations"],["overview","Overview"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["approvals","Fleet Approvals"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="data_team") return [["corrections","Corrections"],["overview","Overview"],["expenses_view","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["approvals","Fleet Approvals"],["audit","Audit Log"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="hr") return [["attendance","Attendance"],["people","People"],["approvals","Fleet Approvals"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["overview","Overview"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["odometer_verify","Odometer Verification"],["fuel_verify","Fuel Verification"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["approvals","Fleet Approvals"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"]];
+  if(role==="ops_manager") return [["operations","Operations"],["overview","Overview"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["verifications","Verifications"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="data_team") return [["corrections","Corrections"],["overview","Overview"],["expenses_view","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["verifications","Verifications"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["audit","Audit Log"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="hr") return [["attendance","Attendance"],["people","People"],["verifications","Verifications"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="owner") return [["overview","Overview"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["transport","Employee Transport"],["verifications","Verifications"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="admin") return [["overview","Overview"],["fleet_list","Fleet"],["organisation","Organisation"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
   // Billing - new role, per the Owner's explicit request: the only staff
@@ -1313,11 +1317,11 @@ const SIDEBAR_GROUP_META = {
 const TAB_GROUP_MAP = {
   my_vehicles:"fleet", onboarding:"fleet", admin_vehicles:"fleet", usage:"fleet", overview:"fleet",
   assignments:"fleet", fleet_list:"fleet", add_vehicle:"fleet", routes:"fleet", subvendor_expenses:"fleet",
-  odometer_verify:"fleet", fuel_verify:"fleet", fleet_health:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
+  fleet_health:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
   subvendors:"fleet", hierarchy:"fleet",
   trips:"trips", my_attendance:"trips", attendance:"trips", my_expenses:"trips", queue:"trips",
   expenses:"finance", expenses_view:"finance", payroll:"finance", backup:"finance", kiosk:"finance",
-  people:"people", approvals:"people", corrections:"people", audit:"people", organisation:"people",
+  people:"people", verifications:"people", corrections:"people", audit:"people", organisation:"people",
   reports:"tools", smart_assistant:"tools", letterhead:"tools",
   dashboard:"tools", admin_dashboard:"tools", operations:"tools",
 };
@@ -1511,6 +1515,7 @@ async function routeView(){
   if(tab==="kiosk") return view.name==="generate_payslip_wizard" ? addPayslipWizardScreen() : kioskScreen();
   if(tab==="odometer_verify") return odometerVerificationScreen();
   if(tab==="fuel_verify") return fuelVerificationScreen();
+  if(tab==="verifications") return view.name==="verify_detail" ? verifyDetailScreen(view.category) : verificationsScreen();
   if(tab==="gps_link") return gpsLinkScreen();
   if(tab==="fleet_health") return view.name==="vehicle_tracking_detail" ? vehicleTrackingDetailScreen(view.vehicleId) : fleetHealthScreen();
   if(tab==="overview") return minimalOverviewScreen();
@@ -2183,6 +2188,111 @@ async function decideAssignmentRequest(requestId, status){
     pendingAssignmentRequests = pendingAssignmentRequests.filter(r=>r.id!==requestId);
   }catch(e){ alert(e.message); }
   approvalsBusy = false; await renderMain();
+}
+
+// ---- Verifications (single consolidated page) - replaces the old separate
+// "Odometer Verification"/"Fuel Verification"/"Fleet Approvals" tabs with
+// one page of compact boxes (one per category the current role is allowed
+// to see, same role gates as before), each showing a count + the most
+// recent few items, with a "View all" button into the existing full screen
+// for that category. Deliberately reuses fleetApprovalsScreen()/
+// odometerVerificationScreen()/fuelVerificationScreen() as-is for the full
+// list + actions (approve/reject/verify) rather than rebuilding that logic -
+// zero risk to the already-working approval flows, this only adds a new
+// front door onto them. ----
+let verifyOdometerAllRows = [];
+async function loadVerificationsSummary(){
+  const role = currentUser.role;
+  const canSeeVehicles = role==="data_team" || role==="owner";
+  const canSeeDrivers = role==="hr" || role==="owner" || role==="data_team";
+  const canSeeRoutesAndAssignments = role==="data_team" || role==="ops_manager" || role==="owner";
+  const canSeeOdometer = ["site_supervisor","data_team","owner"].includes(role);
+  const canSeeFuel = ["site_supervisor","data_team","owner"].includes(role);
+  const tasks = [];
+  if(canSeeVehicles || canSeeDrivers || canSeeRoutesAndAssignments) tasks.push(loadPendingApprovals());
+  if(canSeeFuel) tasks.push(loadFuelVerifyPending());
+  if(canSeeOdometer) tasks.push((async()=>{
+    try{ verifyOdometerAllRows = await api("/driver-shifts"); }
+    catch(e){ verifyOdometerAllRows = []; }
+  })());
+  await Promise.all(tasks);
+}
+const VERIFY_CATEGORY_META = {
+  vehicles:    {label:"Vehicle Verification",    icon:"🚌"},
+  drivers:     {label:"Driver Verification",     icon:"🧑"},
+  routes:      {label:"Route Verification",      icon:"🛣️"},
+  assignments: {label:"Assignment Verification", icon:"🔗"},
+  odometer:    {label:"Odometer Verification",   icon:"📟"},
+  fuel:        {label:"Fuel Verification",       icon:"⛽"},
+};
+function verifyBoxHtml(key, count, items, emptyMsg){
+  const meta = VERIFY_CATEGORY_META[key];
+  const list = items.length
+    ? items.map(t=>`<div class="verify-box-item">${t}</div>`).join("")
+    : `<div class="verify-box-empty">${emptyMsg}</div>`;
+  return `
+  <div class="card verify-box">
+    <div class="flex-between">
+      <h2 class="section-title" style="margin-bottom:0;">${meta.icon} ${meta.label}</h2>
+      <span class="badge ${count>0?'pending':'approved'}">${count}</span>
+    </div>
+    <div class="verify-box-list">${list}</div>
+    <button class="btn small secondary" style="margin-top:10px;width:100%;" onclick="goto('verify_detail',{category:'${key}'})">View all &rarr;</button>
+  </div>`;
+}
+async function verificationsScreen(){
+  await loadVerificationsSummary();
+  const role = currentUser.role;
+  const canSeeVehicles = role==="data_team" || role==="owner";
+  const canSeeDrivers = role==="hr" || role==="owner" || role==="data_team";
+  const canSeeRoutesAndAssignments = role==="data_team" || role==="ops_manager" || role==="owner";
+  const canSeeOdometer = ["site_supervisor","data_team","owner"].includes(role);
+  const canSeeFuel = ["site_supervisor","data_team","owner"].includes(role);
+
+  const boxes = [];
+  if(canSeeVehicles){
+    const items = pendingVehicleApprovals.slice(0,3).map(v=>`${v.reg} &middot; ${(v.make||'')} ${(v.model||'')}`.trim());
+    boxes.push(verifyBoxHtml('vehicles', pendingVehicleApprovals.length, items, "Nothing pending."));
+  }
+  if(canSeeDrivers){
+    const items = pendingDriverApprovals.slice(0,3).map(d=>`${d.name} &middot; ${d.phone||'-'}`);
+    boxes.push(verifyBoxHtml('drivers', pendingDriverApprovals.length, items, "Nothing pending."));
+  }
+  if(canSeeRoutesAndAssignments){
+    const rItems = pendingRouteRequests.slice(0,3).map(r=>`${r.clientName} &middot; ${r.name}`);
+    boxes.push(verifyBoxHtml('routes', pendingRouteRequests.length, rItems, "Nothing pending."));
+    const aItems = pendingAssignmentRequests.slice(0,3).map(r=>`${r.vehicleReg} &rarr; ${r.driverName}`);
+    boxes.push(verifyBoxHtml('assignments', pendingAssignmentRequests.length, aItems, "Nothing pending."));
+  }
+  if(canSeeOdometer){
+    const zones = { pending: [], approved: [], completed: [] };
+    verifyOdometerAllRows.forEach(r => zones[odometerVerificationZone(r)].push(r));
+    const items = zones.pending.slice(0,3).map(r=>`${r.driverName} &middot; ${r.vehicleReg||'No vehicle'}`);
+    boxes.push(verifyBoxHtml('odometer', zones.pending.length, items, "Nothing pending verification."));
+  }
+  if(canSeeFuel){
+    const items = fuelVerifyPending.slice(0,3).map(r=>`${r.reg} &middot; ${fmtDMY(r.date)}`);
+    boxes.push(verifyBoxHtml('fuel', fuelVerifyPending.length, items, "Nothing pending."));
+  }
+
+  if(!boxes.length){
+    return `<h1 class="page-title">Verifications</h1><div class="empty">You don't have any verification categories assigned.</div>`;
+  }
+  return `
+  <h1 class="page-title">Verifications</h1>
+  <div class="banner">Vehicle and driver onboarding, route &amp; assignment requests, and daily odometer/fuel readings that need your sign-off - all in one place. Each box shows the most recent items; use View all to see the full queue and take action.</div>
+  <div class="grid cols-3">${boxes.join("")}</div>
+  `;
+}
+function backToVerifications(){ goto('verifications'); }
+async function verifyDetailScreen(category){
+  const back = `<button class="btn secondary small" onclick="backToVerifications()">&larr; Back to Verifications</button>`;
+  if(category==='odometer') return back + await odometerVerificationScreen();
+  if(category==='fuel') return back + await fuelVerificationScreen();
+  // Vehicles/Drivers/Routes/Assignments all share the existing Fleet
+  // Approvals screen's chip-tab UI - just jump it straight to the right tab.
+  approvalsTab = ['vehicles','drivers','routes','assignments'].includes(category) ? category : 'vehicles';
+  return back + await fleetApprovalsScreen();
 }
 
 // in-memory draft for the vehicle currently being edited (not saved until Submit)
