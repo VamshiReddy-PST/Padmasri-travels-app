@@ -3,15 +3,15 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Padmasri Travels - Vehicle Owner Portal</title>
+<title>Padmasri Travels - Vendor Portal</title>
 <meta name="theme-color" content="#3E0B07" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@1,500;1,600;1,700&display=swap" rel="stylesheet">
 <style>
   :root{
     /* Console design language - see index.html for the full note. Same
-       tokens as the staff app so the vehicle owner portal reads as part of
-       the same product. */
+       tokens as the staff app so the vendor portal reads as part of the
+       same product. */
     --ink:#1A1A18; --accent:#006643; --accent-dark:#004D33; --accent-light:#E1F0EA; --green:#2E7D32;
     --amber:#B8860B; --red:#C0392B; --grey:#6B6B62; --bg:#F6F6F2; --card:#ffffff;
     --border:#E6E3DB; --purple:#6C63FF; --purple-dark:#4A43C7; --purple-light:#E7E5FF;
@@ -45,9 +45,6 @@
   table th{text-align:left;background:transparent;color:var(--grey);padding:8px 10px;font-size:10.5px;text-transform:uppercase;letter-spacing:var(--label-track);font-weight:800;border-bottom:1px solid var(--border);}
   table td{padding:10px 10px;border-bottom:1px solid var(--border);vertical-align:middle;}
   .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;border:1px solid transparent;}
-  .badge.trip{background:var(--purple-light);color:var(--purple-dark);border-color:#D6D3FF;}
-  .badge.km{background:#FBF1DE;color:#9C6B10;border-color:#EEDDB8;}
-  .badge.package{background:var(--accent-light);color:var(--accent);border-color:#CFE3D8;}
   .badge.outstanding{background:#FBEAE6;color:var(--red);border-color:#F3C6BA;}
   .badge.settled{background:var(--accent-light);color:var(--accent);border-color:#CFE3D8;}
   .login-wrap{max-width:420px;margin:60px auto;}
@@ -78,9 +75,9 @@
 <body>
 <div id="app"></div>
 <script>
-const API = "/api/vehicle-owner-auth";
-let voToken = localStorage.getItem("fleetVehicleOwnerToken") || null;
-let vehicleOwner = null;
+const API = "/api/vendor-auth";
+let vndToken = localStorage.getItem("fleetVendorToken") || null;
+let vendor = null;
 let dashboard = null;
 let lastError = "";
 let pwChangeError = "";
@@ -95,14 +92,14 @@ const THEME_PRESETS = {
   black:  { key:"black",  label:"Black",         accent:"#000000", text:"#FFFFFF" },
   white:  { key:"white",  label:"White",         accent:"#FFFFFF", text:"#1A1A1A" },
 };
-function hexToRgbVo(hex){
+function hexToRgbVnd(hex){
   const h = hex.replace("#","");
   const n = h.length===3 ? h.split("").map(c=>c+c).join("") : h;
   const int = parseInt(n,16);
   return { r:(int>>16)&255, g:(int>>8)&255, b:int&255 };
 }
-function shadeHexVo(hex, pct){
-  const {r,g,b} = hexToRgbVo(hex);
+function shadeHexVnd(hex, pct){
+  const {r,g,b} = hexToRgbVnd(hex);
   const f = pct<0 ? 0 : 255, p = Math.abs(pct);
   const nr = Math.round((f-r)*p)+r, ng = Math.round((f-g)*p)+g, nb = Math.round((f-b)*p)+b;
   return "#"+[nr,ng,nb].map(x=>Math.max(0,Math.min(255,x)).toString(16).padStart(2,"0")).join("");
@@ -120,10 +117,10 @@ function applyTheme(themeKey){
     return;
   }
   const preset = THEME_PRESETS[themeKey];
-  const { r, g, b } = hexToRgbVo(preset.text);
+  const { r, g, b } = hexToRgbVnd(preset.text);
   root.setProperty("--accent", preset.accent);
-  root.setProperty("--accent-dark", shadeHexVo(preset.accent, -0.2));
-  root.setProperty("--accent-light", shadeHexVo(preset.accent, 0.75));
+  root.setProperty("--accent-dark", shadeHexVnd(preset.accent, -0.2));
+  root.setProperty("--accent-light", shadeHexVnd(preset.accent, 0.75));
   root.setProperty("--on-accent", preset.text);
   root.setProperty("--on-accent-rgb", `${r},${g},${b}`);
   root.setProperty("--accent-text", preset.accent);
@@ -139,7 +136,7 @@ function toggleThemeModal(){ showThemeModal = !showThemeModal; render(); }
 async function saveTheme(key){
   try{
     const updated = await api("/theme", {method:"POST", body:JSON.stringify({theme:key})});
-    vehicleOwner.theme = updated.theme;
+    vendor.theme = updated.theme;
     applyTheme(key);
     render();
   }catch(e){ alert(e.message||"Could not update theme."); }
@@ -147,14 +144,14 @@ async function saveTheme(key){
 async function resetTheme(){
   try{
     const updated = await api("/theme", {method:"POST", body:JSON.stringify({theme:null})});
-    vehicleOwner.theme = updated.theme;
+    vendor.theme = updated.theme;
     applyTheme(null);
     render();
   }catch(e){ alert(e.message||"Could not reset theme."); }
 }
 function themeModalHtml(){
   if(!showThemeModal) return "";
-  const current = (vehicleOwner && vehicleOwner.theme && vehicleOwner.theme.key) || null;
+  const current = (vendor && vendor.theme && vendor.theme.key) || null;
   const swatches = Object.values(THEME_PRESETS).map(p=>{
     const sel = p.key===current;
     return `<button type="button" class="theme-swatch" onclick="saveTheme('${p.key}')" title="${p.label}" style="background:${p.accent};border:${sel?"3px solid var(--ink)":"1px solid var(--border)"};box-shadow:${sel?"0 0 0 2px #fff inset":"none"};"></button>`;
@@ -174,7 +171,7 @@ function themeModalHtml(){
 
 async function api(path, opts){
   opts = opts || {};
-  opts.headers = Object.assign({"Content-Type":"application/json"}, opts.headers||{}, voToken ? {Authorization:"Bearer "+voToken} : {});
+  opts.headers = Object.assign({"Content-Type":"application/json"}, opts.headers||{}, vndToken ? {Authorization:"Bearer "+vndToken} : {});
   const res = await fetch(API+path, opts);
   const data = await res.json().catch(()=>({}));
   if(res.status===401){ doLogout(true); throw new Error("Session expired - please log in again."); }
@@ -183,19 +180,19 @@ async function api(path, opts){
 }
 
 async function boot(){
-  if(!voToken){ renderLogin(); return; }
+  if(!vndToken){ renderLogin(); return; }
   try{
-    vehicleOwner = await api("/me");
-    applyTheme(vehicleOwner.theme && vehicleOwner.theme.key);
-    if(vehicleOwner.mustChangePassword){ renderForcedPasswordChange(); return; }
+    vendor = await api("/me");
+    applyTheme(vendor.theme && vendor.theme.key);
+    if(vendor.mustChangePassword){ renderForcedPasswordChange(); return; }
     dashboard = await api("/dashboard");
     render();
   }catch(e){ doLogout(true); }
 }
 
 function doLogout(silent){
-  voToken = null; vehicleOwner = null; dashboard = null;
-  localStorage.removeItem("fleetVehicleOwnerToken");
+  vndToken = null; vendor = null; dashboard = null;
+  localStorage.removeItem("fleetVendorToken");
   if(!silent) api("/logout", {method:"POST"}).catch(()=>{});
   renderLogin();
 }
@@ -205,7 +202,7 @@ function renderLogin(){
   app.innerHTML = `
   <div class="login-wrap">
     <div class="logo"><img class="brand-logo" src="logo-mark.png" alt="Padma Sri Travels" /></div>
-    <div class="sub">Vehicle Owner Portal</div>
+    <div class="sub">Vendor Portal</div>
     <div class="card">
       ${lastError ? `<div class="banner error">${lastError}</div>` : ""}
       <div class="field">
@@ -217,7 +214,7 @@ function renderLogin(){
         <input type="password" id="loginPassword" placeholder="Your password" autocomplete="current-password" />
       </div>
       <button class="btn" style="width:100%" onclick="doLogin()" id="loginBtn">Sign in</button>
-      <div class="muted" style="margin-top:14px;text-align:center;border-top:1px solid var(--border);padding-top:14px;">Not a vehicle owner? <a href="/">Go to the Staff / Driver login</a> &middot; <a href="subvendor.html">Subvendor Portal</a> &middot; <a href="vendor.html">Vendor Portal</a></div>
+      <div class="muted" style="margin-top:14px;text-align:center;border-top:1px solid var(--border);padding-top:14px;">Not a vendor? <a href="/">Go to the Staff / Driver login</a> &middot; <a href="subvendor.html">Subvendor Portal</a> &middot; <a href="vehicleowner.html">Vehicle Owner Portal</a></div>
     </div>
   </div>`;
 }
@@ -232,8 +229,8 @@ async function doLogin(){
     const res = await fetch(API+"/login", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({identifier, password})});
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || "Login failed");
-    voToken = data.token;
-    localStorage.setItem("fleetVehicleOwnerToken", voToken);
+    vndToken = data.token;
+    localStorage.setItem("fleetVendorToken", vndToken);
     await boot();
   }catch(e){ lastError = e.message; renderLogin(); }
 }
@@ -253,7 +250,7 @@ function renderForcedPasswordChange(){
     <div class="logo"><img class="brand-logo" src="logo-mark.png" alt="Padma Sri Travels" /></div>
     <div class="sub">Set a new password to continue</div>
     <div class="card">
-      <div class="banner">For security, you need to set your own password before you can use the portal${vehicleOwner && vehicleOwner.name ? ", " + vehicleOwner.name : ""}.</div>
+      <div class="banner">For security, you need to set your own password before you can use the portal${vendor && vendor.name ? ", " + vendor.name : ""}.</div>
       ${pwChangeError ? `<div class="banner error">${pwChangeError}</div>` : ""}
       <div class="field"><label>Current (Temporary) Password</label><input type="password" id="pwCurrent" autocomplete="current-password" /></div>
       <div class="field"><label>New Password</label><input type="password" id="pwNew" autocomplete="new-password" /></div>
@@ -280,17 +277,6 @@ async function submitForcedPasswordChange(){
   }catch(e){ pwChangeError = e.message; renderForcedPasswordChange(); }
 }
 
-function billingLabel(b){
-  if(!b) return "-";
-  if(b.mode==="per_trip") return `₹${b.rate} / trip`;
-  if(b.mode==="per_km") return `₹${b.rate} / km`;
-  if(b.mode==="per_package") return `₹${b.rate} / month (package)`;
-  return "-";
-}
-function sourceBadge(source){
-  const labels = {trip:"PER TRIP", km:"PER KM", package:"PACKAGE"};
-  return `<span class="badge ${source}">${labels[source]||source.toUpperCase()}</span>`;
-}
 // DD/MM/YYYY display for raw "YYYY-MM-DD" date strings from the API - matches
 // the DD/MM/YYYY convention used across the staff and driver apps (see
 // fmtDMY in index.html/driver.html).
@@ -301,91 +287,56 @@ function fmtDMY(dateStr){
 }
 function render(){
   const app = document.getElementById("app");
-  const d = dashboard || {vehicles:[],totalTrips:0,completedTrips:0,totalIncome:0,incomeEntries:[],payments:[],paymentsByType:{},totalPaid:0,advances:[],totalOutstandingPrincipal:0,totalInterestAccrued:0,netPayableToVehicleOwner:0};
-  const vehicleRows = d.vehicles.map(v=>`
+  const d = dashboard || {bills:[],totalBilled:0,payments:[],totalPaid:0,outstandingPayable:0};
+  const billRows = d.bills.map(b=>`
     <tr>
-      <td><b>${v.reg}</b></td>
-      <td>${v.clientName || "-"}</td>
-      <td>${v.route || "-"}${v.routeStartingPoint ? " ("+v.routeStartingPoint+")" : ""}</td>
-      <td>${v.driverName || "-"}</td>
-      <td>${billingLabel(v.billing)}</td>
-    </tr>`).join("");
-  const incomeRows = d.incomeEntries.map(e=>`
-    <tr>
-      <td>${fmtDMY(e.date)}</td>
-      <td>${sourceBadge(e.source)}</td>
-      <td>₹${e.amount}</td>
-      <td>${e.note||""}</td>
+      <td>${fmtDMY(b.date)}</td>
+      <td>${b.category}</td>
+      <td>${b.description}</td>
+      <td>₹${b.amount}</td>
+      <td>₹${b.paidAgainstBill}</td>
+      <td><span class="badge ${b.outstanding>0?'outstanding':'settled'}">₹${b.outstanding}</span></td>
     </tr>`).join("");
   const paymentRows = d.payments.map(p=>`
     <tr>
       <td>${fmtDMY(p.date)}</td>
-      <td>${p.type}</td>
+      <td>${p.mode}</td>
       <td>₹${p.amount}</td>
       <td>${p.note||""}</td>
     </tr>`).join("");
-  const advanceRows = d.advances.map(a=>`
-    <tr>
-      <td>${fmtDMY(a.date)}</td>
-      <td>₹${a.principal}</td>
-      <td>₹${a.outstandingPrincipal}</td>
-      <td>₹${a.interestAccrued} <span class="muted">(3%/mo simple)</span></td>
-      <td><span class="badge ${a.status}">${a.status.toUpperCase()}</span></td>
-    </tr>`).join("");
-  const paymentTypeCards = Object.entries(d.paymentsByType).map(([type,amt])=>
-    `<div class="kpi"><div class="num">₹${amt}</div><div class="label">${type} paid</div></div>`
-  ).join("");
 
   app.innerHTML = `
   <header class="topbar">
-    <div class="brand"><img class="brand-logo" src="logo-mark.png" alt="" /> Padmasri <span class="accent-script">Travels</span> - Vehicle Owner Portal</div>
+    <div class="brand"><img class="brand-logo" src="logo-mark.png" alt="" /> Padmasri <span class="accent-script">Travels</span> - Vendor Portal</div>
     <div>
-      <span class="who">${vehicleOwner ? vehicleOwner.name : ""}</span>
+      <span class="who">${vendor ? vendor.name : ""}</span>
       <button class="gear" title="Theme" onclick="toggleThemeModal()">&#9881;</button>
       <button class="logout" onclick="doLogout()">Log out</button>
     </div>
   </header>
   ${themeModalHtml()}
   <main>
-    <h1 class="page-title">Welcome, ${vehicleOwner ? vehicleOwner.name : ""}</h1>
+    <h1 class="page-title">Welcome, ${vendor ? vendor.name : ""}</h1>
     <div class="grid cols-4">
-      <div class="kpi"><div class="num">${d.vehicles.length}</div><div class="label">Your vehicles</div></div>
-      <div class="kpi"><div class="num">${d.completedTrips} / ${d.totalTrips}</div><div class="label">Completed / total trips</div></div>
-      <div class="kpi good"><div class="num">₹${d.totalIncome}</div><div class="label">Total income earned</div></div>
-      <div class="kpi ${d.netPayableToVehicleOwner<0?'bad':'good'}"><div class="num">₹${d.netPayableToVehicleOwner}</div><div class="label">Net payable to you</div></div>
+      <div class="kpi"><div class="num">${vendor ? vendor.category : "-"}</div><div class="label">Category</div></div>
+      <div class="kpi"><div class="num">₹${d.totalBilled}</div><div class="label">Total billed</div></div>
+      <div class="kpi good"><div class="num">₹${d.totalPaid}</div><div class="label">Total paid</div></div>
+      <div class="kpi ${d.outstandingPayable>0?'bad':'good'}"><div class="num">₹${d.outstandingPayable}</div><div class="label">Outstanding payable</div></div>
     </div>
 
     <div class="card">
-      <h2 class="section-title">Your Vehicles</h2>
-      <table><tr><th>Vehicle</th><th>Client</th><th>Route</th><th>Driver</th><th>Billing</th></tr>
-      ${vehicleRows || "<tr><td colspan='5' class='empty'>No vehicles linked to your account yet.</td></tr>"}</table>
-    </div>
-
-    <div class="card">
-      <h2 class="section-title">Income Earned (most recent 200 entries)</h2>
-      <table><tr><th>Date</th><th>Source</th><th>Amount</th><th>Note</th></tr>
-      ${incomeRows || "<tr><td colspan='4' class='empty'>No income recorded yet.</td></tr>"}</table>
+      <h2 class="section-title">Your Bills / Invoices</h2>
+      <table><tr><th>Date</th><th>Category</th><th>Description</th><th>Billed</th><th>Paid</th><th>Outstanding</th></tr>
+      ${billRows || "<tr><td colspan='6' class='empty'>No bills recorded yet.</td></tr>"}</table>
     </div>
 
     <div class="card">
       <h2 class="section-title">Payments Received From Us</h2>
-      ${paymentTypeCards ? `<div class="grid cols-4" style="margin-bottom:14px;">${paymentTypeCards}<div class="kpi"><div class="num">₹${d.totalPaid}</div><div class="label">Total paid</div></div></div>` : ""}
-      <table><tr><th>Date</th><th>Type</th><th>Amount</th><th>Note</th></tr>
+      <table><tr><th>Date</th><th>Mode</th><th>Amount</th><th>Note</th></tr>
       ${paymentRows || "<tr><td colspan='4' class='empty'>No payments recorded yet.</td></tr>"}</table>
     </div>
 
-    <div class="card">
-      <h2 class="section-title">Advances &amp; Interest</h2>
-      <div class="banner">Any advance we pay you accrues simple interest at 36% per annum (3% per month) on the outstanding balance until it's settled.</div>
-      <div class="grid cols-4" style="margin-bottom:14px;">
-        <div class="kpi bad"><div class="num">₹${d.totalOutstandingPrincipal}</div><div class="label">Outstanding principal</div></div>
-        <div class="kpi warn"><div class="num">₹${d.totalInterestAccrued}</div><div class="label">Interest accrued</div></div>
-      </div>
-      <table><tr><th>Date</th><th>Principal</th><th>Outstanding</th><th>Interest</th><th>Status</th></tr>
-      ${advanceRows || "<tr><td colspan='5' class='empty'>No advances recorded yet.</td></tr>"}</table>
-    </div>
-
-    <div class="footer-note">Padmasri Travels &middot; Vehicle Owner Portal</div>
+    <div class="footer-note">Padmasri Travels &middot; Vendor Portal</div>
   </main>`;
 }
 

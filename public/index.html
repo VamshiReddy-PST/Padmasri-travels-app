@@ -1342,10 +1342,10 @@ function tabsForInner(role){
   // per the Owner's explicit request, Ops Manager has no role in approving
   // odometer or fuel readings (they previously had odometer_verify; removed
   // on request).
-  if(role==="ops_manager") return [["operations","Operations"],["overview","Overview"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["vehicle_owners","Vehicle Owners"],["transport","Employee Transport"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["verifications","Verifications"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="ops_manager") return [["operations","Operations"],["overview","Overview"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["vehicle_owners","Vehicle Owners"],["vendors","Vendors"],["transport","Employee Transport"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["verifications","Verifications"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="data_team") return [["corrections","Corrections"],["overview","Overview"],["expenses_view","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["verifications","Verifications"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["audit","Audit Log"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["verifications","Verifications"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["overview","Overview"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["vehicle_owners","Vehicle Owners"],["transport","Employee Transport"],["verifications","Verifications"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"]];
+  if(role==="owner") return [["overview","Overview"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["vehicle_owners","Vehicle Owners"],["vendors","Vendors"],["transport","Employee Transport"],["verifications","Verifications"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="admin") return [["overview","Overview"],["fleet_list","Fleet"],["organisation","Organisation"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
   // Billing - new role, per the Owner's explicit request: the only staff
@@ -1379,7 +1379,7 @@ const TAB_GROUP_MAP = {
   my_vehicles:"fleet", onboarding:"fleet", admin_vehicles:"fleet", usage:"fleet", overview:"fleet",
   assignments:"fleet", fleet_list:"fleet", add_vehicle:"fleet", routes:"fleet", subvendor_expenses:"fleet",
   fleet_health:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
-  subvendors:"fleet", vehicle_owners:"fleet", hierarchy:"fleet",
+  subvendors:"fleet", vehicle_owners:"fleet", vendors:"fleet", hierarchy:"fleet",
   trips:"trips", my_attendance:"trips", attendance:"trips", my_expenses:"trips", queue:"trips",
   expenses:"finance", expenses_view:"finance", payroll:"finance", backup:"finance", kiosk:"finance",
   people:"people", verifications:"people", corrections:"people", audit:"people", organisation:"people",
@@ -1659,6 +1659,7 @@ async function routeView(){
     if(tab==="trips") return tripsScreen();
     if(tab==="subvendors") return subvendorsScreen();
     if(tab==="vehicle_owners") return vehicleOwnersScreen();
+    if(tab==="vendors") return vendorsScreen();
     if(tab==="people") return view.name==="add_driver_wizard" ? addDriverWizardScreen() : (view.name==="add_staff_wizard" ? addStaffWizardScreen() : peopleScreen());
     if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : (view.name==="vehicle_detail" ? vehicleExpenditureScreen(view.vehicleId) : reportsScreen());
     if(tab==="backup") return backupDownloadsScreen();
@@ -1682,6 +1683,7 @@ async function routeView(){
     if(tab==="trips") return tripsScreen();
     if(tab==="subvendors") return subvendorsScreen();
     if(tab==="vehicle_owners") return vehicleOwnersScreen();
+    if(tab==="vendors") return vendorsScreen();
     if(tab==="people") return view.name==="add_driver_wizard" ? addDriverWizardScreen() : (view.name==="add_staff_wizard" ? addStaffWizardScreen() : peopleScreen());
     if(tab==="attendance") return hrAttendanceScreen();
     if(tab==="audit") return auditScreen();
@@ -4607,6 +4609,8 @@ let subvendors = [];
 let editingSubvendorId = null;
 let vehicleOwners = [];
 let editingVehicleOwnerId = null;
+let vendors = [];
+let editingVendorId = null;
 // Completed shifts pile up fast (every driver, every day) and there's
 // nothing actionable in them, so they're hidden behind this toggle by
 // default - Pending and Approved (the two zones that actually need
@@ -10140,6 +10144,162 @@ async function settleVehicleOwnerAdvance(id, advanceId, maxAmount){
     await api(`/vehicle-owners/${id}/advances/${advanceId}/settle`, {method:"PATCH", body: JSON.stringify({amount:Number(amountStr)})});
     await renderMain();
   }catch(e){ alert(e.message); }
+}
+
+// ---- Vendors (non-vehicle suppliers: tyres, parts, uniforms, etc.) ----
+// A Vendor bills US for goods/services (unlike Subvendor/Vehicle Owner, who
+// we owe income to) - so this is a simple payables ledger: Bills raised by
+// the vendor minus Payments we've made, giving an outstanding balance. No
+// vehicle, no billing-mode contract, no trip/km accrual.
+const VENDOR_CATEGORIES = ["Tyres","Spare Parts","Uniform","Insurance Broker","Fuel Station","Vehicle Documentation / RTO Agent","Workshop Consumables","Other"];
+async function vendorsScreen(){
+  vendors = await api("/vendors");
+  const filtered = vendors.filter(v=>matchesSearch('vendors', v.name, v.email, v.phone, v.category, v.gstNumber));
+  const rows = filtered.map(v=>`
+    <tr>
+      <td><b>${v.name}</b></td>
+      <td>${v.category}</td>
+      <td>${v.email||v.phone||"-"}</td>
+      <td>${v.active!==false ? '<span class="badge approved">ACTIVE</span>' : '<span class="badge rejected">INACTIVE</span>'}</td>
+      <td><button class="btn small secondary" onclick="toggleVendorDetail('${v.id}')">${editingVendorId===v.id?'Close':'View / Manage'}</button></td>
+    </tr>`).join("");
+  return `
+  ${pageHeadHtml('&#128666;', 'Vendors', 'Businesses that supply us goods or services but have no vehicle in our fleet and do no driving - tyre shops, spare-parts suppliers, uniform tailors, insurance brokers, fuel stations, RTO/documentation agents. Distinct from Subvendors and Vehicle Owners, who supply vehicles+drivers and are paid income by us. A Vendor bills us instead - record their Bills here, then record our Payments against them to track what we still owe.')}
+  <div class="card">
+    <div class="flex-between" style="cursor:pointer" onclick="toggleDashSection('vendors_list')" title="${isCardOpen('vendors_list')?'Click to collapse':'Click to expand'}">
+      <h2 class="section-title" style="border-bottom:none;padding-bottom:0;margin-bottom:0;">All Vendors (${vendors.length})</h2>
+      ${cardChevronHtml('vendors_list')}
+    </div>
+    ${isCardOpen('vendors_list') ? `
+    ${searchBoxHtml('vendors', 'Search by name, email, mobile, category or GST...', vendors.length)}
+    ${searchResultCountHtml('vendors', filtered.length, vendors.length)}
+    <table><tr><th>Name</th><th>Category</th><th>Email / Mobile</th><th>Status</th><th></th></tr>
+    ${rows || "<tr><td colspan='5' class='empty'>No vendors match your search.</td></tr>"}</table>
+    <form class="inline-form" onsubmit="return addVendor(event)">
+      <div class="f"><label>Name *</label><input type="text" id="newVndName" required /></div>
+      <div class="f"><label>Category *</label><select id="newVndCategory" required>
+        <option value="">Select...</option>
+        ${VENDOR_CATEGORIES.map(c=>`<option value="${c}">${c}</option>`).join("")}
+      </select></div>
+      <div class="f"><label>Email</label><input type="text" id="newVndEmail" placeholder="for their login" /></div>
+      <div class="f"><label>Mobile</label><input type="tel" id="newVndPhone" placeholder="for their login" /></div>
+      <div class="f"><label>GST Number</label><input type="text" id="newVndGst" /></div>
+      <div class="f"><label>Temporary Password *</label><input type="text" id="newVndPassword" placeholder="9+ chars, letters/numbers/symbols" required /></div>
+      <button class="btn small" type="submit">+ Add Vendor</button>
+    </form>
+    <div class="muted" style="margin-top:6px;">Either an email or mobile number is required so they can log in - they'll be forced to set their own password the first time.</div>
+    ` : ""}
+  </div>
+  ${editingVendorId ? await vendorDetailHtml(editingVendorId) : ""}
+  `;
+}
+async function toggleVendorDetail(id){
+  editingVendorId = editingVendorId===id ? null : id;
+  await renderMain();
+}
+async function addVendor(evt){
+  evt.preventDefault();
+  const body = {
+    name: document.getElementById("newVndName").value,
+    category: document.getElementById("newVndCategory").value,
+    email: document.getElementById("newVndEmail").value,
+    phone: document.getElementById("newVndPhone").value,
+    gstNumber: document.getElementById("newVndGst").value,
+    password: document.getElementById("newVndPassword").value,
+  };
+  try{
+    await api("/vendors", {method:"POST", body: JSON.stringify(body)});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function vendorDetailHtml(id){
+  const summary = await api(`/vendors/${id}/summary`);
+  const vendor = summary.vendor;
+  const billRows = summary.bills.map(b=>`
+    <tr>
+      <td>${fmtDMY(b.date)}</td>
+      <td>${b.category}</td>
+      <td>${b.description}</td>
+      <td>₹${b.amount}</td>
+      <td>₹${b.paidAgainstBill}</td>
+      <td class="${b.outstanding>0?'bad':'good'}">₹${b.outstanding}</td>
+      <td>${b.invoiceUrl ? `<a href="${b.invoiceUrl}" target="_blank">View</a>` : '-'}</td>
+    </tr>`).join("");
+  const paymentRows = summary.payments.map(p=>`
+    <tr><td>${fmtDMY(p.date)}</td><td>${p.mode}</td><td>₹${p.amount}</td><td>${p.note||''}</td><td>${p.createdByName||''}</td></tr>`).join("");
+  return `
+  <div class="card">
+    <h2 class="section-title">${vendor.name} - Overview</h2>
+    <div class="grid cols-4" style="margin-bottom:16px;">
+      <div class="kpi"><div class="num">${vendor.category}</div><div class="label">Category</div></div>
+      <div class="kpi"><div class="num">₹${summary.totalBilled}</div><div class="label">Total billed</div></div>
+      <div class="kpi good"><div class="num">₹${summary.totalPaid}</div><div class="label">Total paid</div></div>
+      <div class="kpi ${summary.outstandingPayable>0?'bad':'good'}"><div class="num">₹${summary.outstandingPayable}</div><div class="label">Outstanding payable</div></div>
+    </div>
+
+    <h2 class="section-title">Record a Bill / Invoice</h2>
+    <form class="inline-form" onsubmit="return recordVendorBill('${id}', event)">
+      <div class="f"><label>Date</label><input type="date" id="vndBillDate_${id}" value="${todayStr()}" /></div>
+      <div class="f"><label>Category</label><select id="vndBillCategory_${id}">
+        ${VENDOR_CATEGORIES.map(c=>`<option value="${c}" ${c===vendor.category?'selected':''}>${c}</option>`).join("")}
+      </select></div>
+      <div class="f" style="min-width:220px;"><label>Description *</label><input type="text" id="vndBillDesc_${id}" placeholder="e.g. 4x truck tyres, size 295/80" required /></div>
+      <div class="f"><label>Amount (₹) *</label><input type="number" step="0.01" min="0.01" id="vndBillAmount_${id}" style="width:110px" required /></div>
+      <div class="f"><label>Invoice Photo</label><input type="file" accept="image/*,application/pdf" id="vndBillInvoice_${id}" /></div>
+      <button class="btn small" type="submit">+ Record Bill</button>
+    </form>
+    <table style="margin-top:10px;"><tr><th>Date</th><th>Category</th><th>Description</th><th>Billed</th><th>Paid</th><th>Outstanding</th><th>Invoice</th></tr>
+    ${billRows || "<tr><td colspan='7' class='empty'>No bills recorded yet.</td></tr>"}</table>
+
+    <h2 class="section-title" style="margin-top:20px;">Record a Payment</h2>
+    <form class="inline-form" onsubmit="return recordVendorPayment('${id}', event)">
+      <div class="f"><label>Against Bill (optional)</label><select id="vndPayBill_${id}">
+        <option value="">On account (no specific bill)</option>
+        ${summary.bills.filter(b=>b.outstanding>0).map(b=>`<option value="${b.id}">${fmtDMY(b.date)} - ${b.description} (₹${b.outstanding} due)</option>`).join("")}
+      </select></div>
+      <div class="f"><label>Mode</label><select id="vndPayMode_${id}">
+        <option>Cash</option><option>UPI</option><option>Bank Transfer</option><option>Cheque</option>
+      </select></div>
+      <div class="f"><label>Amount (₹)</label><input type="number" step="0.01" min="0.01" id="vndPayAmount_${id}" style="width:110px" required /></div>
+      <div class="f"><label>Date</label><input type="date" id="vndPayDate_${id}" value="${todayStr()}" /></div>
+      <div class="f" style="min-width:200px;"><label>Note</label><input type="text" id="vndPayNote_${id}" /></div>
+      <button class="btn small" type="submit">+ Record Payment</button>
+    </form>
+    <table style="margin-top:10px;"><tr><th>Date</th><th>Mode</th><th>Amount</th><th>Note</th><th>By</th></tr>
+    ${paymentRows || "<tr><td colspan='5' class='empty'>No payments recorded yet.</td></tr>"}</table>
+  </div>`;
+}
+async function recordVendorBill(id, evt){
+  evt.preventDefault();
+  const invoice = await readFileAsDataUrl(document.getElementById(`vndBillInvoice_${id}`));
+  const body = {
+    date: document.getElementById(`vndBillDate_${id}`).value,
+    category: document.getElementById(`vndBillCategory_${id}`).value,
+    description: document.getElementById(`vndBillDesc_${id}`).value,
+    amount: Number(document.getElementById(`vndBillAmount_${id}`).value),
+    invoice,
+  };
+  try{
+    await api(`/vendors/${id}/bills`, {method:"POST", body: JSON.stringify(body)});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
+}
+async function recordVendorPayment(id, evt){
+  evt.preventDefault();
+  const body = {
+    billId: document.getElementById(`vndPayBill_${id}`).value || null,
+    mode: document.getElementById(`vndPayMode_${id}`).value,
+    amount: Number(document.getElementById(`vndPayAmount_${id}`).value),
+    date: document.getElementById(`vndPayDate_${id}`).value,
+    note: document.getElementById(`vndPayNote_${id}`).value,
+  };
+  try{
+    await api(`/vendors/${id}/payments`, {method:"POST", body: JSON.stringify(body)});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+  return false;
 }
 
 // ================= ODOMETER VERIFICATION =================
