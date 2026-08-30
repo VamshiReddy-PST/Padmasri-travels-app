@@ -1523,7 +1523,7 @@ async function routeView(){
   if(tab==="smart_assistant") return smartAssistantScreen();
   if(tab==="hierarchy") return hierarchyScreen();
   if(tab==="letterhead") return letterheadScreen();
-  if(tab==="onboarding") return supervisorOnboardingScreen();
+  if(tab==="onboarding") return view.name==="add_vehicle_onboarding_wizard" ? addVehicleOnboardingWizardScreen() : supervisorOnboardingScreen();
   if(tab==="approvals") return fleetApprovalsScreen();
   // "My Vehicles" is shared by Area Supervisor and Regional Supervisor - an Area
   // Supervisor can directly hold some vehicles/sites themselves (same as a
@@ -1697,41 +1697,10 @@ async function supervisorOnboardingScreen(){
   <div class="banner">You have full control over adding new vehicles and drivers here - once submitted, a vehicle needs Data Team or Owner approval, and a driver needs HR or Owner approval, before it's usable across the app (trips, assignments, etc.). You cannot delete a vehicle or driver once added.</div>
 
   <div class="card">
-    <h2 class="section-title">Add a Vehicle</h2>
-    <div class="banner">Every field below is required.</div>
-    <form class="inline-form" onsubmit="return submitVehicleOnboarding(event)">
-      <div class="f"><label>Registration number *</label><input type="text" id="obVehicleReg" placeholder="TS 09 XX 1234" required /></div>
-      <div class="f"><label>Vehicle Type *</label>
-        <select id="obVehicleType" required onchange="onObVehicleTypeChange()">
-          <option value="">- select -</option>
-          ${vehicleTypeOptionsHtml("")}
-        </select>
-      </div>
-      <div class="f"><label>Fuel Type *</label>
-        <select id="obVehicleFuel" required>
-          <option value="">- select -</option>
-          <option value="Diesel">Diesel</option>
-          <option value="Petrol">Petrol</option>
-          <option value="CNG">CNG</option>
-          <option value="EV">EV</option>
-          <option value="Hybrid">Hybrid</option>
-        </select>
-      </div>
-      <div class="f"><label>Usage *</label>
-        <select id="obVehicleUsage" required>
-          <option value="fixed_route">Fixed Route</option>
-          <option value="client_on_demand">Client on demand</option>
-          <option value="booking">Booking</option>
-        </select>
-      </div>
-      <div class="f"><label>Make *</label><input type="text" id="obVehicleMake" placeholder="e.g. Tata" style="width:100px" required /></div>
-      <div class="f"><label>Model *</label><input type="text" id="obVehicleModel" placeholder="e.g. Winger" style="width:100px" required /></div>
-      <div class="f"><label>Engine No. *</label><input type="text" id="obVehicleEngineNo" style="width:110px" required /></div>
-      <div class="f"><label>Chassis No. *</label><input type="text" id="obVehicleChassisNo" style="width:110px" required /></div>
-      <div class="f"><label>RC Date (registration date) *</label><input type="date" id="obVehicleRcDate" style="width:140px" required /></div>
-      <div class="f"><label>Seating Capacity *</label><input type="number" id="obVehicleSeating" min="1" style="width:80px" required /></div>
-      <button class="btn small" type="submit" ${onboardingBusy?"disabled":""}>${onboardingBusy?'<span class="spinner"></span>':'+ Submit vehicle for approval'}</button>
-    </form>
+    <div class="flex-between">
+      <h2 class="section-title" style="margin-bottom:0;">Add a Vehicle</h2>
+      <button class="btn small" onclick="startVehicleOnboardingWizard()">+ Add a Vehicle</button>
+    </div>
     <h3 style="margin:16px 0 8px;">Your vehicle submissions</h3>
     <table><tr><th>Vehicle</th><th>Make/Model</th><th>Status</th><th>Rejection reason</th></tr>
     ${vehicleRows || "<tr><td colspan='4' class='empty'>You haven't submitted any vehicles yet.</td></tr>"}
@@ -1754,6 +1723,138 @@ async function supervisorOnboardingScreen(){
     </table>
   </div>
   `;
+}
+// ---- Add a Vehicle wizard (Site/Area Supervisor onboarding) - collects all
+// fields across 3 steps in memory (nothing is created until the final step,
+// since every field is required and there's no useful partial record to
+// save along the way), then submits once via the same POST /vehicles the
+// old single-screen form used - server-side role logic is what marks it
+// "pending" and routes it to Data Team/Owner approval. ----
+let vehicleOnboardingWizard = {step:0, busy:false, done:false, reg:'', data:{}};
+const VEHICLE_ONBOARDING_WIZARD_STEPS = [
+  {title:"Identity", sub:"Registration, type, fuel & usage"},
+  {title:"Specs", sub:"Make, model & identification numbers"},
+  {title:"Registration Details", sub:"RC date & seating capacity"},
+];
+function startVehicleOnboardingWizard(){ vehicleOnboardingWizard = {step:0, busy:false, done:false, reg:'', data:{}}; goto('add_vehicle_onboarding_wizard'); }
+function vehicleOnboardingWizardBack(){ if(vehicleOnboardingWizard.step>0){ vehicleOnboardingWizard.step--; renderMain(); } }
+async function addVehicleOnboardingWizardScreen(){
+  if(vehicleOnboardingWizard.done){
+    return wizardSuccessHtml("Vehicle Submitted for Approval", `${vehicleOnboardingWizard.reg} has been submitted - waiting on Data Team/Owner approval before it's usable across the app.`, "Back to Add Vehicle/Driver", "goto('onboarding')");
+  }
+  const step = vehicleOnboardingWizard.step;
+  const body = step===0 ? vehicleOnboardingWizardStep1Html() : step===1 ? vehicleOnboardingWizardStep2Html() : vehicleOnboardingWizardStep3Html();
+  return `
+  <h1 class="page-title">Add a Vehicle</h1>
+  <div class="banner">Every field is required. Once submitted, this vehicle needs Data Team or Owner approval before it's usable across the app (trips, assignments, etc.).</div>
+  ${stepperHtml(VEHICLE_ONBOARDING_WIZARD_STEPS, step)}
+  <div class="card">${body}</div>
+  `;
+}
+function onVowVehicleTypeChange(){
+  const typeEl = document.getElementById("vow_type");
+  const fuelEl = document.getElementById("vow_fuel");
+  if(!typeEl || !fuelEl) return;
+  if(typeEl.value === "Bus"){ fuelEl.value = "Diesel"; fuelEl.disabled = true; }
+  else { fuelEl.disabled = false; }
+}
+function vehicleOnboardingWizardStep1Html(){
+  const d = vehicleOnboardingWizard.data;
+  return `
+  <div class="grid cols-2">
+    <div class="f"><label>Registration number *</label><input type="text" id="vow_reg" placeholder="TS 09 XX 1234" value="${d.reg||''}" required /></div>
+    <div class="f"><label>Vehicle Type *</label>
+      <select id="vow_type" required onchange="onVowVehicleTypeChange()">
+        <option value="">- select -</option>
+        ${vehicleTypeOptionsHtml(d.vehicleType||"")}
+      </select>
+    </div>
+    <div class="f"><label>Fuel Type *</label>
+      <select id="vow_fuel" required>
+        <option value="">- select -</option>
+        ${["Diesel","Petrol","CNG","EV","Hybrid"].map(f=>`<option value="${f}" ${d.fuelType===f?'selected':''}>${f}</option>`).join("")}
+      </select>
+    </div>
+    <div class="f"><label>Usage *</label>
+      <select id="vow_usage" required>
+        ${[["fixed_route","Fixed Route"],["client_on_demand","Client on demand"],["booking","Booking"]].map(([v,l])=>`<option value="${v}" ${(d.usage||"fixed_route")===v?'selected':''}>${l}</option>`).join("")}
+      </select>
+    </div>
+  </div>
+  <div class="wizard-actions">
+    <span></span>
+    <button class="btn" ${vehicleOnboardingWizard.busy?'disabled':''} onclick="vehicleOnboardingWizardStep1Next()">Next &rsaquo;</button>
+  </div>`;
+}
+function vehicleOnboardingWizardStep1Next(){
+  const g = id => document.getElementById(id).value;
+  const reg = g('vow_reg'), vehicleType = g('vow_type'), fuelType = g('vow_fuel'), usage = g('vow_usage');
+  const missing = [];
+  if(!String(reg||'').trim()) missing.push("Registration number");
+  if(!vehicleType) missing.push("Vehicle Type");
+  if(!fuelType) missing.push("Fuel Type");
+  if(missing.length){ alert("Missing required field(s): " + missing.join(", ")); return; }
+  Object.assign(vehicleOnboardingWizard.data, {reg, vehicleType, fuelType, usage});
+  vehicleOnboardingWizard.step = 1;
+  renderMain();
+}
+function vehicleOnboardingWizardStep2Html(){
+  const d = vehicleOnboardingWizard.data;
+  return `
+  <div class="grid cols-2">
+    <div class="f"><label>Make *</label><input type="text" id="vow_make" placeholder="e.g. Tata" value="${d.make||''}" required /></div>
+    <div class="f"><label>Model *</label><input type="text" id="vow_model" placeholder="e.g. Winger" value="${d.model||''}" required /></div>
+    <div class="f"><label>Engine No. *</label><input type="text" id="vow_engineNo" value="${d.engineNo||''}" required /></div>
+    <div class="f"><label>Chassis No. *</label><input type="text" id="vow_chassisNo" value="${d.chassisNo||''}" required /></div>
+  </div>
+  <div class="wizard-actions">
+    <button class="btn secondary" onclick="vehicleOnboardingWizardBack()">&larr; Previous</button>
+    <button class="btn" ${vehicleOnboardingWizard.busy?'disabled':''} onclick="vehicleOnboardingWizardStep2Next()">Next &rsaquo;</button>
+  </div>`;
+}
+function vehicleOnboardingWizardStep2Next(){
+  const g = id => document.getElementById(id).value;
+  const make = g('vow_make'), model = g('vow_model'), engineNo = g('vow_engineNo'), chassisNo = g('vow_chassisNo');
+  const missing = [];
+  if(!String(make||'').trim()) missing.push("Make");
+  if(!String(model||'').trim()) missing.push("Model");
+  if(!String(engineNo||'').trim()) missing.push("Engine No");
+  if(!String(chassisNo||'').trim()) missing.push("Chassis No");
+  if(missing.length){ alert("Missing required field(s): " + missing.join(", ")); return; }
+  Object.assign(vehicleOnboardingWizard.data, {make, model, engineNo, chassisNo});
+  vehicleOnboardingWizard.step = 2;
+  renderMain();
+}
+function vehicleOnboardingWizardStep3Html(){
+  const d = vehicleOnboardingWizard.data;
+  return `
+  <div class="grid cols-2">
+    <div class="f"><label>RC Date (registration date) *</label><input type="date" id="vow_rcDate" value="${d.rcDate||''}" required /></div>
+    <div class="f"><label>Seating Capacity *</label><input type="number" id="vow_seating" min="1" value="${d.seatingCapacity||''}" required /></div>
+  </div>
+  <div class="wizard-actions">
+    <button class="btn secondary" onclick="vehicleOnboardingWizardBack()">&larr; Previous</button>
+    <button class="btn" ${vehicleOnboardingWizard.busy?'disabled':''} onclick="vehicleOnboardingWizardStep3Submit()">${vehicleOnboardingWizard.busy?'<span class="spinner"></span>':'&#10003; Submit for approval'}</button>
+  </div>`;
+}
+async function vehicleOnboardingWizardStep3Submit(){
+  const g = id => document.getElementById(id).value;
+  const rcDate = g('vow_rcDate'), seatingCapacity = g('vow_seating');
+  const missing = [];
+  if(!rcDate) missing.push("RC Date");
+  if(!seatingCapacity) missing.push("Seating Capacity");
+  if(missing.length){ alert("Missing required field(s): " + missing.join(", ")); return; }
+  Object.assign(vehicleOnboardingWizard.data, {rcDate, seatingCapacity});
+  vehicleOnboardingWizard.busy = true; await renderMain();
+  try{
+    const v = await api("/vehicles", {method:"POST", body: JSON.stringify(vehicleOnboardingWizard.data)});
+    // NOT pushed into `vehicles` - it's pending and isn't a real fleet
+    // vehicle yet, so it must not appear in any operational screen.
+    mySubmittedVehicles.unshift(v);
+    vehicleOnboardingWizard.reg = v.reg;
+    vehicleOnboardingWizard.done = true;
+  }catch(e){ alert(e.message); }
+  vehicleOnboardingWizard.busy = false; await renderMain();
 }
 function onObVehicleTypeChange(){
   const typeEl = document.getElementById("obVehicleType");
