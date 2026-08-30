@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Padmasri Travels - Subvendor Portal</title>
+<title>Padmasri Travels - Vehicle Owner Portal</title>
 <meta name="theme-color" content="#3E0B07" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@1,500;1,600;1,700&display=swap" rel="stylesheet">
 <style>
   :root{
     /* Console design language - see index.html for the full note. Same
-       tokens as the staff app so the subvendor portal reads as part of
+       tokens as the staff app so the vehicle owner portal reads as part of
        the same product. */
     --ink:#1A1A18; --accent:#006643; --accent-dark:#004D33; --accent-light:#E1F0EA; --green:#2E7D32;
     --amber:#B8860B; --red:#C0392B; --grey:#6B6B62; --bg:#F6F6F2; --card:#ffffff;
@@ -78,9 +78,9 @@
 <body>
 <div id="app"></div>
 <script>
-const API = "/api/subvendor-auth";
-let svToken = localStorage.getItem("fleetSubvendorToken") || null;
-let subvendor = null;
+const API = "/api/vehicle-owner-auth";
+let voToken = localStorage.getItem("fleetVehicleOwnerToken") || null;
+let vehicleOwner = null;
 let dashboard = null;
 let lastError = "";
 let pwChangeError = "";
@@ -95,14 +95,14 @@ const THEME_PRESETS = {
   black:  { key:"black",  label:"Black",         accent:"#000000", text:"#FFFFFF" },
   white:  { key:"white",  label:"White",         accent:"#FFFFFF", text:"#1A1A1A" },
 };
-function hexToRgbSv(hex){
+function hexToRgbVo(hex){
   const h = hex.replace("#","");
   const n = h.length===3 ? h.split("").map(c=>c+c).join("") : h;
   const int = parseInt(n,16);
   return { r:(int>>16)&255, g:(int>>8)&255, b:int&255 };
 }
-function shadeHexSv(hex, pct){
-  const {r,g,b} = hexToRgbSv(hex);
+function shadeHexVo(hex, pct){
+  const {r,g,b} = hexToRgbVo(hex);
   const f = pct<0 ? 0 : 255, p = Math.abs(pct);
   const nr = Math.round((f-r)*p)+r, ng = Math.round((f-g)*p)+g, nb = Math.round((f-b)*p)+b;
   return "#"+[nr,ng,nb].map(x=>Math.max(0,Math.min(255,x)).toString(16).padStart(2,"0")).join("");
@@ -120,10 +120,10 @@ function applyTheme(themeKey){
     return;
   }
   const preset = THEME_PRESETS[themeKey];
-  const { r, g, b } = hexToRgbSv(preset.text);
+  const { r, g, b } = hexToRgbVo(preset.text);
   root.setProperty("--accent", preset.accent);
-  root.setProperty("--accent-dark", shadeHexSv(preset.accent, -0.2));
-  root.setProperty("--accent-light", shadeHexSv(preset.accent, 0.75));
+  root.setProperty("--accent-dark", shadeHexVo(preset.accent, -0.2));
+  root.setProperty("--accent-light", shadeHexVo(preset.accent, 0.75));
   root.setProperty("--on-accent", preset.text);
   root.setProperty("--on-accent-rgb", `${r},${g},${b}`);
   root.setProperty("--accent-text", preset.accent);
@@ -139,7 +139,7 @@ function toggleThemeModal(){ showThemeModal = !showThemeModal; render(); }
 async function saveTheme(key){
   try{
     const updated = await api("/theme", {method:"POST", body:JSON.stringify({theme:key})});
-    subvendor.theme = updated.theme;
+    vehicleOwner.theme = updated.theme;
     applyTheme(key);
     render();
   }catch(e){ alert(e.message||"Could not update theme."); }
@@ -147,14 +147,14 @@ async function saveTheme(key){
 async function resetTheme(){
   try{
     const updated = await api("/theme", {method:"POST", body:JSON.stringify({theme:null})});
-    subvendor.theme = updated.theme;
+    vehicleOwner.theme = updated.theme;
     applyTheme(null);
     render();
   }catch(e){ alert(e.message||"Could not reset theme."); }
 }
 function themeModalHtml(){
   if(!showThemeModal) return "";
-  const current = (subvendor && subvendor.theme && subvendor.theme.key) || null;
+  const current = (vehicleOwner && vehicleOwner.theme && vehicleOwner.theme.key) || null;
   const swatches = Object.values(THEME_PRESETS).map(p=>{
     const sel = p.key===current;
     return `<button type="button" class="theme-swatch" onclick="saveTheme('${p.key}')" title="${p.label}" style="background:${p.accent};border:${sel?"3px solid var(--ink)":"1px solid var(--border)"};box-shadow:${sel?"0 0 0 2px #fff inset":"none"};"></button>`;
@@ -174,7 +174,7 @@ function themeModalHtml(){
 
 async function api(path, opts){
   opts = opts || {};
-  opts.headers = Object.assign({"Content-Type":"application/json"}, opts.headers||{}, svToken ? {Authorization:"Bearer "+svToken} : {});
+  opts.headers = Object.assign({"Content-Type":"application/json"}, opts.headers||{}, voToken ? {Authorization:"Bearer "+voToken} : {});
   const res = await fetch(API+path, opts);
   const data = await res.json().catch(()=>({}));
   if(res.status===401){ doLogout(true); throw new Error("Session expired - please log in again."); }
@@ -183,19 +183,19 @@ async function api(path, opts){
 }
 
 async function boot(){
-  if(!svToken){ renderLogin(); return; }
+  if(!voToken){ renderLogin(); return; }
   try{
-    subvendor = await api("/me");
-    applyTheme(subvendor.theme && subvendor.theme.key);
-    if(subvendor.mustChangePassword){ renderForcedPasswordChange(); return; }
+    vehicleOwner = await api("/me");
+    applyTheme(vehicleOwner.theme && vehicleOwner.theme.key);
+    if(vehicleOwner.mustChangePassword){ renderForcedPasswordChange(); return; }
     dashboard = await api("/dashboard");
     render();
   }catch(e){ doLogout(true); }
 }
 
 function doLogout(silent){
-  svToken = null; subvendor = null; dashboard = null;
-  localStorage.removeItem("fleetSubvendorToken");
+  voToken = null; vehicleOwner = null; dashboard = null;
+  localStorage.removeItem("fleetVehicleOwnerToken");
   if(!silent) api("/logout", {method:"POST"}).catch(()=>{});
   renderLogin();
 }
@@ -205,19 +205,19 @@ function renderLogin(){
   app.innerHTML = `
   <div class="login-wrap">
     <div class="logo"><img class="brand-logo" src="logo-mark.png" alt="Padma Sri Travels" /></div>
-    <div class="sub">Subvendor / Vehicle Owner Portal</div>
+    <div class="sub">Vehicle Owner Portal</div>
     <div class="card">
       ${lastError ? `<div class="banner error">${lastError}</div>` : ""}
       <div class="field">
         <label>Email or Mobile Number</label>
-        <input type="text" id="loginIdentifier" placeholder="you@company.com or your mobile number" autocomplete="username" />
+        <input type="text" id="loginIdentifier" placeholder="you@example.com or your mobile number" autocomplete="username" />
       </div>
       <div class="field">
         <label>Password</label>
         <input type="password" id="loginPassword" placeholder="Your password" autocomplete="current-password" />
       </div>
       <button class="btn" style="width:100%" onclick="doLogin()" id="loginBtn">Sign in</button>
-      <div class="muted" style="margin-top:14px;text-align:center;border-top:1px solid var(--border);padding-top:14px;">Not a subvendor? <a href="/">Go to the Staff / Driver login</a> &middot; <a href="vehicleowner.html">Vehicle Owner Portal</a></div>
+      <div class="muted" style="margin-top:14px;text-align:center;border-top:1px solid var(--border);padding-top:14px;">Not a vehicle owner? <a href="/">Go to the Staff / Driver login</a> &middot; <a href="subvendor.html">Subvendor Portal</a></div>
     </div>
   </div>`;
 }
@@ -232,8 +232,8 @@ async function doLogin(){
     const res = await fetch(API+"/login", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({identifier, password})});
     const data = await res.json();
     if(!res.ok) throw new Error(data.error || "Login failed");
-    svToken = data.token;
-    localStorage.setItem("fleetSubvendorToken", svToken);
+    voToken = data.token;
+    localStorage.setItem("fleetVehicleOwnerToken", voToken);
     await boot();
   }catch(e){ lastError = e.message; renderLogin(); }
 }
@@ -253,7 +253,7 @@ function renderForcedPasswordChange(){
     <div class="logo"><img class="brand-logo" src="logo-mark.png" alt="Padma Sri Travels" /></div>
     <div class="sub">Set a new password to continue</div>
     <div class="card">
-      <div class="banner">For security, you need to set your own password before you can use the portal${subvendor && subvendor.name ? ", " + subvendor.name : ""}.</div>
+      <div class="banner">For security, you need to set your own password before you can use the portal${vehicleOwner && vehicleOwner.name ? ", " + vehicleOwner.name : ""}.</div>
       ${pwChangeError ? `<div class="banner error">${pwChangeError}</div>` : ""}
       <div class="field"><label>Current (Temporary) Password</label><input type="password" id="pwCurrent" autocomplete="current-password" /></div>
       <div class="field"><label>New Password</label><input type="password" id="pwNew" autocomplete="new-password" /></div>
@@ -301,7 +301,7 @@ function fmtDMY(dateStr){
 }
 function render(){
   const app = document.getElementById("app");
-  const d = dashboard || {vehicles:[],totalTrips:0,completedTrips:0,totalIncome:0,incomeEntries:[],payments:[],paymentsByType:{},totalPaid:0,advances:[],totalOutstandingPrincipal:0,totalInterestAccrued:0,netPayableToSubvendor:0};
+  const d = dashboard || {vehicles:[],totalTrips:0,completedTrips:0,totalIncome:0,incomeEntries:[],payments:[],paymentsByType:{},totalPaid:0,advances:[],totalOutstandingPrincipal:0,totalInterestAccrued:0,netPayableToVehicleOwner:0};
   const vehicleRows = d.vehicles.map(v=>`
     <tr>
       <td><b>${v.reg}</b></td>
@@ -338,21 +338,21 @@ function render(){
 
   app.innerHTML = `
   <header class="topbar">
-    <div class="brand"><img class="brand-logo" src="logo-mark.png" alt="" /> Padmasri <span class="accent-script">Travels</span> - Subvendor Portal</div>
+    <div class="brand"><img class="brand-logo" src="logo-mark.png" alt="" /> Padmasri <span class="accent-script">Travels</span> - Vehicle Owner Portal</div>
     <div>
-      <span class="who">${subvendor ? subvendor.name : ""}</span>
+      <span class="who">${vehicleOwner ? vehicleOwner.name : ""}</span>
       <button class="gear" title="Theme" onclick="toggleThemeModal()">&#9881;</button>
       <button class="logout" onclick="doLogout()">Log out</button>
     </div>
   </header>
   ${themeModalHtml()}
   <main>
-    <h1 class="page-title">Welcome, ${subvendor ? subvendor.name : ""}</h1>
+    <h1 class="page-title">Welcome, ${vehicleOwner ? vehicleOwner.name : ""}</h1>
     <div class="grid cols-4">
       <div class="kpi"><div class="num">${d.vehicles.length}</div><div class="label">Your vehicles</div></div>
       <div class="kpi"><div class="num">${d.completedTrips} / ${d.totalTrips}</div><div class="label">Completed / total trips</div></div>
       <div class="kpi good"><div class="num">₹${d.totalIncome}</div><div class="label">Total income earned</div></div>
-      <div class="kpi ${d.netPayableToSubvendor<0?'bad':'good'}"><div class="num">₹${d.netPayableToSubvendor}</div><div class="label">Net payable to you</div></div>
+      <div class="kpi ${d.netPayableToVehicleOwner<0?'bad':'good'}"><div class="num">₹${d.netPayableToVehicleOwner}</div><div class="label">Net payable to you</div></div>
     </div>
 
     <div class="card">
@@ -385,7 +385,7 @@ function render(){
       ${advanceRows || "<tr><td colspan='5' class='empty'>No advances recorded yet.</td></tr>"}</table>
     </div>
 
-    <div class="footer-note">Padmasri Travels &middot; Subvendor Portal</div>
+    <div class="footer-note">Padmasri Travels &middot; Vehicle Owner Portal</div>
   </main>`;
 }
 
