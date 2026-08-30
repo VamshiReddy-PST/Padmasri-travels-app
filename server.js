@@ -228,6 +228,16 @@ function backfillDefaults() {
     // of the fleet, which is company-owned.
     if (v.subvendorId === undefined) v.subvendorId = null;
     if (v.billing === undefined) v.billing = null;
+    // Vehicle Owner linkage - an individual who owns this vehicle but does
+    // NOT drive it themselves (a separate Driver record, v.driverId, does
+    // the actual driving) - distinct from a Subvendor, who is assumed to be
+    // a driver-cum-owner or a company supplying multiple vehicles+drivers.
+    // Mutually exclusive with subvendorId (a vehicle is either company-owned,
+    // subvendor-supplied, or individually-owned - never more than one).
+    // Shares vehicle.billing with the Subvendor contract shape (per_trip/
+    // per_km/per_package) since only one of subvendorId/vehicleOwnerId is
+    // ever set at a time, so there's no collision.
+    if (v.vehicleOwnerId === undefined) v.vehicleOwnerId = null;
     // Existing fleet is all vans/cabs run on Diesel - safe defaults for
     // records created before vehicle class/fuel type existed as fields.
     if (v.vehicleType === undefined) v.vehicleType = "Cab";
@@ -585,6 +595,10 @@ function backfillDefaults() {
   if (!Array.isArray(db.subvendorPayments)) db.subvendorPayments = [];
   if (!Array.isArray(db.subvendorAdvances)) db.subvendorAdvances = [];
   if (!Array.isArray(db.subvendorIncomeEntries)) db.subvendorIncomeEntries = [];
+  if (!Array.isArray(db.vehicleOwners)) db.vehicleOwners = [];
+  if (!Array.isArray(db.vehicleOwnerPayments)) db.vehicleOwnerPayments = [];
+  if (!Array.isArray(db.vehicleOwnerAdvances)) db.vehicleOwnerAdvances = [];
+  if (!Array.isArray(db.vehicleOwnerIncomeEntries)) db.vehicleOwnerIncomeEntries = [];
   (db.subvendors || []).forEach((sv) => {
     if (sv.contactPerson === undefined) sv.contactPerson = "";
     if (sv.theme === undefined) sv.theme = null;
@@ -6830,7 +6844,7 @@ app.patch(
       trip.status = status;
       if (status === "in_progress" && !trip.startedAt) trip.startedAt = nowIso();
       if (status === "completed" && !trip.completedAt) trip.completedAt = nowIso();
-      if (status === "completed") accrueTripIncomeIfNeeded(trip);
+      if (status === "completed") { accrueTripIncomeIfNeeded(trip); accrueVehicleOwnerTripIncomeIfNeeded(trip); }
     }
     trip.updatedAt = nowIso();
     await audit(req.user, "update_trip", `${req.user.name} updated trip ${trip.id}`);
@@ -7150,6 +7164,7 @@ app.patch(
       const sv = db.subvendors.find((s) => s.id === subvendorId && s.active !== false);
       if (!sv) return res.status(400).json({ error: "Subvendor not found." });
       vehicle.subvendorId = subvendorId;
+      vehicle.vehicleOwnerId = null; // mutually exclusive - a vehicle is either subvendor-supplied or individually-owned, never both
     }
     if (!vehicle.subvendorId) return res.status(400).json({ error: "Select a Subvendor before setting a billing contract." });
     if (billingMode !== undefined || billingRate !== undefined) {
@@ -7384,6 +7399,466 @@ app.get(
   subvendorAuth,
   h(async (req, res) => {
     res.json(subvendorSummary(req.subvendor.id));
+  })
+);
+
+// ---------- VEHICLE OWNERS (owns a vehicle, doesn't drive it) ----------
+// Distinct from a Subvendor: a Subvendor is assumed to be a driver-cum-owner
+// or a company supplying multiple vehicles+drivers under one contract; a
+// Vehicle Owner is an individual who owns exactly the vehicle(s) linked to
+// them but has a separate Driver record (an employee, or one they arrange)
+// actually driving. Gets its own completely separate login, same mechanics
+// as Subvendor (email/mobile + password), so they see only their own
+// vehicles/income/payments - never Subvendor or staff data.
+const VEHICLE_OWNER_MANAGE_ROLES = ["owner", "ops_manager"];
+const VEHICLE_OWNER_PAYMENT_ROLES = [...VEHICLE_OWNER_MANAGE_ROLES, "site_supervisor"];
+// publicSubvendor() is generic (just strips passwordHash/passwordHistory
+// from any account-shaped object) - reused here rather than duplicated.
+const publicVehicleOwner = publicSubvendor;
+
+function accrueVehicleOwnerPackageIncome(vehicle) {
+  if (!vehicle.vehicleOwnerId || !vehicle.billing || vehicle.billing.mode !== "per_package") return;
+  const b = vehicle.billing;
+  const startKey = monthKey(b.effectiveFrom || nowIso());
+  if (!b.lastPackageAccrualMonth) {
+    const [y, m] = startKey.split("-").map(Number);
+    b.lastPackageAccrualMonth = monthKey(new Date(Date.UTC(y, m - 2, 1)));
+  }
+  const nowKey = monthKey(nowIso());
+  while (true) {
+    const due = nextMonthKey(b.lastPackageAccrualMonth);
+    if (due > nowKey) break;
+    db.vehicleOwnerIncomeEntries.push({
+      id: uid("voinc"),
+      vehicleOwnerId: vehicle.vehicleOwnerId,
+      vehicleId: vehicle.id,
+      source: "package",
+      refId: null,
+      amount: b.rate,
+      date: due + "-01",
+      note: `Monthly package charge - ${due}`,
+      createdAt: nowIso(),
+    });
+    b.lastPackageAccrualMonth = due;
+  }
+}
+function accrueVehicleOwnerTripIncomeIfNeeded(trip) {
+  const vehicle = db.vehicles.find((v) => v.id === trip.vehicleId);
+  if (!vehicle || !vehicle.vehicleOwnerId || !vehicle.billing || vehicle.billing.mode !== "per_trip") return;
+  if (db.vehicleOwnerIncomeEntries.some((e) => e.source === "trip" && e.refId === trip.id)) return;
+  db.vehicleOwnerIncomeEntries.push({
+    id: uid("voinc"),
+    vehicleOwnerId: vehicle.vehicleOwnerId,
+    vehicleId: vehicle.id,
+    source: "trip",
+    refId: trip.id,
+    amount: vehicle.billing.rate,
+    date: todayStr(),
+    note: `Trip on ${trip.date}${trip.pickupPoint ? " (" + trip.pickupPoint + (trip.dropPoint ? " -> " + trip.dropPoint : "") + ")" : ""}`,
+    createdAt: nowIso(),
+  });
+}
+function accrueVehicleOwnerKmIncomeIfNeeded(shift) {
+  const vehicle = db.vehicles.find((v) => v.driverId === shift.driverId);
+  if (!vehicle || !vehicle.vehicleOwnerId || !vehicle.billing || vehicle.billing.mode !== "per_km") return;
+  if (typeof shift.odometerOpen !== "number" || typeof shift.odometerClose !== "number") return;
+  const distanceKm = shift.odometerClose - shift.odometerOpen;
+  if (!(distanceKm > 0)) return;
+  if (db.vehicleOwnerIncomeEntries.some((e) => e.source === "km" && e.refId === shift.id)) return;
+  db.vehicleOwnerIncomeEntries.push({
+    id: uid("voinc"),
+    vehicleOwnerId: vehicle.vehicleOwnerId,
+    vehicleId: vehicle.id,
+    source: "km",
+    refId: shift.id,
+    amount: Math.round(vehicle.billing.rate * distanceKm * 100) / 100,
+    date: (shift.odometerCloseAt || nowIso()).slice(0, 10),
+    note: `${distanceKm} km on ${(shift.loginAt || "").slice(0, 10)}`,
+    createdAt: nowIso(),
+  });
+}
+function vehicleOwnerSummary(vehicleOwnerId) {
+  const vehiclesForVo = db.vehicles.filter((v) => v.vehicleOwnerId === vehicleOwnerId);
+  vehiclesForVo.forEach((v) => accrueVehicleOwnerPackageIncome(v));
+  const advancesForVo = db.vehicleOwnerAdvances.filter((a) => a.vehicleOwnerId === vehicleOwnerId);
+  advancesForVo.forEach((a) => accrueAdvanceInterest(a));
+  const vehicleIds = new Set(vehiclesForVo.map((v) => v.id));
+  const tripsForVo = db.trips.filter((t) => vehicleIds.has(t.vehicleId));
+  const completedTrips = tripsForVo.filter((t) => t.status === "completed");
+  const incomeForVo = db.vehicleOwnerIncomeEntries.filter((e) => e.vehicleOwnerId === vehicleOwnerId);
+  const totalIncome = Math.round(incomeForVo.reduce((s, e) => s + e.amount, 0) * 100) / 100;
+  const paymentsForVo = db.vehicleOwnerPayments.filter((p) => p.vehicleOwnerId === vehicleOwnerId);
+  const paymentsByType = {};
+  paymentsForVo.forEach((p) => {
+    paymentsByType[p.type] = Math.round(((paymentsByType[p.type] || 0) + p.amount) * 100) / 100;
+  });
+  const totalPaid = Math.round(paymentsForVo.reduce((s, p) => s + p.amount, 0) * 100) / 100;
+  const totalOutstandingPrincipal =
+    Math.round(advancesForVo.filter((a) => a.status === "outstanding").reduce((s, a) => s + a.outstandingPrincipal, 0) * 100) / 100;
+  const totalInterestAccrued = Math.round(advancesForVo.reduce((s, a) => s + a.interestAccrued, 0) * 100) / 100;
+  return {
+    vehicles: vehiclesForVo.map((v) => ({
+      id: v.id,
+      reg: v.reg,
+      vehicleType: v.vehicleType,
+      fuelType: v.fuelType,
+      clientId: v.clientId,
+      clientName: v.clientId ? clientNameServer(v.clientId) : "",
+      route: vehicleRouteInfo(v).routeNumber,
+      routeStartingPoint: vehicleRouteInfo(v).startingPoint,
+      driverId: v.driverId,
+      driverName: v.driverId ? driverNameServer(v.driverId) : "",
+      billing: v.billing,
+    })),
+    totalTrips: tripsForVo.length,
+    completedTrips: completedTrips.length,
+    totalIncome,
+    incomeEntries: incomeForVo.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 200),
+    payments: paymentsForVo.slice().sort((a, b) => b.date.localeCompare(a.date)),
+    paymentsByType,
+    totalPaid,
+    advances: advancesForVo.slice().sort((a, b) => b.date.localeCompare(a.date)),
+    totalOutstandingPrincipal,
+    totalInterestAccrued,
+    netPayableToVehicleOwner: Math.round((totalIncome - totalPaid - totalInterestAccrued) * 100) / 100,
+  };
+}
+
+app.get("/api/vehicle-owners", requireAuth, requireRole(...VEHICLE_OWNER_PAYMENT_ROLES), (req, res) => {
+  let list = db.vehicleOwners;
+  if (req.user.role === "site_supervisor") {
+    const myIds = new Set(visibleVehiclesFor(req.user).filter((v) => v.vehicleOwnerId).map((v) => v.vehicleOwnerId));
+    list = list.filter((o) => myIds.has(o.id));
+  }
+  res.json(list.map(publicVehicleOwner));
+});
+
+app.post(
+  "/api/vehicle-owners",
+  requireAuth,
+  requireRole(...VEHICLE_OWNER_MANAGE_ROLES),
+  h(async (req, res) => {
+    const { name, email, phone, panNumber, address, password } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "Vehicle owner's name is required." });
+    const emailNorm = email ? String(email).trim().toLowerCase() : "";
+    const phoneNorm = phone ? String(phone).trim() : "";
+    if (!emailNorm && !phoneNorm) return res.status(400).json({ error: "Either an email address or a mobile number is required to log in." });
+    const clash = db.vehicleOwners.find((o) => (emailNorm && o.email === emailNorm) || (phoneNorm && o.phone === phoneNorm));
+    if (clash) return res.status(400).json({ error: "That email or mobile number is already in use by another vehicle owner." });
+    if (!password) return res.status(400).json({ error: "A temporary password is required." });
+    const policyError = passwordPolicyError(password);
+    if (policyError) return res.status(400).json({ error: policyError });
+    const owner = {
+      id: uid("vo"),
+      name,
+      email: emailNorm,
+      phone: phoneNorm,
+      panNumber: panNumber || "",
+      address: address || "",
+      passwordHash: hashPassword(password),
+      passwordHistory: [],
+      mustChangePassword: true,
+      active: true,
+      createdAt: nowIso(),
+      theme: null,
+    };
+    db.vehicleOwners.push(owner);
+    await audit(req.user, "create_vehicle_owner", `${req.user.name} added vehicle owner ${name}`);
+    res.json(publicVehicleOwner(owner));
+  })
+);
+
+app.patch(
+  "/api/vehicle-owners/:id",
+  requireAuth,
+  requireRole(...VEHICLE_OWNER_MANAGE_ROLES),
+  h(async (req, res) => {
+    const owner = db.vehicleOwners.find((o) => o.id === req.params.id);
+    if (!owner) return res.status(404).json({ error: "Vehicle owner not found." });
+    const { name, email, phone, panNumber, address, active } = req.body || {};
+    if (name !== undefined) owner.name = name;
+    if (email !== undefined) owner.email = String(email).trim().toLowerCase();
+    if (phone !== undefined) owner.phone = String(phone).trim();
+    if (panNumber !== undefined) owner.panNumber = panNumber;
+    if (address !== undefined) owner.address = address;
+    if (active !== undefined) owner.active = !!active;
+    await audit(req.user, "update_vehicle_owner", `${req.user.name} updated vehicle owner ${owner.name}`);
+    res.json(publicVehicleOwner(owner));
+  })
+);
+
+app.patch(
+  "/api/vehicle-owners/:id/reset-password",
+  requireAuth,
+  requireRole("owner"),
+  h(async (req, res) => {
+    const owner = db.vehicleOwners.find((o) => o.id === req.params.id);
+    if (!owner) return res.status(404).json({ error: "Vehicle owner not found." });
+    const { newPassword } = req.body || {};
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError) return res.status(400).json({ error: policyError });
+    owner.passwordHistory = [owner.passwordHash, ...(owner.passwordHistory || [])].filter(Boolean).slice(0, PASSWORD_HISTORY_LIMIT);
+    owner.passwordHash = hashPassword(newPassword);
+    owner.mustChangePassword = true;
+    await audit(req.user, "reset_vehicle_owner_password", `${req.user.name} reset the password for vehicle owner ${owner.name} - they must set a new one at next login`);
+    res.json(publicVehicleOwner(owner));
+  })
+);
+
+app.get(
+  "/api/vehicle-owners/:id/summary",
+  requireAuth,
+  requireRole(...VEHICLE_OWNER_MANAGE_ROLES),
+  h(async (req, res) => {
+    const owner = db.vehicleOwners.find((o) => o.id === req.params.id);
+    if (!owner) return res.status(404).json({ error: "Vehicle owner not found." });
+    res.json({ vehicleOwner: publicVehicleOwner(owner), ...vehicleOwnerSummary(owner.id) });
+  })
+);
+
+// Link (or unlink) a vehicle to a Vehicle Owner and set/revise its billing
+// contract - same revision-history behavior as the Subvendor equivalent.
+app.patch(
+  "/api/vehicles/:id/vehicle-owner",
+  requireAuth,
+  requireRole(...VEHICLE_OWNER_MANAGE_ROLES),
+  h(async (req, res) => {
+    const vehicle = db.vehicles.find((v) => v.id === req.params.id);
+    if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
+    const { vehicleOwnerId, billingMode, billingRate, reason } = req.body || {};
+    if (vehicleOwnerId === null || vehicleOwnerId === "") {
+      vehicle.vehicleOwnerId = null;
+      vehicle.billing = null;
+      await audit(req.user, "unlink_vehicle_owner", `${req.user.name} unlinked vehicle ${vehicle.reg} from its owner`);
+      return res.json(vehicle);
+    }
+    if (vehicleOwnerId !== undefined) {
+      const owner = db.vehicleOwners.find((o) => o.id === vehicleOwnerId && o.active !== false);
+      if (!owner) return res.status(400).json({ error: "Vehicle owner not found." });
+      vehicle.vehicleOwnerId = vehicleOwnerId;
+      vehicle.subvendorId = null; // mutually exclusive with Subvendor linkage
+    }
+    if (!vehicle.vehicleOwnerId) return res.status(400).json({ error: "Select a Vehicle Owner before setting a billing contract." });
+    if (billingMode !== undefined || billingRate !== undefined) {
+      const mode = billingMode !== undefined ? billingMode : vehicle.billing && vehicle.billing.mode;
+      const rate = billingRate !== undefined ? Number(billingRate) : vehicle.billing && vehicle.billing.rate;
+      if (!["per_trip", "per_km", "per_package"].includes(mode)) {
+        return res.status(400).json({ error: "Billing mode must be per_trip, per_km, or per_package." });
+      }
+      if (!(rate > 0)) return res.status(400).json({ error: "Billing rate must be a positive number." });
+      const revisions = (vehicle.billing && vehicle.billing.revisions) || [];
+      const changed = vehicle.billing && (vehicle.billing.mode !== mode || vehicle.billing.rate !== rate);
+      if (vehicle.billing && changed) {
+        revisions.push({
+          mode: vehicle.billing.mode,
+          rate: vehicle.billing.rate,
+          effectiveFrom: vehicle.billing.effectiveFrom,
+          endedAt: nowIso(),
+          changedBy: req.user.id,
+          changedByName: req.user.name,
+          changedAt: nowIso(),
+          reason: reason || "",
+        });
+      }
+      vehicle.billing = {
+        mode,
+        rate,
+        effectiveFrom: vehicle.billing && !changed ? vehicle.billing.effectiveFrom : nowIso(),
+        lastPackageAccrualMonth: vehicle.billing && !changed ? vehicle.billing.lastPackageAccrualMonth : null,
+        revisions,
+      };
+    }
+    await audit(req.user, "set_vehicle_owner_billing", `${req.user.name} set billing for ${vehicle.reg}: ${JSON.stringify(vehicle.billing)}`);
+    res.json(vehicle);
+  })
+);
+
+app.post(
+  "/api/vehicle-owners/:id/payments",
+  requireAuth,
+  requireRole(...VEHICLE_OWNER_PAYMENT_ROLES),
+  h(async (req, res) => {
+    const owner = db.vehicleOwners.find((o) => o.id === req.params.id);
+    if (!owner) return res.status(404).json({ error: "Vehicle owner not found." });
+    const { vehicleId, type, amount, date, note } = req.body || {};
+    const validTypes = ["Diesel", "Advance", "Repair", "Other"];
+    if (!validTypes.includes(type)) return res.status(400).json({ error: "Payment type must be one of: " + validTypes.join(", ") + "." });
+    if (!amount || Number(amount) <= 0) return res.status(400).json({ error: "A valid amount is required." });
+    if (req.user.role === "site_supervisor") {
+      if (!vehicleId) return res.status(400).json({ error: "Select which of your vehicles this expense is for." });
+      const vehicle = db.vehicles.find((v) => v.id === vehicleId);
+      if (!vehicle || vehicle.supervisorId !== req.user.id) {
+        return res.status(403).json({ error: "You can only record payments for your own vehicles." });
+      }
+      if (vehicle.vehicleOwnerId !== owner.id) {
+        return res.status(400).json({ error: "That vehicle isn't linked to this vehicle owner." });
+      }
+    }
+    const payment = {
+      id: uid("vopay"),
+      vehicleOwnerId: owner.id,
+      vehicleId: vehicleId || null,
+      type,
+      amount: Number(amount),
+      date: date || todayStr(),
+      note: note || "",
+      createdBy: req.user.id,
+      createdByName: req.user.name,
+      createdAt: nowIso(),
+    };
+    db.vehicleOwnerPayments.push(payment);
+    let advance = null;
+    if (type === "Advance") {
+      advance = {
+        id: uid("voadv"),
+        vehicleOwnerId: owner.id,
+        vehicleId: vehicleId || null,
+        paymentId: payment.id,
+        principal: payment.amount,
+        outstandingPrincipal: payment.amount,
+        interestAccrued: 0,
+        status: "outstanding",
+        date: payment.date,
+        lastInterestAccrualMonth: monthKey(payment.date),
+        note: note || "",
+        createdAt: nowIso(),
+      };
+      db.vehicleOwnerAdvances.push(advance);
+    }
+    await audit(req.user, "vehicle_owner_payment", `${req.user.name} recorded a ${type} payment of ₹${payment.amount} to vehicle owner ${owner.name}`);
+    res.json({ payment, advance });
+  })
+);
+
+app.get(
+  "/api/vehicle-owners/:id/payments",
+  requireAuth,
+  requireRole(...VEHICLE_OWNER_PAYMENT_ROLES),
+  h(async (req, res) => {
+    const owner = db.vehicleOwners.find((o) => o.id === req.params.id);
+    if (!owner) return res.status(404).json({ error: "Vehicle owner not found." });
+    let payments = db.vehicleOwnerPayments.filter((p) => p.vehicleOwnerId === owner.id);
+    if (req.user.role === "site_supervisor") {
+      const myVehicleIds = new Set(visibleVehiclesFor(req.user).map((v) => v.id));
+      payments = payments.filter((p) => p.vehicleId && myVehicleIds.has(p.vehicleId));
+    }
+    payments = payments.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    res.json(payments);
+  })
+);
+
+app.patch(
+  "/api/vehicle-owners/:id/advances/:advanceId/settle",
+  requireAuth,
+  requireRole(...VEHICLE_OWNER_MANAGE_ROLES),
+  h(async (req, res) => {
+    const advance = db.vehicleOwnerAdvances.find((a) => a.id === req.params.advanceId && a.vehicleOwnerId === req.params.id);
+    if (!advance) return res.status(404).json({ error: "Advance not found." });
+    accrueAdvanceInterest(advance);
+    const { amount } = req.body || {};
+    const settleAmount = amount !== undefined ? Number(amount) : advance.outstandingPrincipal;
+    if (!(settleAmount > 0)) return res.status(400).json({ error: "A valid settlement amount is required." });
+    if (settleAmount > advance.outstandingPrincipal) {
+      return res.status(400).json({ error: `Cannot settle more than the outstanding principal (₹${advance.outstandingPrincipal}).` });
+    }
+    advance.outstandingPrincipal = Math.round((advance.outstandingPrincipal - settleAmount) * 100) / 100;
+    if (advance.outstandingPrincipal <= 0) {
+      advance.status = "settled";
+      advance.settledAt = nowIso();
+    }
+    await audit(req.user, "settle_vehicle_owner_advance", `${req.user.name} settled ₹${settleAmount} against an advance for vehicle owner ${advance.vehicleOwnerId}`);
+    res.json(advance);
+  })
+);
+
+// ---------- VEHICLE OWNER AUTH (their own separate login) ----------
+const VEHICLE_OWNER_ALLOWED_DURING_FORCED_PASSWORD_CHANGE = [
+  "/api/vehicle-owner-auth/me",
+  "/api/vehicle-owner-auth/change-password",
+  "/api/vehicle-owner-auth/logout",
+];
+function vehicleOwnerAuth(req, res, next) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  const payload = token && !isSessionRevoked(token) && verifySessionToken(token);
+  const owner = payload && payload.type === "vehicle_owner" && db.vehicleOwners.find((o) => o.id === payload.id && o.active !== false);
+  if (!owner) return res.status(401).json({ error: "Not signed in. Please log in again." });
+  if (owner.mustChangePassword && !VEHICLE_OWNER_ALLOWED_DURING_FORCED_PASSWORD_CHANGE.includes(req.path)) {
+    return res.status(403).json({ error: "You must set a new password before continuing.", mustChangePassword: true });
+  }
+  req.vehicleOwner = owner;
+  req.vehicleOwnerToken = token;
+  next();
+}
+
+app.post(
+  "/api/vehicle-owner-auth/login",
+  h(async (req, res) => {
+    const { identifier, password } = req.body || {};
+    if (!identifier || !password) return res.status(400).json({ error: "Email/mobile number and password are required." });
+    const idNorm = String(identifier).trim().toLowerCase();
+    const phoneNorm = String(identifier).trim();
+    const owner = db.vehicleOwners.find((o) => o.active !== false && ((o.email && o.email === idNorm) || (o.phone && o.phone === phoneNorm)));
+    if (!owner || !verifyPassword(password, owner.passwordHash)) {
+      return res.status(401).json({ error: "Incorrect email/mobile number or password." });
+    }
+    const token = signSessionToken({ type: "vehicle_owner", id: owner.id });
+    await audit({ id: owner.id, name: owner.name }, "vehicle_owner_login", `Vehicle owner ${owner.name} logged in`);
+    res.json({ token, vehicleOwner: publicVehicleOwner(owner) });
+  })
+);
+
+app.get("/api/vehicle-owner-auth/me", vehicleOwnerAuth, (req, res) => {
+  res.json(publicVehicleOwner(req.vehicleOwner));
+});
+
+app.post(
+  "/api/vehicle-owner-auth/change-password",
+  vehicleOwnerAuth,
+  h(async (req, res) => {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: "Current and new password are required." });
+    if (!verifyPassword(currentPassword, req.vehicleOwner.passwordHash)) return res.status(400).json({ error: "Current password is incorrect." });
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError) return res.status(400).json({ error: policyError });
+    if (passwordReused(newPassword, req.vehicleOwner)) {
+      return res.status(400).json({ error: "New password cannot be the same as your current or a recent previous password." });
+    }
+    req.vehicleOwner.passwordHistory = [req.vehicleOwner.passwordHash, ...(req.vehicleOwner.passwordHistory || [])].slice(0, PASSWORD_HISTORY_LIMIT);
+    req.vehicleOwner.passwordHash = hashPassword(newPassword);
+    req.vehicleOwner.mustChangePassword = false;
+    await audit(req.vehicleOwner, "vehicle_owner_change_password", `${req.vehicleOwner.name} changed their own password`);
+    res.json(publicVehicleOwner(req.vehicleOwner));
+  })
+);
+
+app.post(
+  "/api/vehicle-owner-auth/theme",
+  vehicleOwnerAuth,
+  h(async (req, res) => {
+    const { value, error } = themeFromBody(req.body);
+    if (error) return res.status(400).json({ error });
+    req.vehicleOwner.theme = value;
+    await save();
+    res.json(publicVehicleOwner(req.vehicleOwner));
+  })
+);
+
+app.post(
+  "/api/vehicle-owner-auth/logout",
+  vehicleOwnerAuth,
+  h(async (req, res) => {
+    revokedSessionTokens.add(req.vehicleOwnerToken);
+    await audit(req.vehicleOwner, "vehicle_owner_logout", `${req.vehicleOwner.name} logged out`);
+    res.json({ ok: true });
+  })
+);
+
+app.get(
+  "/api/vehicle-owner-auth/dashboard",
+  vehicleOwnerAuth,
+  h(async (req, res) => {
+    res.json(vehicleOwnerSummary(req.vehicleOwner.id));
   })
 );
 
@@ -7651,6 +8126,7 @@ app.post(
     if (status === "completed") {
       trip.completedAt = nowIso();
       accrueTripIncomeIfNeeded(trip);
+      accrueVehicleOwnerTripIncomeIfNeeded(trip);
     }
     trip.status = status;
     trip.updatedAt = nowIso();
@@ -7912,6 +8388,7 @@ app.post(
     shift.odometerCloseEnteredBy = "driver";
     shift.status = "ready_to_logout";
     accrueKmIncomeIfNeeded(shift);
+    accrueVehicleOwnerKmIncomeIfNeeded(shift);
     await audit({ id: req.driver.id, name: req.driver.name }, "driver_odometer_close", `Driver ${req.driver.name} recorded closing odometer ${shift.odometerClose}`);
     res.json(shift);
   })
@@ -8364,6 +8841,7 @@ app.post(
     if (point === "close") {
       shift.status = "ready_to_logout";
       accrueKmIncomeIfNeeded(shift);
+      accrueVehicleOwnerKmIncomeIfNeeded(shift);
     }
     // The code is single-use - consumed the moment it's successfully used,
     // whether for the opening or closing reading.
