@@ -110,6 +110,16 @@ let empTab = "home";
 let staffTab = null;
 let myRoute = { routes: [] };
 let myRequests = [];
+let cabActiveRide = null;
+let cabRides = [];
+let _cabPickup = null; // {lat,lng}
+let _cabDrop = null; // {lat,lng}
+let _cabDropMap = null, _cabDropMarker = null;
+const CAB_STATUS_LABELS_EMP = {
+  requested:"Requested - looking for a nearby driver", assigned:"Driver assigned", accepted:"Driver accepted, on the way",
+  arrived:"Your driver has arrived", in_progress:"Ride in progress", completed:"Completed", cancelled:"Cancelled",
+  no_driver_available:"No driver available yet",
+};
 let _selectedBookingDates = [];
 let _bookingType = "both";
 let busy = false;
@@ -218,7 +228,9 @@ async function boot(){
       const m = await empApi("/me");
       employee = m.employee; empClient = m.client;
       applyTheme(employee.theme && employee.theme.key);
-      await Promise.all([loadMyRoute(), loadMyRequests()]);
+      const loaders = [loadMyRoute(), loadMyRequests()];
+      if(cabModeEnabled()) loaders.push(loadCabRide());
+      await Promise.all(loaders);
       startEmpPolling();
       subscribeEmployeeToPush();
     }catch(e){ /* handled by empApi */ }
@@ -269,7 +281,11 @@ async function doEmployeeLogin(){
     empToken = r.token; employee = r.employee;
     localStorage.setItem("clientEmpToken", empToken);
     applyTheme(employee.theme && employee.theme.key);
-    await Promise.all([loadMyRoute(), loadMyRequests()]);
+    const m = await empApi("/me");
+    empClient = m.client;
+    const loaders = [loadMyRoute(), loadMyRequests()];
+    if(cabModeEnabled()) loaders.push(loadCabRide());
+    await Promise.all(loaders);
     startEmpPolling();
     subscribeEmployeeToPush();
     busy=false; render();
@@ -326,6 +342,59 @@ async function cancelRequest(id){
   catch(e){ alert(e.message); }
 }
 
+// ---------- on-demand cab booking (point-to-point, genuinely different from
+// the fixed-route "My Ride" tab above - one passenger, requested ad-hoc,
+// matched to the nearest available driver rather than pre-assigned to a
+// clustered stop) ----------
+async function loadCabRide(){ try{ cabActiveRide = await empApi("/cab-rides/active"); }catch(e){ cabActiveRide = null; } }
+function useMyGpsForCabPickup(){
+  if(!navigator.geolocation){ alert("Your browser doesn't support GPS location."); return; }
+  navigator.geolocation.getCurrentPosition((pos)=>{
+    _cabPickup = {lat:pos.coords.latitude, lng:pos.coords.longitude};
+    render();
+  }, ()=>alert("Couldn't get your location - check location permissions."), {enableHighAccuracy:true, timeout:8000});
+}
+function initCabDropMap(){
+  const el = document.getElementById("cabDropMap");
+  if(!el || typeof L==="undefined") return;
+  if(_cabDropMap){ _cabDropMap.remove(); _cabDropMap=null; }
+  const startLat = (employee && employee.homeLat) || 17.4;
+  const startLng = (employee && employee.homeLng) || 78.45;
+  const map = L.map(el).setView([startLat, startLng], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {attribution:'&copy; OpenStreetMap contributors', maxZoom:19}).addTo(map);
+  _cabDropMap = map;
+  if(_cabDrop && _cabDrop.lat!=null){
+    _cabDropMarker = L.marker([_cabDrop.lat, _cabDrop.lng], {draggable:true}).addTo(map);
+    _cabDropMarker.on('dragend', ()=>{ const p=_cabDropMarker.getLatLng(); _cabDrop = Object.assign({}, _cabDrop, {lat:p.lat,lng:p.lng}); });
+  }
+  map.on('click', (ev)=>{
+    _cabDrop = Object.assign({}, _cabDrop, {lat:ev.latlng.lat, lng:ev.latlng.lng});
+    if(_cabDropMarker) _cabDropMarker.setLatLng(ev.latlng);
+    else { _cabDropMarker = L.marker(ev.latlng, {draggable:true}).addTo(map); _cabDropMarker.on('dragend', ()=>{ const p=_cabDropMarker.getLatLng(); _cabDrop = Object.assign({}, _cabDrop, {lat:p.lat,lng:p.lng}); }); }
+  });
+  setTimeout(()=>map.invalidateSize(), 150);
+}
+async function requestCabRide(){
+  if(!_cabPickup){ alert("Tap 'Use My Current Location' to set your pickup point."); return; }
+  if(!_cabDrop || _cabDrop.lat==null){ alert("Tap the map to set your drop point."); return; }
+  const pickupAddress = (document.getElementById('cabPickupAddress')||{}).value || '';
+  const dropAddress = (document.getElementById('cabDropAddress')||{}).value || '';
+  try{
+    await empApi("/cab-rides", {method:"POST", body: JSON.stringify({
+      pickupLat:_cabPickup.lat, pickupLng:_cabPickup.lng, pickupAddress,
+      dropLat:_cabDrop.lat, dropLng:_cabDrop.lng, dropAddress,
+    })});
+    _cabPickup = null; _cabDrop = null; _cabDropMarker = null;
+    await loadCabRide();
+    render();
+  }catch(e){ alert(e.message); }
+}
+async function cancelCabRide(id){
+  if(!confirm("Cancel this ride request?")) return;
+  try{ await empApi(`/cab-rides/${id}/cancel`, {method:"POST"}); await loadCabRide(); render(); }
+  catch(e){ alert(e.message); }
+}
+
 // ---------- employee push notifications ("driver has arrived") ----------
 // Best-effort, same pattern as driver.html's subscribeToPush(): silently
 // gives up on browsers/contexts that don't support it. The 15s poll on
@@ -364,7 +433,9 @@ function startEmpPolling(){
   stopEmpPolling();
   empPollTimer = setInterval(async ()=>{
     if(!empToken) return;
-    await loadMyRoute();
+    const loaders = [loadMyRoute()];
+    if(cabModeEnabled()) loaders.push(loadCabRide());
+    await Promise.all(loaders);
     render();
   }, 15000);
 }
@@ -375,6 +446,7 @@ let _pinMap = null, _pinMarker = null, _pinLatLng = employee ? null : null;
 function setEmpTab(tab){
   empTab = tab; render();
   if(tab==="location") setTimeout(initPinMap, 0);
+  if(tab==="cab") setTimeout(initCabDropMap, 0);
 }
 function initPinMap(){
   const el = document.getElementById("pinMap");
@@ -511,14 +583,18 @@ function empTopbarHtml(){
     </div>
   </header>`;
 }
+function cabModeEnabled(){ return empClient && ["cab","both"].includes(empClient.transportMode); }
 function empTabbarHtml(){
-  const tabs = [["home","Home"],["ride","My Ride"],["request","Request"],["location","Location"],["settings","Settings"]];
+  const tabs = [["home","Home"],["ride","My Ride"],["request","Request"]];
+  if(cabModeEnabled()) tabs.push(["cab","Book a Cab"]);
+  tabs.push(["location","Location"],["settings","Settings"]);
   return `<div class="tabbar">${tabs.map(([k,l])=>`<button class="${empTab===k?'active':''}" onclick="setEmpTab('${k}')">${l}</button>`).join("")}</div>`;
 }
 function empBodyHtml(){
   if(empTab==="home") return empHomeHtml();
   if(empTab==="ride") return empRideHtml();
   if(empTab==="request") return empRequestHtml();
+  if(empTab==="cab") return empCabHtml();
   if(empTab==="location") return empLocationHtml();
   if(empTab==="settings") return empSettingsHtml();
   return "";
@@ -672,6 +748,43 @@ async function submitAdvanceBookings(){
     }
     render();
   }catch(e){ alert(e.message); }
+}
+function empCabHtml(){
+  const r = cabActiveRide;
+  const hasActive = r && !["completed","cancelled"].includes(r.status);
+  return `
+  <h1 class="page-title">Book a Cab</h1>
+  <p class="muted" style="margin-top:-8px;margin-bottom:14px;">On-demand, point-to-point - just you, picked up right where you are and dropped exactly where you're going. Different from "My Ride" (your fixed daily route) - use this for a one-off trip.</p>
+  ${hasActive ? `
+  <div class="card">
+    <h2 class="section-title">Your Ride</h2>
+    <p><span class="badge ${r.status==='no_driver_available'?'rejected':r.status==='in_progress'?'approved':'pending'}">${(CAB_STATUS_LABELS_EMP[r.status]||r.status).toUpperCase()}</span></p>
+    ${r.status==="no_driver_available" ? `<div class="banner">No driver was available nearby when you requested - your office has been notified and will assign one shortly.</div>` : ""}
+    <p style="margin-top:10px;"><b>Pickup:</b> ${r.pickupAddress || (r.pickupLat+', '+r.pickupLng)}</p>
+    <p><b>Drop:</b> ${r.dropAddress || (r.dropLat+', '+r.dropLng)}</p>
+    ${r.distanceKm!=null ? `<p class="muted">Approx. ${r.distanceKm} km</p>` : ""}
+    ${r.vehicleReg ? `<p style="margin-top:10px;"><b>Vehicle:</b> ${r.vehicleReg}</p>` : ""}
+    ${r.driverName ? `<p><b>Driver:</b> ${r.driverName}${r.driverPhone?' &middot; '+r.driverPhone:''}</p>` : ""}
+    ${["requested","assigned","accepted","no_driver_available"].includes(r.status) ? `<button class="btn secondary" style="margin-top:10px;" onclick="cancelCabRide('${r.id}')">Cancel Ride</button>` : ""}
+  </div>
+  ` : `
+  <div class="card">
+    <h2 class="section-title">Request a Ride</h2>
+    <div class="field">
+      <label>Pickup</label>
+      <button class="btn secondary" type="button" onclick="useMyGpsForCabPickup()">📍 Use My Current Location</button>
+      <p class="muted" style="margin-top:6px;">${_cabPickup ? "Pickup location captured." : "Not set yet - tap the button above."}</p>
+      <input type="text" id="cabPickupAddress" placeholder="Landmark / address (optional)" style="margin-top:6px;" />
+    </div>
+    <div class="field">
+      <label>Drop</label>
+      <div id="cabDropMap" style="height:220px;border-radius:12px;overflow:hidden;border:1px solid var(--border);margin-bottom:8px;"></div>
+      <p class="muted" style="margin-bottom:8px;">Tap the map to set your drop point.</p>
+      <input type="text" id="cabDropAddress" placeholder="Landmark / address (optional)" />
+    </div>
+    <button class="btn" style="width:100%;margin-top:10px;" onclick="requestCabRide()">Request Cab</button>
+  </div>
+  `}`;
 }
 function empLocationHtml(){
   return `

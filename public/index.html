@@ -1336,16 +1336,16 @@ function tabsForInner(role){
   // request, they (plus Data Team and Owner) are the only roles that can
   // approve odometer/fuel readings. See ODOMETER_VERIFY_ROLES and
   // FUEL_CROSS_VERIFY_ROLES in server.js for the matching backend gate.
-  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["fleet_list","Fleet"],["routes","Routes"],["subvendor_expenses","Subvendor Expenses"],["verifications","Verifications"],["repairs","Repair Requests"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="site_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["trips","Trips"],["my_attendance","My Attendance"],["my_expenses","My Expenses"],["usage","Vehicle Usage"],["fleet_list","Fleet"],["routes","Routes"],["cab_rides","Cab Rides"],["subvendor_expenses","Subvendor Expenses"],["verifications","Verifications"],["repairs","Repair Requests"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="area_supervisor") return [["my_vehicles","My Vehicles"],["onboarding","Add Vehicle/Driver"],["queue","Verification Queue"],["expenses_view","Team Expenses"],["usage","Vehicle Usage"],["fleet_list","Fleet"],["reports","Reports"],["routes","Routes"],["repairs","Repair Requests"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   // Operations Manager deliberately has no odometer_verify/fuel_verify tab -
   // per the Owner's explicit request, Ops Manager has no role in approving
   // odometer or fuel readings (they previously had odometer_verify; removed
   // on request).
-  if(role==="ops_manager") return [["operations","Operations"],["overview","Overview"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["vehicle_owners","Vehicle Owners"],["vendors","Vendors"],["transport","Employee Transport"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["verifications","Verifications"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
+  if(role==="ops_manager") return [["operations","Operations"],["overview","Overview"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["vehicle_owners","Vehicle Owners"],["vendors","Vendors"],["transport","Employee Transport"],["cab_rides","Cab Rides"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["verifications","Verifications"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="data_team") return [["corrections","Corrections"],["overview","Overview"],["expenses_view","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["verifications","Verifications"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["audit","Audit Log"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["verifications","Verifications"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["overview","Overview"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["vehicle_owners","Vehicle Owners"],["vendors","Vendors"],["transport","Employee Transport"],["verifications","Verifications"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"]];
+  if(role==="owner") return [["overview","Overview"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["vehicle_owners","Vehicle Owners"],["vendors","Vendors"],["transport","Employee Transport"],["cab_rides","Cab Rides"],["verifications","Verifications"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="admin") return [["overview","Overview"],["fleet_list","Fleet"],["organisation","Organisation"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
   // Billing - new role, per the Owner's explicit request: the only staff
@@ -1379,7 +1379,7 @@ const TAB_GROUP_MAP = {
   my_vehicles:"fleet", onboarding:"fleet", admin_vehicles:"fleet", usage:"fleet", overview:"fleet",
   assignments:"fleet", fleet_list:"fleet", add_vehicle:"fleet", routes:"fleet", subvendor_expenses:"fleet",
   fleet_health:"fleet", gps_link:"fleet", repairs:"fleet", workshop:"fleet", transport:"fleet",
-  subvendors:"fleet", vehicle_owners:"fleet", vendors:"fleet", hierarchy:"fleet",
+  subvendors:"fleet", vehicle_owners:"fleet", vendors:"fleet", cab_rides:"fleet", hierarchy:"fleet",
   trips:"trips", my_attendance:"trips", attendance:"trips", my_expenses:"trips", queue:"trips",
   expenses:"finance", expenses_view:"finance", payroll:"finance", backup:"finance", kiosk:"finance",
   people:"people", verifications:"people", corrections:"people", audit:"people", organisation:"people",
@@ -1643,6 +1643,7 @@ async function routeView(){
     if(tab==="routes") return routesViewScreen();
     if(tab==="trips") return tripsScreen();
     if(tab==="subvendor_expenses") return mySubvendorVehiclesScreen();
+    if(tab==="cab_rides") return cabRidesScreen();
   }
   if(role==="area_supervisor"){
     if(tab==="queue") return areaQueueScreen();
@@ -1660,6 +1661,7 @@ async function routeView(){
     if(tab==="subvendors") return subvendorsScreen();
     if(tab==="vehicle_owners") return vehicleOwnersScreen();
     if(tab==="vendors") return vendorsScreen();
+    if(tab==="cab_rides") return cabRidesScreen();
     if(tab==="people") return view.name==="add_driver_wizard" ? addDriverWizardScreen() : (view.name==="add_staff_wizard" ? addStaffWizardScreen() : peopleScreen());
     if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : (view.name==="vehicle_detail" ? vehicleExpenditureScreen(view.vehicleId) : reportsScreen());
     if(tab==="backup") return backupDownloadsScreen();
@@ -1684,6 +1686,7 @@ async function routeView(){
     if(tab==="subvendors") return subvendorsScreen();
     if(tab==="vehicle_owners") return vehicleOwnersScreen();
     if(tab==="vendors") return vendorsScreen();
+    if(tab==="cab_rides") return cabRidesScreen();
     if(tab==="people") return view.name==="add_driver_wizard" ? addDriverWizardScreen() : (view.name==="add_staff_wizard" ? addStaffWizardScreen() : peopleScreen());
     if(tab==="attendance") return hrAttendanceScreen();
     if(tab==="audit") return auditScreen();
@@ -7573,6 +7576,15 @@ async function transportScreen(){
     <label style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
       <input type="checkbox" id="tr_enabled" ${cfg.enabled?'checked':''} /> Enabled for this client
     </label>
+    <div class="field" style="max-width:420px;margin-bottom:10px;">
+      <label>Booking Mode</label>
+      <select id="tr_transport_mode">
+        <option value="bus" ${cfg.transportMode==='bus'?'selected':''}>Bus (fixed multi-stop shuttle routes only)</option>
+        <option value="cab" ${cfg.transportMode==='cab'?'selected':''}>Cab (on-demand point-to-point booking only)</option>
+        <option value="both" ${cfg.transportMode==='both'?'selected':''}>Both (employee sees their route AND can book an ad-hoc cab)</option>
+      </select>
+      <div class="muted" style="margin-top:4px;">This is genuinely a different employee experience, not just a label - Bus assigns everyone to a clustered stop on a scheduled route; Cab lets an employee request a ride right now, point-to-point, matched to the nearest available Cab-type vehicle.</div>
+    </div>
     <div id="transportPinMap" style="height:280px;border-radius:12px;overflow:hidden;border:1px solid var(--border);margin-bottom:10px;"></div>
     <p class="muted" style="margin-bottom:10px;">Tap the map to set the client's office location (used as the hub the optimizer routes everyone to/from).</p>
     <div class="grid cols-3">
@@ -7716,6 +7728,7 @@ async function transportSaveConfig(clientId){
   TRANSPORT_SEATER_TIERS_FE.forEach(t=>{ rateCards[t] = readRateCardFromForm(t); });
   const body = {
     enabled: document.getElementById('tr_enabled').checked,
+    transportMode: g('tr_transport_mode') || 'bus',
     officeLat: _transportPinLatLng ? _transportPinLatLng.lat : undefined,
     officeLng: _transportPinLatLng ? _transportPinLatLng.lng : undefined,
     officeAddress: g('tr_office_address'),
@@ -10300,6 +10313,84 @@ async function recordVendorPayment(id, evt){
     await renderMain();
   }catch(e){ alert(e.message); }
   return false;
+}
+
+// ---- Cab Rides (on-demand, point-to-point employee transport) ----
+// The genuinely different sibling to the fixed multi-stop shuttle system in
+// the Employee Transport screen (routes/stops/optimizer): one employee per
+// ride, requested ad-hoc, matched to the nearest available Cab-type
+// vehicle automatically. This screen is the staff-side live queue - mostly
+// a monitoring view, since matching happens automatically on request; the
+// only action staff normally need to take is manually assigning a driver
+// when auto-match couldn't find one, or cancelling a stuck ride.
+const CAB_RIDE_STATUS_LABELS = {
+  requested:"Requested", assigned:"Assigned", accepted:"Accepted", arrived:"Driver Arrived",
+  in_progress:"In Progress", completed:"Completed", cancelled:"Cancelled", no_driver_available:"No Driver Available",
+};
+function cabRideStatusBadgeHtml(status){
+  const cls = status==="completed" ? "approved" : status==="cancelled" ? "rejected" : status==="no_driver_available" ? "rejected" : "pending";
+  return `<span class="badge ${cls}">${(CAB_RIDE_STATUS_LABELS[status]||status).toUpperCase()}</span>`;
+}
+async function cabRidesScreen(){
+  const rides = await api("/cab-rides");
+  const needsAttention = rides.filter(r=>r.status==="no_driver_available");
+  const active = rides.filter(r=>["requested","assigned","accepted","arrived","in_progress"].includes(r.status) && r.status!=="no_driver_available");
+  const resolved = rides.filter(r=>["completed","cancelled"].includes(r.status));
+  const cabVehicles = vehicles.filter(v=>v.vehicleType==="Cab" && v.driverId);
+  const rowHtml = (r, showAssign) => `
+    <tr>
+      <td><b>${r.employeeName}</b></td>
+      <td>${r.pickupAddress || `${r.pickupLat}, ${r.pickupLng}`}</td>
+      <td>${r.dropAddress || `${r.dropLat}, ${r.dropLng}`}</td>
+      <td>${r.distanceKm!=null?r.distanceKm+' km':'-'}</td>
+      <td>${r.vehicleReg || '-'}${r.driverName?' · '+r.driverName:''}</td>
+      <td>${cabRideStatusBadgeHtml(r.status)}</td>
+      <td>${new Date(r.requestedAt).toLocaleString('en-GB')}</td>
+      <td>
+        ${showAssign ? `
+        <select id="cabAssignVehicle_${r.id}" style="width:150px;display:inline-block;">
+          <option value="">Select cab...</option>
+          ${cabVehicles.map(v=>`<option value="${v.id}">${v.reg}</option>`).join("")}
+        </select>
+        <button class="btn small" onclick="cabRideManualAssign('${r.id}')">Assign</button>
+        ` : ""}
+        ${!['completed','cancelled'].includes(r.status) ? `<button class="btn small danger" onclick="cabRideStaffCancel('${r.id}')">Cancel</button>` : ""}
+      </td>
+    </tr>`;
+  return `
+  ${pageHeadHtml('&#128663;', 'Cab Rides', 'On-demand, point-to-point rides employees book themselves - one passenger per ride, matched automatically to the nearest available Cab-type vehicle. Only shown to clients whose Booking Mode is set to Cab or Both (see Organisation &rarr; Transport Settings). This is deliberately separate from the fixed multi-stop shuttle system under Employee Transport.')}
+  ${needsAttention.length ? `
+  <div class="card" style="border-color:var(--red);">
+    <h2 class="section-title" style="color:var(--red);">Needs a Driver (${needsAttention.length})</h2>
+    <p class="muted" style="margin-bottom:10px;">No idle Cab-type vehicle was found nearby when these were requested - assign one manually below.</p>
+    <table><tr><th>Employee</th><th>Pickup</th><th>Drop</th><th>Distance</th><th>Vehicle</th><th>Status</th><th>Requested</th><th></th></tr>
+    ${needsAttention.map(r=>rowHtml(r,true)).join("")}</table>
+  </div>` : ""}
+  <div class="card">
+    <h2 class="section-title">Active Rides (${active.length})</h2>
+    <table><tr><th>Employee</th><th>Pickup</th><th>Drop</th><th>Distance</th><th>Vehicle</th><th>Status</th><th>Requested</th><th></th></tr>
+    ${active.length ? active.map(r=>rowHtml(r,false)).join("") : "<tr><td colspan='8' class='empty'>No active rides right now.</td></tr>"}</table>
+  </div>
+  <div class="card">
+    <h2 class="section-title">Recent (Completed / Cancelled)</h2>
+    <table><tr><th>Employee</th><th>Pickup</th><th>Drop</th><th>Distance</th><th>Vehicle</th><th>Status</th><th>Requested</th><th></th></tr>
+    ${resolved.length ? resolved.slice(0,50).map(r=>rowHtml(r,false)).join("") : "<tr><td colspan='8' class='empty'>No completed or cancelled rides yet.</td></tr>"}</table>
+  </div>`;
+}
+async function cabRideManualAssign(id){
+  const vehicleId = document.getElementById(`cabAssignVehicle_${id}`).value;
+  if(!vehicleId){ alert("Select a cab first."); return; }
+  try{
+    await api(`/cab-rides/${id}/assign`, {method:"PATCH", body: JSON.stringify({vehicleId})});
+    await renderMain();
+  }catch(e){ alert(e.message); }
+}
+async function cabRideStaffCancel(id){
+  if(!confirm("Cancel this cab ride?")) return;
+  try{
+    await api(`/cab-rides/${id}/cancel`, {method:"POST"});
+    await renderMain();
+  }catch(e){ alert(e.message); }
 }
 
 // ================= ODOMETER VERIFICATION =================

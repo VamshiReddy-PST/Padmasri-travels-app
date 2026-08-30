@@ -280,6 +280,11 @@ let monthTrips = { upcoming: [], completed: [] };
 // separate concept from the regular `trips` above (multi-stop, per-
 // employee board/no-show). See /api/driver-auth/transport-routes*.
 let transportTrips = { upcoming: [], current: [], completed: [] };
+// On-demand, point-to-point cab ride assigned to this driver (auto-matched
+// by nearest-available-driver when requested) - a genuinely different
+// concept from transportTrips above (one passenger, no stops, requested
+// ad-hoc). See /api/driver-auth/cab-rides*.
+let cabRide = null;
 // In-progress boarding-code text per stop, keyed "routeId_seq" - kept
 // outside the trip data itself so a background poll/render mid-typing
 // doesn't wipe out what the driver has entered so far (same reasoning as
@@ -477,7 +482,10 @@ async function loadActiveTabData(){
   if(driverTab==="upcoming") await Promise.all([fetchMonthTrips(), fetchMyLeaveRequests(), fetchTransportTrips(), fetchTransportHistory()]);
   else if(driverTab==="profile") await Promise.all([fetchPayslip(), fetchAttendance(), fetchHierarchy()]);
   else if(driverTab==="documents") await fetchDocuments();
-  else await Promise.all([fetchCurrentTrip(), fetchMyRepairRequests(), fetchTransportTrips()]); // "current" tab, and the default
+  else await Promise.all([fetchCurrentTrip(), fetchMyRepairRequests(), fetchTransportTrips(), fetchCabRide()]); // "current" tab, and the default
+}
+async function fetchCabRide(){
+  try{ cabRide = await api("/driver-auth/cab-rides/current"); }catch(e){ cabRide = null; }
 }
 async function setDriverTab(tab){
   driverTab = tab;
@@ -1107,6 +1115,65 @@ async function completeTransportRoute(id){
   busy = false; render();
 }
 
+// ---------- Cab Ride - on-demand, point-to-point (one passenger, no stops) ----------
+// Auto-assigned by nearest-available-driver matching when an employee
+// requests a ride (see assignNearestCabDriver() server-side); the driver
+// just accepts, arrives, starts, and completes it - genuinely simpler than
+// the multi-stop Employee Transport card above since there's only ever one
+// passenger and no boarding-code/no-show handling.
+function cabRideCurrentCardHtml(){
+  const r = cabRide;
+  if(!r || !["assigned","accepted","arrived","in_progress"].includes(r.status)) return "";
+  const mapsUrl = (lat,lng) => `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+  return `
+  <div class="card">
+    <h2 class="section-title">🚕 Cab Ride &middot; ${r.employeeName}</h2>
+    <p class="muted">${r.distanceKm!=null?r.distanceKm+' km':''}</p>
+    <div class="trip-point">
+      <div class="trip-point-label">Pickup</div>
+      <div>${r.pickupAddress || "Not specified"}</div>
+      <a href="${mapsUrl(r.pickupLat,r.pickupLng)}" target="_blank" rel="noopener">Open in Maps</a>
+    </div>
+    <div class="trip-point">
+      <div class="trip-point-label">Drop</div>
+      <div>${r.dropAddress || "Not specified"}</div>
+      <a href="${mapsUrl(r.dropLat,r.dropLng)}" target="_blank" rel="noopener">Open in Maps</a>
+    </div>
+    ${r.status==="assigned" ? `<button class="big-btn" style="margin-top:14px;" ${busy?"disabled":""} onclick="acceptCabRide('${r.id}')">${busy?'<span class="spinner"></span>Saving...':"Accept Ride"}</button>` : ""}
+    ${r.status==="accepted" ? `<button class="big-btn" style="margin-top:14px;" ${busy?"disabled":""} onclick="markCabRideArrived('${r.id}')">${busy?'<span class="spinner"></span>Saving...':"I've Arrived at Pickup"}</button>` : ""}
+    ${r.status==="arrived" ? `<button class="big-btn" style="margin-top:14px;" ${busy?"disabled":""} onclick="startCabRide('${r.id}')">${busy?'<span class="spinner"></span>Saving...':"Start Ride"}</button>` : ""}
+    ${r.status==="in_progress" ? `<button class="big-btn" style="margin-top:14px;" ${busy?"disabled":""} onclick="completeCabRide('${r.id}')">${busy?'<span class="spinner"></span>Saving...':"Complete Ride"}</button>` : ""}
+  </div>`;
+}
+async function acceptCabRide(id){
+  if(busy) return;
+  busy = true; render();
+  try{ await api(`/driver-auth/cab-rides/${id}/accept`, {method:"POST"}); await fetchCabRide(); }
+  catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+async function markCabRideArrived(id){
+  if(busy) return;
+  busy = true; render();
+  try{ await api(`/driver-auth/cab-rides/${id}/arrive`, {method:"POST"}); await fetchCabRide(); }
+  catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+async function startCabRide(id){
+  if(busy) return;
+  busy = true; render();
+  try{ await api(`/driver-auth/cab-rides/${id}/start`, {method:"POST"}); await fetchCabRide(); }
+  catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+async function completeCabRide(id){
+  if(busy) return;
+  busy = true; render();
+  try{ await api(`/driver-auth/cab-rides/${id}/complete`, {method:"POST"}); await fetchCabRide(); }
+  catch(e){ lastError = e.message; }
+  busy = false; render();
+}
+
 // ---------- Current Trip tab ----------
 // This is the landing tab right after login. While the shift is still
 // awaiting_odometer, it's where the opening-odometer gate (with its
@@ -1114,7 +1181,7 @@ async function completeTransportRoute(id){
 // so the driver can check Documents/Profile/Upcoming Trips while that
 // countdown is still running if they want to.
 function currentTripTabHtml(){
-  if(shift.status==="awaiting_odometer") return transportCurrentCardHtml() + odometerOpenCardHtml() + repairRequestCardHtml() + vehicleHistoryCardHtml();
+  if(shift.status==="awaiting_odometer") return transportCurrentCardHtml() + cabRideCurrentCardHtml() + odometerOpenCardHtml() + repairRequestCardHtml() + vehicleHistoryCardHtml();
   let tripHtml;
   if(!currentTrip){
     tripHtml = `<div class="card"><h2 class="section-title">Current Trip</h2><div class="empty">No trip currently running. Start one from the Upcoming Trips tab.</div></div>`;
@@ -1149,7 +1216,7 @@ function currentTripTabHtml(){
     </div>`;
   }
   const shiftHtml = shift.status==="ready_to_logout" ? logoutCardHtml() : closingOdometerCardHtml();
-  return transportCurrentCardHtml() + tripHtml + shiftHtml + repairRequestCardHtml() + vehicleHistoryCardHtml();
+  return transportCurrentCardHtml() + cabRideCurrentCardHtml() + tripHtml + shiftHtml + repairRequestCardHtml() + vehicleHistoryCardHtml();
 }
 // Report a vehicle problem straight to Workshop - lands with the Workshop
 // Manager, who assigns it to a Mechanic/Electrician/Helper. Available any
