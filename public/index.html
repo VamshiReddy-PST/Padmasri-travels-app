@@ -1533,7 +1533,7 @@ async function routeView(){
   if(tab==="my_vehicles") return view.name==="vehicle_detail" ? vehicleChecklistScreen(view.vehicleId) : supervisorHome();
   if(role==="site_supervisor"){
     if(tab==="my_attendance") return myAttendanceScreen();
-    if(tab==="my_expenses") return myExpensesScreen();
+    if(tab==="my_expenses") return view.name==="add_expense_wizard" ? addExpenseWizardScreen() : myExpensesScreen();
     if(tab==="usage") return vehicleUsageScreen();
     if(tab==="assignments") return supervisorAssignmentsScreen();
     if(tab==="routes") return routesViewScreen();
@@ -2667,22 +2667,10 @@ function myExpensesScreen(){
   <h1 class="page-title">My Expenses</h1>
   <div class="banner">Every request needs a photo of the bill/receipt - requests without one can't be submitted. Mention the vehicle this expense is for, or mark it as Office Expenditure if it isn't tied to a vehicle. The Operations Manager approves before it's marked payable.</div>
   <div class="card">
-    <h2 class="section-title">Request reimbursement</h2>
-    <form class="inline-form" onsubmit="return submitExpense(event)">
-      <div class="f"><label>Category</label><select id="expCategory">
-        <option>Toll</option><option>Parking</option><option>Vehicle repair (minor)</option>
-        <option>Driver food / allowance</option><option>Cleaning</option>
-        <option>Road Tax</option><option>Insurance Amount</option><option>EMI</option><option>Office Expenses</option>
-        <option>Other</option>
-      </select></div>
-      <div class="f"><label>Amount (₹)</label><input type="number" id="expAmount" style="width:100px" required /></div>
-      <div class="f"><label>Vehicle</label><select id="expVehicle"><option value="">Select vehicle...</option>${vehicles.map(v=>`<option value="${v.id}">${v.reg}</option>`).join("")}</select></div>
-      <div class="f"><label>&nbsp;</label><label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:400;white-space:nowrap;"><input type="checkbox" id="expOffice" onchange="onExpenseOfficeToggle()" /> Office Expenditure (no vehicle)</label></div>
-      <div class="f" style="min-width:200px;"><label>Description</label><input type="text" id="expDesc" placeholder="What was this for?" /></div>
-      <div class="f"><label>Bill photo (required)</label><button type="button" class="photo-btn" onclick="captureBillPhoto()">📷 Attach bill</button></div>
-      <div id="billPreview" style="display:flex;align-items:center;gap:6px;"></div>
-      <button class="btn small" type="submit">Submit request</button>
-    </form>
+    <div class="flex-between">
+      <h2 class="section-title" style="margin-bottom:0;">Request reimbursement</h2>
+      <button class="btn small" onclick="startExpenseWizard()">+ Request reimbursement</button>
+    </div>
   </div>
   <div class="card">
     <h2 class="section-title">My requests</h2>
@@ -2711,6 +2699,114 @@ async function submitExpense(evt){
     await renderMain();
   }catch(e){ alert(e.message); }
   return false;
+}
+// ---- Request reimbursement wizard - Details -> Bill Photo -> Confirm.
+// Reuses the existing global #billInput/captureBillPhoto()/pendingBillPhoto
+// mechanism (a single persistent file input outside #main, already wired to
+// handleBillFile() at app init) rather than rewiring a wizard-local upload
+// path. ----
+let expenseWizard = {step:0, busy:false, done:false, data:{}};
+const EXPENSE_WIZARD_STEPS = [
+  {title:"Details", sub:"Category, amount & vehicle"},
+  {title:"Bill Photo", sub:"Attach the receipt"},
+  {title:"Confirm", sub:"Review & submit"},
+];
+function startExpenseWizard(){ pendingBillPhoto = null; expenseWizard = {step:0, busy:false, done:false, data:{}}; goto('add_expense_wizard'); }
+function expenseWizardBack(){ if(expenseWizard.step>0){ expenseWizard.step--; renderMain(); } }
+async function addExpenseWizardScreen(){
+  if(expenseWizard.done){
+    return wizardSuccessHtml("Reimbursement Requested", "Your expense request has been submitted - the Operations Manager will review it before it's marked payable.", "Back to My Expenses", "goto('my_expenses')");
+  }
+  const step = expenseWizard.step;
+  const body = step===0 ? expenseWizardStep1Html() : step===1 ? expenseWizardStep2Html() : expenseWizardStep3Html();
+  return `
+  <h1 class="page-title">Request Reimbursement</h1>
+  <div class="banner">Every request needs a photo of the bill/receipt - requests without one can't be submitted.</div>
+  ${stepperHtml(EXPENSE_WIZARD_STEPS, step)}
+  <div class="card">${body}</div>
+  `;
+}
+function onEwOfficeToggle(){
+  const office = document.getElementById("ewOffice").checked;
+  const vSel = document.getElementById("ewVehicle");
+  if(!vSel) return;
+  vSel.disabled = office;
+  if(office) vSel.value = "";
+}
+function expenseWizardStep1Html(){
+  const d = expenseWizard.data;
+  return `
+  <div class="grid cols-2">
+    <div class="f"><label>Category</label><select id="ewCategory">
+      ${["Toll","Parking","Vehicle repair (minor)","Driver food / allowance","Cleaning","Road Tax","Insurance Amount","EMI","Office Expenses","Other"].map(c=>`<option ${d.category===c?'selected':''}>${c}</option>`).join("")}
+    </select></div>
+    <div class="f"><label>Amount (₹) *</label><input type="number" id="ewAmount" value="${d.amount||''}" required /></div>
+    <div class="f"><label>Vehicle</label><select id="ewVehicle" ${d.isOfficeExpenditure?'disabled':''}><option value="">Select vehicle...</option>${vehicles.map(v=>`<option value="${v.id}" ${d.vehicleId===v.id?'selected':''}>${v.reg}</option>`).join("")}</select></div>
+    <div class="f"><label>&nbsp;</label><label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:400;white-space:nowrap;"><input type="checkbox" id="ewOffice" ${d.isOfficeExpenditure?'checked':''} onchange="onEwOfficeToggle()" /> Office Expenditure (no vehicle)</label></div>
+    <div class="f" style="flex-basis:100%;"><label>Description</label><input type="text" id="ewDesc" value="${d.description||''}" placeholder="What was this for?" /></div>
+  </div>
+  <div class="wizard-actions">
+    <span></span>
+    <button class="btn" onclick="expenseWizardStep1Next()">Next &rsaquo;</button>
+  </div>`;
+}
+function expenseWizardStep1Next(){
+  const g = id => document.getElementById(id).value;
+  const isOffice = document.getElementById('ewOffice').checked;
+  const vehicleId = g('ewVehicle') || null;
+  const amount = Number(g('ewAmount'));
+  if(!amount || amount<=0){ alert("Enter a valid amount."); return; }
+  if(!isOffice && !vehicleId){ alert("Select the vehicle this expense is for, or tick Office Expenditure if it isn't tied to a vehicle."); return; }
+  Object.assign(expenseWizard.data, {category: g('ewCategory'), amount, vehicleId: isOffice?null:vehicleId, isOfficeExpenditure: isOffice, description: g('ewDesc')});
+  expenseWizard.step = 1;
+  renderMain();
+}
+function expenseWizardStep2Html(){
+  return `
+  <div class="check-row">
+    <div class="label">Bill photo *</div>
+    <div class="controls">
+      <button type="button" class="photo-btn" onclick="captureBillPhoto()">📷 Attach bill</button>
+      ${pendingBillPhoto ? `<img src="${pendingBillPhoto}" style="width:60px;height:60px;object-fit:cover;border-radius:6px;border:1px solid var(--border);" />` : ""}
+      <span class="muted">${pendingBillPhoto ? 'Bill attached' : 'No bill attached yet'}</span>
+    </div>
+  </div>
+  <div class="wizard-actions">
+    <button class="btn secondary" onclick="expenseWizardBack()">&larr; Previous</button>
+    <button class="btn" onclick="expenseWizardStep2Next()">Next &rsaquo;</button>
+  </div>`;
+}
+function expenseWizardStep2Next(){
+  if(!pendingBillPhoto){ alert("Please attach a photo of the bill before continuing - it's required for every expense request."); return; }
+  expenseWizard.step = 2;
+  renderMain();
+}
+function expenseWizardStep3Html(){
+  const d = expenseWizard.data;
+  const vLabel = d.isOfficeExpenditure ? 'Office Expenditure' : ((vehicles.find(v=>v.id===d.vehicleId)||{}).reg || '-');
+  return `
+  <div class="grid cols-2">
+    <div class="kpi"><div class="num">₹${d.amount}</div><div class="label">Amount</div></div>
+    <div class="kpi"><div class="num">${d.category}</div><div class="label">Category</div></div>
+    <div class="kpi"><div class="num">${vLabel}</div><div class="label">Vehicle</div></div>
+    <div class="kpi"><div class="num">${d.description||'-'}</div><div class="label">Description</div></div>
+  </div>
+  <div class="wizard-actions">
+    <button class="btn secondary" onclick="expenseWizardBack()">&larr; Previous</button>
+    <button class="btn" ${expenseWizard.busy?'disabled':''} onclick="expenseWizardSubmit()">${expenseWizard.busy?'<span class="spinner"></span>':'&#10003; Submit request'}</button>
+  </div>`;
+}
+async function expenseWizardSubmit(){
+  if(!pendingBillPhoto){ alert("Please attach a photo of the bill before submitting."); return; }
+  expenseWizard.busy = true; await renderMain();
+  try{
+    const body = { ...expenseWizard.data, bill: pendingBillPhoto };
+    const ex = await api("/expenses", {method:"POST", body: JSON.stringify(body)});
+    expenses.unshift(ex);
+    pendingBillPhoto = null;
+    expenseWizard.done = true;
+  }catch(e){ alert(e.message); }
+  expenseWizard.busy = false; await renderMain();
 }
 function expenseActionsHtml(ex, canDecide){
   if(!canDecide){
