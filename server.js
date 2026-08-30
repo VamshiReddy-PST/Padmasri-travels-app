@@ -312,6 +312,16 @@ function backfillDefaults() {
         billingModel: "per_seat", // client-wide default - see TRANSPORT_BILLING_MODELS
         rateCards: {}, // { "5": {model, perSeat, perTrip, perKm, fixedMonthly, slabFlatKm, slabFlatRate, slabExtraPerKm}, ... }
         routeTemplates: [], // contracted route definitions set at onboarding (name, seaterTier, vehicleCount, own billing override) - used when fixedRoutes is on
+        // "bus" (default) = the fixed multi-stop shuttle system above only.
+        // "cab" = employees see an on-demand point-to-point booking flow
+        // instead (see db.cabRides / CAB_RIDE_ROLES) - genuinely different
+        // from the shuttle: no stops/clustering/optimizer, one employee per
+        // ride, nearest-available-driver matching. "both" shows employees
+        // their assigned route AND lets them book an ad-hoc cab. This is
+        // deliberately separate from fleetArrangement above (which is about
+        // how the shuttle fleet itself is contracted, not which UI/flow the
+        // employee sees).
+        transportMode: "bus",
       };
     } else {
       if (c.transportConfig.enabled === undefined) c.transportConfig.enabled = false;
@@ -338,6 +348,7 @@ function backfillDefaults() {
           : [];
       }
       delete c.transportConfig.requiredSeaterTiers;
+      if (!["bus", "cab", "both"].includes(c.transportConfig.transportMode)) c.transportConfig.transportMode = "bus";
       if (c.transportConfig.billingModel === undefined) c.transportConfig.billingModel = "per_seat";
       if (!c.transportConfig.rateCards || typeof c.transportConfig.rateCards !== "object") c.transportConfig.rateCards = {};
       if (!Array.isArray(c.transportConfig.routeTemplates)) c.transportConfig.routeTemplates = [];
@@ -602,6 +613,7 @@ function backfillDefaults() {
   if (!Array.isArray(db.vendors)) db.vendors = [];
   if (!Array.isArray(db.vendorBills)) db.vendorBills = [];
   if (!Array.isArray(db.vendorPayments)) db.vendorPayments = [];
+  if (!Array.isArray(db.cabRides)) db.cabRides = [];
   (db.subvendors || []).forEach((sv) => {
     if (sv.contactPerson === undefined) sv.contactPerson = "";
     if (sv.theme === undefined) sv.theme = null;
@@ -3121,9 +3133,13 @@ app.patch(
     if (!client) return res.status(404).json({ error: "Client not found." });
     const {
       enabled, officeLat, officeLng, officeAddress, seaterRates, maxPickupDetourKm, maxRideMinutes,
-      fleetArrangement, contractedFleet, billingModel, rateCards,
+      fleetArrangement, contractedFleet, billingModel, rateCards, transportMode,
     } = req.body || {};
     if (enabled !== undefined) client.transportConfig.enabled = !!enabled;
+    if (transportMode !== undefined) {
+      if (!["bus", "cab", "both"].includes(transportMode)) return res.status(400).json({ error: "Transport mode must be bus, cab, or both." });
+      client.transportConfig.transportMode = transportMode;
+    }
     if (officeLat !== undefined) client.transportConfig.officeLat = officeLat === null || officeLat === "" ? null : Number(officeLat);
     if (officeLng !== undefined) client.transportConfig.officeLng = officeLng === null || officeLng === "" ? null : Number(officeLng);
     if (officeAddress !== undefined) client.transportConfig.officeAddress = officeAddress || "";
@@ -8683,6 +8699,284 @@ app.post(
     await persistTransportRoute(route);
     await audit({ id: req.driver.id, name: req.driver.name }, "driver_complete_transport_route", `Driver ${req.driver.name} completed a ${route.direction} pickup trip for ${clientNameServer(route.clientId)}`);
     res.json(publicTransportRouteForDriver(route));
+  })
+);
+
+// ---------- CAB RIDES (on-demand, point-to-point employee transport) ----------
+// The genuinely different sibling to the fixed multi-stop shuttle system
+// above (transportRoutes/transportRequests/runTransportOptimizer): no
+// stops array, no clustering/optimizer, one employee per ride, requested
+// ad-hoc rather than pre-assigned to a route. Only offered to employees of
+// a client whose transportConfig.transportMode is "cab" or "both" (see
+// backfillDefaults and PATCH /api/clients/:id/transport-config above).
+// Matching is nearest-available-driver: any vehicle tagged VEHICLE_TYPES
+// "Cab" with a driver currently on shift and not already on another cab
+// ride is a candidate; distance is straight-line from their last known GPS
+// ping (see lastKnownLocationFor()) to the requested pickup point.
+const CAB_RIDE_STAFF_ROLES = ["owner", "ops_manager", "site_supervisor"];
+const CAB_RIDE_ACTIVE_STATUSES = ["assigned", "accepted", "arrived", "in_progress"];
+function publicCabRide(r) {
+  return r;
+}
+// Finds the nearest idle Cab-type vehicle+driver and assigns them to the
+// ride. Never throws - a failed match just leaves the ride in
+// "no_driver_available" for a staff member to assign manually (see PATCH
+// /api/cab-rides/:id/assign below), same "never block on this" pattern as
+// sendPushToEmployee/sendPushToDriver elsewhere in this file.
+function assignNearestCabDriver(ride) {
+  const busyDriverIds = new Set(db.cabRides.filter((r) => r.id !== ride.id && CAB_RIDE_ACTIVE_STATUSES.includes(r.status) && r.driverId).map((r) => r.driverId));
+  let best = null;
+  let bestDistance = Infinity;
+  db.vehicles.forEach((v) => {
+    if (v.vehicleType !== "Cab" || v.active === false || v.soldOut || !v.driverId) return;
+    if (busyDriverIds.has(v.driverId)) return;
+    const driver = db.drivers.find((d) => d.id === v.driverId);
+    if (!driver || driver.active === false) return;
+    const shift = currentDriverShift(driver.id);
+    if (!shift || shift.status === "awaiting_odometer") return; // not actually working yet
+    const loc = lastKnownLocationFor(shift);
+    if (loc == null || loc.lat == null || loc.lng == null) return;
+    const distance = distanceMeters(ride.pickupLat, ride.pickupLng, loc.lat, loc.lng);
+    if (distance == null) return;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = { vehicle: v, driver };
+    }
+  });
+  if (!best) {
+    ride.status = "no_driver_available";
+    return false;
+  }
+  ride.vehicleId = best.vehicle.id;
+  ride.driverId = best.driver.id;
+  ride.status = "assigned";
+  ride.assignedAt = nowIso();
+  sendPushToDriver(best.driver, {
+    title: "New cab ride assigned",
+    body: `Pickup at ${ride.pickupAddress || "the requested location"} for ${ride.employeeName}`,
+    url: "/driver.html",
+  }).catch((err) => console.error("Push notify (cab ride assigned) failed:", err.message));
+  return true;
+}
+function publicCabRideForStaff(r) {
+  const vehicle = r.vehicleId ? db.vehicles.find((v) => v.id === r.vehicleId) : null;
+  const driver = r.driverId ? db.drivers.find((d) => d.id === r.driverId) : null;
+  return Object.assign({}, r, {
+    vehicleReg: vehicle ? vehicle.reg : "",
+    driverName: driver ? driver.name : "",
+    driverPhone: driver ? driver.phone : "",
+  });
+}
+
+// -------- Employee-facing (public/client.html) --------
+app.post(
+  "/api/client-employee-auth/cab-rides",
+  clientEmployeeAuth,
+  h(async (req, res) => {
+    const client = db.clients.find((c) => c.id === req.transportEmployee.clientId);
+    if (!client || !client.transportConfig || !["cab", "both"].includes(client.transportConfig.transportMode)) {
+      return res.status(400).json({ error: "On-demand cab booking isn't enabled for your organisation." });
+    }
+    const existingActive = db.cabRides.find(
+      (r) => r.employeeId === req.transportEmployee.id && [...CAB_RIDE_ACTIVE_STATUSES, "requested", "no_driver_available"].includes(r.status)
+    );
+    if (existingActive) return res.status(400).json({ error: "You already have a ride in progress. Cancel it before requesting another." });
+    const { pickupLat, pickupLng, pickupAddress, dropLat, dropLng, dropAddress, scheduledFor } = req.body || {};
+    if (pickupLat == null || pickupLng == null) return res.status(400).json({ error: "Your pickup location is required." });
+    if (dropLat == null || dropLng == null) return res.status(400).json({ error: "Your drop location is required." });
+    const ride = {
+      id: uid("cab"),
+      clientId: client.id,
+      employeeId: req.transportEmployee.id,
+      employeeName: req.transportEmployee.name,
+      pickupLat: Number(pickupLat),
+      pickupLng: Number(pickupLng),
+      pickupAddress: pickupAddress || "",
+      dropLat: Number(dropLat),
+      dropLng: Number(dropLng),
+      dropAddress: dropAddress || "",
+      requestedAt: nowIso(),
+      scheduledFor: scheduledFor || null,
+      status: "requested",
+      vehicleId: null,
+      driverId: null,
+      assignedAt: null,
+      acceptedAt: null,
+      arrivedAt: null,
+      startedAt: null,
+      completedAt: null,
+      cancelledAt: null,
+      cancelReason: "",
+      distanceKm: (() => {
+        const m = distanceMeters(Number(pickupLat), Number(pickupLng), Number(dropLat), Number(dropLng));
+        return m == null ? null : Math.round((m / 1000) * 10) / 10;
+      })(),
+      createdAt: nowIso(),
+    };
+    db.cabRides.push(ride);
+    // Only auto-match immediately for a "now" ride - a scheduled-for-later
+    // ride is matched by staff nearer the time (no background scheduler
+    // for this yet, deliberately kept simple for v1).
+    if (!ride.scheduledFor) assignNearestCabDriver(ride);
+    await audit({ id: req.transportEmployee.id, name: req.transportEmployee.name }, "cab_ride_requested", `${req.transportEmployee.name} requested a cab ride from ${ride.pickupAddress || "their location"}`);
+    res.json(ride);
+  })
+);
+app.get("/api/client-employee-auth/cab-rides", clientEmployeeAuth, (req, res) => {
+  res.json(
+    db.cabRides
+      .filter((r) => r.employeeId === req.transportEmployee.id)
+      .slice()
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 30)
+  );
+});
+app.get("/api/client-employee-auth/cab-rides/active", clientEmployeeAuth, (req, res) => {
+  const ride = db.cabRides.find(
+    (r) => r.employeeId === req.transportEmployee.id && [...CAB_RIDE_ACTIVE_STATUSES, "requested", "no_driver_available"].includes(r.status)
+  );
+  res.json(ride || null);
+});
+app.post(
+  "/api/client-employee-auth/cab-rides/:id/cancel",
+  clientEmployeeAuth,
+  h(async (req, res) => {
+    const ride = db.cabRides.find((r) => r.id === req.params.id && r.employeeId === req.transportEmployee.id);
+    if (!ride) return res.status(404).json({ error: "Ride not found." });
+    if (!["requested", "assigned", "accepted", "no_driver_available"].includes(ride.status)) {
+      return res.status(400).json({ error: "This ride is already underway and can't be cancelled from here - please contact your office." });
+    }
+    ride.status = "cancelled";
+    ride.cancelledAt = nowIso();
+    ride.cancelReason = "Cancelled by employee";
+    if (ride.driverId) {
+      const driver = db.drivers.find((d) => d.id === ride.driverId);
+      if (driver) {
+        sendPushToDriver(driver, { title: "Cab ride cancelled", body: `${ride.employeeName} cancelled their ride request.`, url: "/driver.html" }).catch(() => {});
+      }
+    }
+    await audit({ id: req.transportEmployee.id, name: req.transportEmployee.name }, "cab_ride_cancelled", `${req.transportEmployee.name} cancelled a cab ride`);
+    res.json(ride);
+  })
+);
+
+// -------- Driver-facing (public/driver.html) --------
+app.get("/api/driver-auth/cab-rides/current", driverAuth, (req, res) => {
+  const ride = db.cabRides.find((r) => r.driverId === req.driver.id && CAB_RIDE_ACTIVE_STATUSES.includes(r.status));
+  res.json(ride || null);
+});
+function findDriverCabRide(req, res) {
+  const ride = db.cabRides.find((r) => r.id === req.params.id && r.driverId === req.driver.id);
+  if (!ride) { res.status(404).json({ error: "Ride not found." }); return null; }
+  return ride;
+}
+app.post(
+  "/api/driver-auth/cab-rides/:id/accept",
+  driverAuth,
+  h(async (req, res) => {
+    const ride = findDriverCabRide(req, res);
+    if (!ride) return;
+    if (ride.status !== "assigned") return res.status(400).json({ error: "This ride has already been accepted or resolved." });
+    ride.status = "accepted";
+    ride.acceptedAt = nowIso();
+    await audit({ id: req.driver.id, name: req.driver.name }, "driver_accept_cab_ride", `Driver ${req.driver.name} accepted a cab ride for ${ride.employeeName}`);
+    res.json(ride);
+  })
+);
+app.post(
+  "/api/driver-auth/cab-rides/:id/arrive",
+  driverAuth,
+  h(async (req, res) => {
+    const ride = findDriverCabRide(req, res);
+    if (!ride) return;
+    if (ride.status !== "accepted") return res.status(400).json({ error: "Accept the ride before marking arrival." });
+    ride.status = "arrived";
+    ride.arrivedAt = nowIso();
+    const employee = transportEmployees.find((e) => e.id === ride.employeeId);
+    if (employee) {
+      sendPushToEmployee(employee, { title: "Your driver has arrived", body: "Your cab is at the pickup point now.", url: "/client.html" }).catch(() => {});
+    }
+    res.json(ride);
+  })
+);
+app.post(
+  "/api/driver-auth/cab-rides/:id/start",
+  driverAuth,
+  h(async (req, res) => {
+    const ride = findDriverCabRide(req, res);
+    if (!ride) return;
+    if (ride.status !== "arrived") return res.status(400).json({ error: "Mark yourself arrived before starting the ride." });
+    ride.status = "in_progress";
+    ride.startedAt = nowIso();
+    res.json(ride);
+  })
+);
+app.post(
+  "/api/driver-auth/cab-rides/:id/complete",
+  driverAuth,
+  h(async (req, res) => {
+    const ride = findDriverCabRide(req, res);
+    if (!ride) return;
+    if (ride.status !== "in_progress") return res.status(400).json({ error: "This ride isn't in progress." });
+    ride.status = "completed";
+    ride.completedAt = nowIso();
+    await audit({ id: req.driver.id, name: req.driver.name }, "driver_complete_cab_ride", `Driver ${req.driver.name} completed a cab ride for ${ride.employeeName}`);
+    res.json(ride);
+  })
+);
+
+// -------- Staff-facing (public/index.html - Owner/Ops Manager/Site Supervisor) --------
+app.get("/api/cab-rides", requireAuth, requireRole(...CAB_RIDE_STAFF_ROLES), (req, res) => {
+  let list = db.cabRides;
+  if (req.query.status) list = list.filter((r) => r.status === req.query.status);
+  res.json(
+    list
+      .slice()
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 300)
+      .map(publicCabRideForStaff)
+  );
+});
+app.patch(
+  "/api/cab-rides/:id/assign",
+  requireAuth,
+  requireRole(...CAB_RIDE_STAFF_ROLES),
+  h(async (req, res) => {
+    const ride = db.cabRides.find((r) => r.id === req.params.id);
+    if (!ride) return res.status(404).json({ error: "Ride not found." });
+    if (["completed", "cancelled"].includes(ride.status)) return res.status(400).json({ error: "This ride is already resolved." });
+    const { vehicleId } = req.body || {};
+    const vehicle = db.vehicles.find((v) => v.id === vehicleId && v.vehicleType === "Cab" && v.driverId);
+    if (!vehicle) return res.status(400).json({ error: "Select a Cab-type vehicle that has a driver assigned." });
+    ride.vehicleId = vehicle.id;
+    ride.driverId = vehicle.driverId;
+    ride.status = "assigned";
+    ride.assignedAt = nowIso();
+    const driver = db.drivers.find((d) => d.id === vehicle.driverId);
+    if (driver) {
+      sendPushToDriver(driver, {
+        title: "New cab ride assigned",
+        body: `Pickup at ${ride.pickupAddress || "the requested location"} for ${ride.employeeName}`,
+        url: "/driver.html",
+      }).catch(() => {});
+    }
+    await audit(req.user, "manually_assign_cab_ride", `${req.user.name} manually assigned a cab ride to ${vehicle.reg}`);
+    res.json(publicCabRideForStaff(ride));
+  })
+);
+app.post(
+  "/api/cab-rides/:id/cancel",
+  requireAuth,
+  requireRole(...CAB_RIDE_STAFF_ROLES),
+  h(async (req, res) => {
+    const ride = db.cabRides.find((r) => r.id === req.params.id);
+    if (!ride) return res.status(404).json({ error: "Ride not found." });
+    if (["completed", "cancelled"].includes(ride.status)) return res.status(400).json({ error: "This ride is already resolved." });
+    ride.status = "cancelled";
+    ride.cancelledAt = nowIso();
+    ride.cancelReason = "Cancelled by staff";
+    await audit(req.user, "cancel_cab_ride", `${req.user.name} cancelled a cab ride for ${ride.employeeName}`);
+    res.json(publicCabRideForStaff(ride));
   })
 );
 
