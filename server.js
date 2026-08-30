@@ -599,6 +599,9 @@ function backfillDefaults() {
   if (!Array.isArray(db.vehicleOwnerPayments)) db.vehicleOwnerPayments = [];
   if (!Array.isArray(db.vehicleOwnerAdvances)) db.vehicleOwnerAdvances = [];
   if (!Array.isArray(db.vehicleOwnerIncomeEntries)) db.vehicleOwnerIncomeEntries = [];
+  if (!Array.isArray(db.vendors)) db.vendors = [];
+  if (!Array.isArray(db.vendorBills)) db.vendorBills = [];
+  if (!Array.isArray(db.vendorPayments)) db.vendorPayments = [];
   (db.subvendors || []).forEach((sv) => {
     if (sv.contactPerson === undefined) sv.contactPerson = "";
     if (sv.theme === undefined) sv.theme = null;
@@ -7859,6 +7862,328 @@ app.get(
   vehicleOwnerAuth,
   h(async (req, res) => {
     res.json(vehicleOwnerSummary(req.vehicleOwner.id));
+  })
+);
+
+// ---------- VENDORS (non-vehicle suppliers: tyres, parts, uniforms, etc.) ----------
+// A Vendor is a business that sells us goods/services but has no vehicle in
+// our fleet and does no driving - a tyre shop, spare-parts supplier, uniform
+// tailor, insurance broker, fuel-station operator, RTO/documentation agent,
+// and so on. Unlike Subvendor/Vehicle Owner (who we OWE income to for
+// running vehicles), a Vendor bills US for goods/services and we pay them -
+// so the ledger here is a simple payables model (Bills raised by the vendor
+// minus Payments we've made), not the trip/km/package income-accrual engine
+// used for Subvendor/Vehicle Owner. Gets its own separate login, same
+// mechanics (email/mobile + password, forced change on first login) so a
+// vendor can see only their own bills and payments - never anyone else's data.
+const VENDOR_CATEGORIES = [
+  "Tyres",
+  "Spare Parts",
+  "Uniform",
+  "Insurance Broker",
+  "Fuel Station",
+  "Vehicle Documentation / RTO Agent",
+  "Workshop Consumables",
+  "Other",
+];
+const VENDOR_MANAGE_ROLES = ["owner", "ops_manager"];
+const VENDOR_BILL_ROLES = [...VENDOR_MANAGE_ROLES, "site_supervisor"];
+const VENDOR_PAYMENT_ROLES = [...VENDOR_MANAGE_ROLES, "billing"];
+const VENDOR_VIEW_ROLES = [...new Set([...VENDOR_MANAGE_ROLES, ...VENDOR_BILL_ROLES, ...VENDOR_PAYMENT_ROLES])];
+// publicSubvendor() only strips passwordHash/passwordHistory - generic
+// enough to reuse for any account-shaped object, same as Vehicle Owner does.
+const publicVendor = publicSubvendor;
+
+function vendorSummary(vendorId) {
+  const billsForVendor = db.vendorBills
+    .filter((b) => b.vendorId === vendorId)
+    .slice()
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const paymentsForVendor = db.vendorPayments
+    .filter((p) => p.vendorId === vendorId)
+    .slice()
+    .sort((a, b) => b.date.localeCompare(a.date));
+  const totalBilled = Math.round(billsForVendor.reduce((s, b) => s + b.amount, 0) * 100) / 100;
+  const totalPaid = Math.round(paymentsForVendor.reduce((s, p) => s + p.amount, 0) * 100) / 100;
+  const billPaidMap = {};
+  paymentsForVendor.forEach((p) => {
+    if (p.billId) billPaidMap[p.billId] = Math.round(((billPaidMap[p.billId] || 0) + p.amount) * 100) / 100;
+  });
+  const bills = billsForVendor.map((b) => {
+    const paidAgainstBill = billPaidMap[b.id] || 0;
+    return { ...b, paidAgainstBill, outstanding: Math.round((b.amount - paidAgainstBill) * 100) / 100 };
+  });
+  return {
+    bills,
+    totalBilled,
+    payments: paymentsForVendor,
+    totalPaid,
+    outstandingPayable: Math.round((totalBilled - totalPaid) * 100) / 100,
+  };
+}
+
+app.get("/api/vendors", requireAuth, requireRole(...VENDOR_VIEW_ROLES), (req, res) => {
+  res.json(db.vendors.map(publicVendor));
+});
+
+app.post(
+  "/api/vendors",
+  requireAuth,
+  requireRole(...VENDOR_MANAGE_ROLES),
+  h(async (req, res) => {
+    const { name, category, email, phone, gstNumber, address, password } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "Vendor name is required." });
+    if (!VENDOR_CATEGORIES.includes(category)) return res.status(400).json({ error: "Category must be one of: " + VENDOR_CATEGORIES.join(", ") + "." });
+    const emailNorm = email ? String(email).trim().toLowerCase() : "";
+    const phoneNorm = phone ? String(phone).trim() : "";
+    if (!emailNorm && !phoneNorm) return res.status(400).json({ error: "Either an email address or a mobile number is required to log in." });
+    const clash = db.vendors.find((v) => (emailNorm && v.email === emailNorm) || (phoneNorm && v.phone === phoneNorm));
+    if (clash) return res.status(400).json({ error: "That email or mobile number is already in use by another vendor." });
+    if (!password) return res.status(400).json({ error: "A temporary password is required." });
+    const policyError = passwordPolicyError(password);
+    if (policyError) return res.status(400).json({ error: policyError });
+    const vendor = {
+      id: uid("vnd"),
+      name,
+      category,
+      email: emailNorm,
+      phone: phoneNorm,
+      gstNumber: gstNumber || "",
+      address: address || "",
+      passwordHash: hashPassword(password),
+      passwordHistory: [],
+      mustChangePassword: true,
+      active: true,
+      createdAt: nowIso(),
+      theme: null,
+    };
+    db.vendors.push(vendor);
+    await audit(req.user, "create_vendor", `${req.user.name} added vendor ${name} (${category})`);
+    res.json(publicVendor(vendor));
+  })
+);
+
+app.patch(
+  "/api/vendors/:id",
+  requireAuth,
+  requireRole(...VENDOR_MANAGE_ROLES),
+  h(async (req, res) => {
+    const vendor = db.vendors.find((v) => v.id === req.params.id);
+    if (!vendor) return res.status(404).json({ error: "Vendor not found." });
+    const { name, category, email, phone, gstNumber, address, active } = req.body || {};
+    if (name !== undefined) vendor.name = name;
+    if (category !== undefined) {
+      if (!VENDOR_CATEGORIES.includes(category)) return res.status(400).json({ error: "Category must be one of: " + VENDOR_CATEGORIES.join(", ") + "." });
+      vendor.category = category;
+    }
+    if (email !== undefined) vendor.email = String(email).trim().toLowerCase();
+    if (phone !== undefined) vendor.phone = String(phone).trim();
+    if (gstNumber !== undefined) vendor.gstNumber = gstNumber;
+    if (address !== undefined) vendor.address = address;
+    if (active !== undefined) vendor.active = !!active;
+    await audit(req.user, "update_vendor", `${req.user.name} updated vendor ${vendor.name}`);
+    res.json(publicVendor(vendor));
+  })
+);
+
+app.patch(
+  "/api/vendors/:id/reset-password",
+  requireAuth,
+  requireRole("owner"),
+  h(async (req, res) => {
+    const vendor = db.vendors.find((v) => v.id === req.params.id);
+    if (!vendor) return res.status(404).json({ error: "Vendor not found." });
+    const { newPassword } = req.body || {};
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError) return res.status(400).json({ error: policyError });
+    vendor.passwordHistory = [vendor.passwordHash, ...(vendor.passwordHistory || [])].filter(Boolean).slice(0, PASSWORD_HISTORY_LIMIT);
+    vendor.passwordHash = hashPassword(newPassword);
+    vendor.mustChangePassword = true;
+    await audit(req.user, "reset_vendor_password", `${req.user.name} reset the password for vendor ${vendor.name} - they must set a new one at next login`);
+    res.json(publicVendor(vendor));
+  })
+);
+
+app.get(
+  "/api/vendors/:id/summary",
+  requireAuth,
+  requireRole(...VENDOR_VIEW_ROLES),
+  h(async (req, res) => {
+    const vendor = db.vendors.find((v) => v.id === req.params.id);
+    if (!vendor) return res.status(404).json({ error: "Vendor not found." });
+    res.json({ vendor: publicVendor(vendor), ...vendorSummary(vendor.id) });
+  })
+);
+
+app.post(
+  "/api/vendors/:id/bills",
+  requireAuth,
+  requireRole(...VENDOR_BILL_ROLES),
+  h(async (req, res) => {
+    const vendor = db.vendors.find((v) => v.id === req.params.id);
+    if (!vendor) return res.status(404).json({ error: "Vendor not found." });
+    const { date, category, description, amount, invoice, vehicleId } = req.body || {};
+    if (!amount || Number(amount) <= 0) return res.status(400).json({ error: "A valid bill amount is required." });
+    if (!description || !String(description).trim()) return res.status(400).json({ error: "A description of what was supplied is required." });
+    const invoiceUrl = await savePhoto(invoice, "vendor_bill_invoice");
+    const bill = {
+      id: uid("vbill"),
+      vendorId: vendor.id,
+      date: date || todayStr(),
+      category: category || vendor.category,
+      description,
+      amount: Number(amount),
+      vehicleId: vehicleId || null,
+      invoiceUrl,
+      createdBy: req.user.id,
+      createdByName: req.user.name,
+      createdAt: nowIso(),
+    };
+    db.vendorBills.push(bill);
+    await audit(req.user, "vendor_bill", `${req.user.name} recorded a bill of ₹${bill.amount} from vendor ${vendor.name}`);
+    res.json(bill);
+  })
+);
+
+app.get(
+  "/api/vendors/:id/bills",
+  requireAuth,
+  requireRole(...VENDOR_VIEW_ROLES),
+  h(async (req, res) => {
+    const vendor = db.vendors.find((v) => v.id === req.params.id);
+    if (!vendor) return res.status(404).json({ error: "Vendor not found." });
+    res.json(vendorSummary(vendor.id).bills);
+  })
+);
+
+app.post(
+  "/api/vendors/:id/payments",
+  requireAuth,
+  requireRole(...VENDOR_PAYMENT_ROLES),
+  h(async (req, res) => {
+    const vendor = db.vendors.find((v) => v.id === req.params.id);
+    if (!vendor) return res.status(404).json({ error: "Vendor not found." });
+    const { billId, amount, date, mode, note } = req.body || {};
+    if (!amount || Number(amount) <= 0) return res.status(400).json({ error: "A valid amount is required." });
+    const validModes = ["Cash", "UPI", "Bank Transfer", "Cheque"];
+    if (!validModes.includes(mode)) return res.status(400).json({ error: "Payment mode must be one of: " + validModes.join(", ") + "." });
+    if (billId) {
+      const bill = db.vendorBills.find((b) => b.id === billId && b.vendorId === vendor.id);
+      if (!bill) return res.status(400).json({ error: "That bill was not found for this vendor." });
+    }
+    const payment = {
+      id: uid("vpay"),
+      vendorId: vendor.id,
+      billId: billId || null,
+      amount: Number(amount),
+      date: date || todayStr(),
+      mode,
+      note: note || "",
+      createdBy: req.user.id,
+      createdByName: req.user.name,
+      createdAt: nowIso(),
+    };
+    db.vendorPayments.push(payment);
+    await audit(req.user, "vendor_payment", `${req.user.name} paid ₹${payment.amount} to vendor ${vendor.name}`);
+    res.json(payment);
+  })
+);
+
+app.get(
+  "/api/vendors/:id/payments",
+  requireAuth,
+  requireRole(...VENDOR_VIEW_ROLES),
+  h(async (req, res) => {
+    const vendor = db.vendors.find((v) => v.id === req.params.id);
+    if (!vendor) return res.status(404).json({ error: "Vendor not found." });
+    res.json(db.vendorPayments.filter((p) => p.vendorId === vendor.id).slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+  })
+);
+
+// ---------- VENDOR AUTH (their own separate login) ----------
+const VENDOR_ALLOWED_DURING_FORCED_PASSWORD_CHANGE = ["/api/vendor-auth/me", "/api/vendor-auth/change-password", "/api/vendor-auth/logout"];
+function vendorAuth(req, res, next) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  const payload = token && !isSessionRevoked(token) && verifySessionToken(token);
+  const vendor = payload && payload.type === "vendor" && db.vendors.find((v) => v.id === payload.id && v.active !== false);
+  if (!vendor) return res.status(401).json({ error: "Not signed in. Please log in again." });
+  if (vendor.mustChangePassword && !VENDOR_ALLOWED_DURING_FORCED_PASSWORD_CHANGE.includes(req.path)) {
+    return res.status(403).json({ error: "You must set a new password before continuing.", mustChangePassword: true });
+  }
+  req.vendor = vendor;
+  req.vendorToken = token;
+  next();
+}
+
+app.post(
+  "/api/vendor-auth/login",
+  h(async (req, res) => {
+    const { identifier, password } = req.body || {};
+    if (!identifier || !password) return res.status(400).json({ error: "Email/mobile number and password are required." });
+    const idNorm = String(identifier).trim().toLowerCase();
+    const phoneNorm = String(identifier).trim();
+    const vendor = db.vendors.find((v) => v.active !== false && ((v.email && v.email === idNorm) || (v.phone && v.phone === phoneNorm)));
+    if (!vendor || !verifyPassword(password, vendor.passwordHash)) {
+      return res.status(401).json({ error: "Incorrect email/mobile number or password." });
+    }
+    const token = signSessionToken({ type: "vendor", id: vendor.id });
+    await audit({ id: vendor.id, name: vendor.name }, "vendor_login", `Vendor ${vendor.name} logged in`);
+    res.json({ token, vendor: publicVendor(vendor) });
+  })
+);
+
+app.get("/api/vendor-auth/me", vendorAuth, (req, res) => {
+  res.json(publicVendor(req.vendor));
+});
+
+app.post(
+  "/api/vendor-auth/change-password",
+  vendorAuth,
+  h(async (req, res) => {
+    const { currentPassword, newPassword } = req.body || {};
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: "Current and new password are required." });
+    if (!verifyPassword(currentPassword, req.vendor.passwordHash)) return res.status(400).json({ error: "Current password is incorrect." });
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError) return res.status(400).json({ error: policyError });
+    if (passwordReused(newPassword, req.vendor)) {
+      return res.status(400).json({ error: "New password cannot be the same as your current or a recent previous password." });
+    }
+    req.vendor.passwordHistory = [req.vendor.passwordHash, ...(req.vendor.passwordHistory || [])].slice(0, PASSWORD_HISTORY_LIMIT);
+    req.vendor.passwordHash = hashPassword(newPassword);
+    req.vendor.mustChangePassword = false;
+    await audit(req.vendor, "vendor_change_password", `${req.vendor.name} changed their own password`);
+    res.json(publicVendor(req.vendor));
+  })
+);
+
+app.post(
+  "/api/vendor-auth/theme",
+  vendorAuth,
+  h(async (req, res) => {
+    const { value, error } = themeFromBody(req.body);
+    if (error) return res.status(400).json({ error });
+    req.vendor.theme = value;
+    await save();
+    res.json(publicVendor(req.vendor));
+  })
+);
+
+app.post(
+  "/api/vendor-auth/logout",
+  vendorAuth,
+  h(async (req, res) => {
+    revokedSessionTokens.add(req.vendorToken);
+    await audit(req.vendor, "vendor_logout", `${req.vendor.name} logged out`);
+    res.json({ ok: true });
+  })
+);
+
+app.get(
+  "/api/vendor-auth/dashboard",
+  vendorAuth,
+  h(async (req, res) => {
+    res.json(vendorSummary(req.vendor.id));
   })
 );
 
