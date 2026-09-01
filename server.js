@@ -183,6 +183,8 @@ async function initStorage() {
 // database created before this update) so upgrades never crash on
 // `undefined` - new installs already have these from seed.json.
 function backfillDefaults() {
+  if (!db.settings) db.settings = { testingOpenAccess: true };
+  if (db.settings.testingOpenAccess === undefined) db.settings.testingOpenAccess = true;
   if (!db.odometerLogs) db.odometerLogs = {};
   if (!Array.isArray(db.backupDownloads)) db.backupDownloads = [];
   if (!Array.isArray(db.attendanceBackupDownloads)) db.attendanceBackupDownloads = [];
@@ -2135,11 +2137,31 @@ function requireAuth(req, res, next) {
 }
 function requireRole(...roles) {
   return (req, res, next) => {
+    // Testing-phase open access: while db.settings.testingOpenAccess is on,
+    // any authenticated internal staff account (i.e. any role in
+    // VALID_ROLES) is let through regardless of the specific roles list a
+    // given route was gated with. The Owner can flip this off from the
+    // Permissions screen once testing is done. Routes that must stay
+    // Owner-only no matter what (e.g. the Permissions toggle itself) use
+    // requireOwnerOnly instead of requireRole, which never bypasses.
+    const testingOpen = !!(db.settings && db.settings.testingOpenAccess);
+    if (testingOpen && VALID_ROLES.includes(req.user.role)) {
+      return next();
+    }
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({ error: `This action needs one of these roles: ${roles.join(", ")}.` });
     }
     next();
   };
+}
+// Always Owner-only, even during the testing-phase open-access window - used
+// for the handful of controls that must stay under the Owner's exclusive
+// control regardless of that flag (right now: the flag itself).
+function requireOwnerOnly(req, res, next) {
+  if (req.user.role !== "owner") {
+    return res.status(403).json({ error: "This action is restricted to the Owner." });
+  }
+  next();
 }
 
 // Wraps an async route handler so a thrown/rejected error becomes a clean
@@ -2249,6 +2271,27 @@ app.post(
   })
 );
 
+// ---------- SETTINGS (Owner-only app-wide switches, e.g. testing-phase open access) ----------
+app.get(
+  "/api/settings",
+  requireAuth,
+  h(async (req, res) => {
+    res.json({ testingOpenAccess: !!(db.settings && db.settings.testingOpenAccess) });
+  })
+);
+app.patch(
+  "/api/settings",
+  requireAuth,
+  requireOwnerOnly,
+  h(async (req, res) => {
+    if (typeof req.body.testingOpenAccess === "boolean") {
+      db.settings.testingOpenAccess = req.body.testingOpenAccess;
+    }
+    await audit(req.user, "settings_updated", { testingOpenAccess: db.settings.testingOpenAccess });
+    res.json({ testingOpenAccess: !!db.settings.testingOpenAccess });
+  })
+);
+
 // ---------- META (clients, sites, drivers, users) ----------
 app.get("/api/meta", requireAuth, (req, res) => {
   res.json({
@@ -2263,6 +2306,7 @@ app.get("/api/meta", requireAuth, (req, res) => {
     users: db.users.map(publicUser),
     me: publicUser(req.user),
     themePresets: THEME_PRESETS,
+    testingOpenAccess: !!(db.settings && db.settings.testingOpenAccess),
   });
 });
 
@@ -4005,7 +4049,7 @@ app.get("/api/client-employee-auth/me", clientEmployeeAuth, (req, res) => {
   const client = db.clients.find((c) => c.id === req.transportEmployee.clientId);
   res.json({
     employee: publicTransportEmployee(req.transportEmployee),
-    client: client ? { id: client.id, name: client.name } : null,
+    client: client ? { id: client.id, name: client.name, transportMode: (client.transportConfig && client.transportConfig.transportMode) || "bus" } : null,
     themePresets: THEME_PRESETS,
   });
 });
