@@ -487,6 +487,13 @@ const API = "/api";
 let authToken = localStorage.getItem("fleetAuthToken") || null;
 let currentUser = null;
 let meta = { clients: [], sites: [], drivers: [], users: [] };
+// Testing-phase open access (see server.js requireRole()) - while true,
+// every internal staff role effectively gets the Owner's screen access,
+// except the Owner-only Permissions tab itself. Set from /api/meta on
+// every boot; the Owner flips it off from the Permissions screen once
+// testing is done. Defaults to false until boot() confirms it, so a
+// not-yet-loaded page never over-shows tabs.
+let testingOpenAccess = false;
 let vehicles = [];
 let records = {};
 let odometerLogs = {};
@@ -976,6 +983,7 @@ async function boot(){
   try{
     const m = await api("/meta");
     meta = m; currentUser = m.me;
+    testingOpenAccess = !!m.testingOpenAccess;
     applyTheme(currentUser.theme && currentUser.theme.key, currentUser.role);
     // First login (or right after an Owner password reset) - the account
     // only has a temporary password, and the server blocks every other
@@ -1330,7 +1338,11 @@ function tabsFor(role){
 // appended last (see tabsFor() above) - it's a zero-permission, read-only
 // screen everyone should be able to reach, same reasoning as the free Fleet
 // Assistant tab.
-function tabsForInner(role){
+// Each role's own tab list, before the testing-phase open-access union
+// applied by tabsForInner() below. Kept as a separate function so that
+// union logic can call this for both the requested role AND for "owner"
+// (to get the list to merge in) without re-triggering the union itself.
+function tabsForInnerBase(role){
   // Site Supervisor (role key site_supervisor, shown as "Area Supervisor")
   // gets both odometer_verify and fuel_verify - per the Owner's explicit
   // request, they (plus Data Team and Owner) are the only roles that can
@@ -1345,7 +1357,10 @@ function tabsForInner(role){
   if(role==="ops_manager") return [["operations","Operations"],["overview","Overview"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["vehicle_owners","Vehicle Owners"],["vendors","Vendors"],["transport","Employee Transport"],["cab_rides","Cab Rides"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["verifications","Verifications"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="data_team") return [["corrections","Corrections"],["overview","Overview"],["expenses_view","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["verifications","Verifications"],["gps_link","GPS Device Linking"],["transport","Employee Transport"],["people","People"],["audit","Audit Log"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="hr") return [["attendance","Attendance"],["people","People"],["verifications","Verifications"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
-  if(role==="owner") return [["overview","Overview"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["vehicle_owners","Vehicle Owners"],["vendors","Vendors"],["transport","Employee Transport"],["cab_rides","Cab Rides"],["verifications","Verifications"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"]];
+  // "permissions" is Owner-only - deliberately last so it never leaks into
+  // another role's list through the union below (see tabsForInner()),
+  // which explicitly filters it back out even if it somehow matched.
+  if(role==="owner") return [["overview","Overview"],["smart_assistant","💡 Fleet Assistant"],["expenses","Expenses"],["fleet_list","Fleet"],["organisation","Organisation"],["trips","Trips"],["subvendors","Subvendors"],["vehicle_owners","Vehicle Owners"],["vendors","Vendors"],["transport","Employee Transport"],["cab_rides","Cab Rides"],["verifications","Verifications"],["gps_link","GPS Device Linking"],["repairs","Repair Requests"],["workshop","Workshop"],["people","People"],["attendance","Attendance"],["audit","Audit Log"],["reports","Reports"],["backup","Backup"],["kiosk","Kiosk"],["permissions","Permissions"]];
   if(role==="bookings") return [["usage","Vehicle Usage"],["trips","Trips"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(role==="admin") return [["overview","Overview"],["fleet_list","Fleet"],["organisation","Organisation"],["kiosk","Kiosk"],["smart_assistant","💡 Fleet Assistant"]];
   // Billing - new role, per the Owner's explicit request: the only staff
@@ -1355,6 +1370,20 @@ function tabsForInner(role){
   if(role==="billing") return [["organisation","Organisation"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   if(WORKSHOP_STAFF_ROLES.includes(role)) return [["workshop", role==="workshop_manager"?"Workshop Queue":"My Repairs"],["my_attendance","My Attendance"],["payroll","Payroll"],["smart_assistant","💡 Fleet Assistant"]];
   return [];
+}
+// Testing-phase open access (per the Owner's explicit request): while the
+// flag is on, every internal staff role's own tab list is unioned with the
+// Owner's tab list, so they can reach everything the Owner can - except the
+// Owner-only "permissions" tab, which is always stripped back out here
+// regardless of the flag. A role's own tabs are kept first (so their normal
+// "home"/landing tab is unaffected), then any Owner tabs not already
+// present are appended in the Owner's order.
+function tabsForInner(role){
+  const own = tabsForInnerBase(role);
+  if(!testingOpenAccess || role==="owner" || !own.length) return own;
+  const ownKeys = new Set(own.map(([k])=>k));
+  const extra = tabsForInnerBase("owner").filter(([k])=>k!=="permissions" && !ownKeys.has(k));
+  return own.concat(extra);
 }
 
 // Every tab key in the app buckets into exactly one of these 5 sidebar
@@ -1382,7 +1411,7 @@ const TAB_GROUP_MAP = {
   subvendors:"fleet", vehicle_owners:"fleet", vendors:"fleet", cab_rides:"fleet", hierarchy:"fleet",
   trips:"trips", my_attendance:"trips", attendance:"trips", my_expenses:"trips", queue:"trips",
   expenses:"finance", expenses_view:"finance", payroll:"finance", backup:"finance", kiosk:"finance",
-  people:"people", verifications:"people", corrections:"people", audit:"people", organisation:"people",
+  people:"people", verifications:"people", corrections:"people", audit:"people", organisation:"people", permissions:"people",
   reports:"tools", smart_assistant:"tools", letterhead:"tools",
   dashboard:"tools", admin_dashboard:"tools", operations:"tools",
 };
@@ -1679,19 +1708,12 @@ async function routeView(){
     if(tab==="people") return view.name==="add_driver_wizard" ? addDriverWizardScreen() : (view.name==="add_staff_wizard" ? addStaffWizardScreen() : peopleScreen());
   }
   if(role==="owner"){
-    if(tab==="dashboard") return view.name==="dashboard_detail" ? dashboardDetailScreen(view.metric) : (view.name==="vehicle_status" ? vehicleTodayStatusScreen(view.vehicleId) : ownerDashboardScreen());
-    if(tab==="expenses") return expensesScreen(true);
-    if(tab==="assignments") return assignmentsScreen();
-    if(tab==="trips") return tripsScreen();
-    if(tab==="subvendors") return subvendorsScreen();
-    if(tab==="vehicle_owners") return vehicleOwnersScreen();
-    if(tab==="vendors") return vendorsScreen();
-    if(tab==="cab_rides") return cabRidesScreen();
-    if(tab==="people") return view.name==="add_driver_wizard" ? addDriverWizardScreen() : (view.name==="add_staff_wizard" ? addStaffWizardScreen() : peopleScreen());
-    if(tab==="attendance") return hrAttendanceScreen();
-    if(tab==="audit") return auditScreen();
-    if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : (view.name==="vehicle_detail" ? vehicleExpenditureScreen(view.vehicleId) : reportsScreen());
-    if(tab==="backup") return backupDownloadsScreen();
+    // Owner-only, never unioned into other roles (see tabsForInner()) and
+    // never covered by the testing-access fallback below, since owner===role
+    // is excluded from that fallback outright.
+    if(tab==="permissions") return permissionsScreen();
+    const ownerScreen = screenForOwnerTab(tab);
+    if(ownerScreen!==undefined) return ownerScreen;
   }
   if(role==="bookings"){
     if(tab==="usage") return vehicleUsageScreen();
@@ -1701,7 +1723,42 @@ async function routeView(){
     if(tab==="admin_dashboard") return adminDashboardScreen();
     if(tab==="admin_vehicles") return adminVehiclesScreen();
   }
+  // Testing-phase open access: a tab this role's own block above didn't
+  // handle (because they normally wouldn't have it) falls through to
+  // whatever screen the Owner's block would show for that same tab, as long
+  // as the flag is on. This is what actually makes the tabs added by the
+  // tabsForInner() union above work end-to-end, without duplicating the
+  // Owner's ~20-line routing chain into every other role's block. Never
+  // applies to role==="owner" itself (irrelevant - already handled above)
+  // and never exposes "permissions" (screenForOwnerTab doesn't route it -
+  // that tab is handled solely by the explicit owner-role check above).
+  if(testingOpenAccess && role!=="owner"){
+    const fallback = screenForOwnerTab(tab);
+    if(fallback!==undefined) return fallback;
+  }
   return "<div class='empty'>Nothing here.</div>";
+}
+// The Owner's tab-key -> screen routing, extracted out of routeView()'s
+// role==="owner" block so it can be reused as a fallback for every other
+// internal staff role during the testing-phase open-access window (see
+// tabsForInner() and the fallback at the bottom of routeView()). Returns
+// undefined (not a screen) when `tab` isn't one of the Owner's - callers
+// must check for that rather than assuming a match.
+function screenForOwnerTab(tab){
+  if(tab==="dashboard") return view.name==="dashboard_detail" ? dashboardDetailScreen(view.metric) : (view.name==="vehicle_status" ? vehicleTodayStatusScreen(view.vehicleId) : ownerDashboardScreen());
+  if(tab==="expenses") return expensesScreen(true);
+  if(tab==="assignments") return assignmentsScreen();
+  if(tab==="trips") return tripsScreen();
+  if(tab==="subvendors") return subvendorsScreen();
+  if(tab==="vehicle_owners") return vehicleOwnersScreen();
+  if(tab==="vendors") return vendorsScreen();
+  if(tab==="cab_rides") return cabRidesScreen();
+  if(tab==="people") return view.name==="add_driver_wizard" ? addDriverWizardScreen() : (view.name==="add_staff_wizard" ? addStaffWizardScreen() : peopleScreen());
+  if(tab==="attendance") return hrAttendanceScreen();
+  if(tab==="audit") return auditScreen();
+  if(tab==="reports") return view.name==="cost_analysis" ? costAnalysisScreen() : (view.name==="vehicle_detail" ? vehicleExpenditureScreen(view.vehicleId) : reportsScreen());
+  if(tab==="backup") return backupDownloadsScreen();
+  return undefined;
 }
 
 // ================= VEHICLE USAGE (Area Supervisor, Regional Supervisor, Bookings Department) =================
@@ -2345,6 +2402,56 @@ function verifyBoxHtml(key, count, items, emptyMsg){
     <div class="verify-box-list">${list}</div>
     <button class="btn small secondary" style="margin-top:10px;width:100%;" onclick="goto('verify_detail',{category:'${key}'})">View all &rarr;</button>
   </div>`;
+}
+// ================= PERMISSIONS (Owner-only) =================
+// Lets the Owner toggle the app-wide testing-phase open-access switch (see
+// requireRole() in server.js + tabsForInner()/screenForOwnerTab() above):
+// while it's on, every internal staff role gets everything the Owner has
+// except this page. Per the Owner's explicit request, this screen itself is
+// visible only to role==="owner" (tabsForInnerBase() never offers the
+// "permissions" tab to anyone else, and it's excluded from the union in
+// tabsForInner()), and the backend endpoint that actually flips the flag
+// (PATCH /api/settings) is gated with requireOwnerOnly - which, unlike
+// requireRole(), never bypasses even while testing access is on - so no
+// other role can toggle it even by calling the API directly.
+async function permissionsScreen(){
+  let live = testingOpenAccess;
+  try{
+    const s = await api("/settings");
+    live = !!s.testingOpenAccess;
+    testingOpenAccess = live;
+  }catch(e){}
+  return `
+  <h1 class="page-title">Permissions</h1>
+  <div class="banner">Owner-only. While Open Access (Testing) is on, every staff role below sees everything you see here - except this page.</div>
+  <div class="card">
+    <div class="flex-between">
+      <div>
+        <h2 class="section-title" style="margin-bottom:4px;">Open Access (Testing)</h2>
+        <div class="muted" style="max-width:520px;">
+          Turns every Supervisor, Ops Manager, HR, Data Team, Admin, Bookings and Billing account into a full-access
+          account for the duration of testing - same screens you have, minus this Permissions page. Turn it off once
+          testing wraps up to go back to each role's normal, restricted tab list.
+        </div>
+      </div>
+      <div class="toggle" style="flex-shrink:0;">
+        <button class="${live?'active-ok':''}" onclick="toggleTestingOpenAccess(true)">ON</button>
+        <button class="${!live?'active-bad':''}" onclick="toggleTestingOpenAccess(false)">OFF</button>
+      </div>
+    </div>
+    <div class="badge ${live?'pending':'approved'}" style="margin-top:12px;display:inline-block;">
+      ${live ? 'ON - everyone has full access right now' : 'OFF - normal per-role permissions are in effect'}
+    </div>
+  </div>`;
+}
+async function toggleTestingOpenAccess(checked){
+  try{
+    await api("/settings", {method:"PATCH", body: JSON.stringify({testingOpenAccess: checked})});
+    testingOpenAccess = checked;
+  }catch(e){
+    alert(e.message);
+  }
+  await goto("home");
 }
 async function verificationsScreen(){
   await loadVerificationsSummary();
