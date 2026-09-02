@@ -4437,6 +4437,9 @@ async function vehicleDetailsEditorHtml(vehicleId){
           <input type="number" placeholder="# Districts (1-2)" min="1" max="2" value="${doc.districtCount||''}" style="width:110px" id="doc_Permit_districtCount_${v.id}" ${stateChecked?'disabled':''} />
           <input type="text" placeholder="District names (comma separated)" value="${doc.districtNames||''}" style="width:220px" id="doc_Permit_districtNames_${v.id}" ${stateChecked?'disabled':''} />
         ` : ""}
+        ${docType==="Insurance" ? `
+          <input type="text" placeholder="Insurance company" value="${doc.company||''}" style="width:180px;margin-left:8px;" id="doc_Insurance_company_${v.id}" />
+        ` : ""}
         <button class="btn small secondary" onclick="saveVehicleDoc('${v.id}','${docType}')">Save</button>
       </div>
       ${DOC_COPY_TYPES.includes(docType) ? `
@@ -4483,6 +4486,8 @@ async function vehicleDetailsEditorHtml(vehicleId){
       </select>
       <input type="text" placeholder="Enter RTO area" id="vd_rtoAreaOther_${v.id}" value="${v.rtoArea && !RTO_AREAS.includes(v.rtoArea) ? v.rtoArea : ''}" style="width:160px;${(v.rtoArea && !RTO_AREAS.includes(v.rtoArea)) ? '' : 'display:none;'}" />
     </div></div>
+    <div class="check-row"><div class="label">Purchase Date</div><div class="controls"><input type="date" id="vd_purchaseDate_${v.id}" value="${v.purchaseDate||''}" /></div></div>
+    <div class="check-row"><div class="label">Purchase Price</div><div class="controls"><input type="number" min="0" step="0.01" placeholder="₹" id="vd_purchasePrice_${v.id}" value="${v.purchasePrice!=null?v.purchasePrice:''}" style="width:140px" /></div></div>
     <div class="check-row"><div class="label">Remarks</div><div class="controls"><textarea id="vd_remarks_${v.id}" rows="2" style="width:100%;max-width:420px;">${v.remarks||''}</textarea></div></div>
     <button class="btn small" onclick="saveVehicleDetails('${v.id}')">Save onboarding details</button>
 
@@ -4525,6 +4530,8 @@ async function saveVehicleDetails(vehicleId){
     manufactureMonth: g(`vd_manufactureMonth_${vehicleId}`),
     manufactureYear: g(`vd_manufactureYear_${vehicleId}`),
     rtoArea: rtoAreaSel === "Other" ? g(`vd_rtoAreaOther_${vehicleId}`) : rtoAreaSel,
+    purchaseDate: g(`vd_purchaseDate_${vehicleId}`),
+    purchasePrice: g(`vd_purchasePrice_${vehicleId}`),
     remarks: g(`vd_remarks_${vehicleId}`),
   };
   try{
@@ -4551,6 +4558,9 @@ async function saveVehicleDoc(vehicleId, docType){
       body.districtCount = document.getElementById(`doc_Permit_districtCount_${vehicleId}`).value;
       body.districtNames = document.getElementById(`doc_Permit_districtNames_${vehicleId}`).value;
     }
+  }
+  if(docType==="Insurance"){
+    body.company = document.getElementById(`doc_Insurance_company_${vehicleId}`).value;
   }
   if(DOC_COPY_TYPES.includes(docType)){
     const fileInput = document.getElementById(`doc_${docType}_copy_${vehicleId}`);

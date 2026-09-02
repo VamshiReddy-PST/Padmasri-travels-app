@@ -252,6 +252,10 @@ function backfillDefaults() {
     if (v.manufactureMonth === undefined) v.manufactureMonth = "";
     if (v.manufactureYear === undefined) v.manufactureYear = "";
     if (v.remarks === undefined) v.remarks = "";
+    // Purchase date/price - per the Owner's explicit request, added to the
+    // same optional corrections-batch group as ownerName/rtoArea above.
+    if (v.purchaseDate === undefined) v.purchaseDate = "";
+    if (v.purchasePrice === undefined) v.purchasePrice = null;
     // Powers the 24-hour "recently updated" row highlight in the staff
     // app's vehicle list - set on every /details save (see PATCH
     // /api/vehicles/:id/details below).
@@ -285,6 +289,9 @@ function backfillDefaults() {
         if (doc.updatedAt === undefined) doc.updatedAt = null;
         if (doc.copyUrl === undefined) doc.copyUrl = null;
       });
+      // Insurance company/insurer name - per the Owner's explicit request,
+      // distinct from doc.number (the policy number, already existed).
+      if (v.docs.Insurance && v.docs.Insurance.company === undefined) v.docs.Insurance.company = "";
       // Older seed data set RC.expiry by hand - re-derive it from rcDate so
       // it always reflects the 15-year rule going forward.
       if (v.docs.RC && v.rcDate) v.docs.RC.expiry = computeRcExpiry(v.rcDate);
@@ -5030,6 +5037,8 @@ app.post(
       manufactureMonth: "",
       manufactureYear: "",
       remarks: "",
+      purchaseDate: "",
+      purchasePrice: null,
       standardMileage: Number(standardMileage) || 4.0,
       lastOdometer: null,
       // Onboarding/approval trail - see vehicleIsApproved(). Vehicles
@@ -5046,7 +5055,7 @@ app.post(
       docs: {
         RC: { number: "", expiry: computeRcExpiry(rcDate), updatedAt: null, copyUrl: null },
         Permit: { number: "", expiry: "", isStatePermit: false, districtCount: 0, districtNames: "", updatedAt: null, copyUrl: null },
-        Insurance: { number: "", expiry: "", updatedAt: null, copyUrl: null },
+        Insurance: { number: "", expiry: "", company: "", updatedAt: null, copyUrl: null },
         Fitness: { number: "", expiry: "", updatedAt: null, copyUrl: null },
         Tax: { number: "", expiry: "", updatedAt: null, copyUrl: null },
         PUC: { number: "", expiry: "", updatedAt: null, copyUrl: null },
@@ -5123,8 +5132,8 @@ app.patch(
   h(async (req, res) => {
     const vehicle = db.vehicles.find((v) => v.id === req.params.id);
     if (!vehicle) return res.status(404).json({ error: "Vehicle not found." });
-    const before = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity, vehicleType: vehicle.vehicleType, fuelType: vehicle.fuelType, ownerName: vehicle.ownerName, rtoArea: vehicle.rtoArea, manufactureMonth: vehicle.manufactureMonth, manufactureYear: vehicle.manufactureYear, remarks: vehicle.remarks };
-    const { make, model, engineNo, chassisNo, rcDate, seatingCapacity, vehicleType, fuelType, ownerName, rtoArea, manufactureMonth, manufactureYear, remarks } = req.body || {};
+    const before = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity, vehicleType: vehicle.vehicleType, fuelType: vehicle.fuelType, ownerName: vehicle.ownerName, rtoArea: vehicle.rtoArea, manufactureMonth: vehicle.manufactureMonth, manufactureYear: vehicle.manufactureYear, remarks: vehicle.remarks, purchaseDate: vehicle.purchaseDate, purchasePrice: vehicle.purchasePrice };
+    const { make, model, engineNo, chassisNo, rcDate, seatingCapacity, vehicleType, fuelType, ownerName, rtoArea, manufactureMonth, manufactureYear, remarks, purchaseDate, purchasePrice } = req.body || {};
     // Vehicle Type / Fuel Type are validated together (Bus => Diesel only),
     // using whichever value is being kept if only one of the two changed.
     if (vehicleType !== undefined || fuelType !== undefined) {
@@ -5180,7 +5189,17 @@ app.patch(
       vehicle.manufactureYear = manufactureYear || "";
     }
     if (remarks !== undefined) vehicle.remarks = remarks || "";
-    const after = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity, vehicleType: vehicle.vehicleType, fuelType: vehicle.fuelType, ownerName: vehicle.ownerName, rtoArea: vehicle.rtoArea, manufactureMonth: vehicle.manufactureMonth, manufactureYear: vehicle.manufactureYear, remarks: vehicle.remarks };
+    // Purchase date/price - same optional corrections-batch treatment as
+    // ownerName/rtoArea/manufactureMonth above, per the Owner's explicit
+    // request.
+    if (purchaseDate !== undefined) vehicle.purchaseDate = purchaseDate || "";
+    if (purchasePrice !== undefined) {
+      if (purchasePrice !== "" && purchasePrice != null && !(Number(purchasePrice) >= 0)) {
+        return res.status(400).json({ error: "Purchase Price must be a non-negative number." });
+      }
+      vehicle.purchasePrice = purchasePrice === "" || purchasePrice == null ? null : Number(purchasePrice);
+    }
+    const after = { make: vehicle.make, model: vehicle.model, engineNo: vehicle.engineNo, chassisNo: vehicle.chassisNo, rcDate: vehicle.rcDate, seatingCapacity: vehicle.seatingCapacity, vehicleType: vehicle.vehicleType, fuelType: vehicle.fuelType, ownerName: vehicle.ownerName, rtoArea: vehicle.rtoArea, manufactureMonth: vehicle.manufactureMonth, manufactureYear: vehicle.manufactureYear, remarks: vehicle.remarks, purchaseDate: vehicle.purchaseDate, purchasePrice: vehicle.purchasePrice };
     // Stamped so the frontend can show a "recently updated" highlight on
     // this vehicle's row for 24 hours after a save - persisted here (not
     // just a client-side flag) so it survives page reloads and is visible
@@ -5668,7 +5687,7 @@ app.patch(
     if (!isOwnerSupervisor && !ADMIN_ROLES.includes(req.user.role) && req.user.role !== "admin") {
       return res.status(403).json({ error: "Not allowed to edit this vehicle's documents." });
     }
-    const { docType, number, expiry, isStatePermit, districtCount, districtNames, copy } = req.body || {};
+    const { docType, number, expiry, isStatePermit, districtCount, districtNames, copy, company } = req.body || {};
     if (!vehicle.docs[docType]) return res.status(400).json({ error: "Unknown document type." });
     // Merge onto the existing doc object rather than replacing it wholesale,
     // so setting one field (e.g. just the expiry, from the daily checklist)
@@ -5680,6 +5699,13 @@ app.patch(
       return res.status(400).json({
         error: "RC expiry is calculated automatically as 15 years from the RC Date - edit RC Date in Vehicle Details instead.",
       });
+    }
+
+    // Insurance company/insurer name - distinct from `number` (the policy
+    // number) - per the Owner's explicit request.
+    if (docType === "Insurance" && company !== undefined) {
+      doc.company = company || "";
+      changed = true;
     }
 
     if (number !== undefined) {
