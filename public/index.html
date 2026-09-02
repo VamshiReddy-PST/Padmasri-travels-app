@@ -5161,7 +5161,11 @@ function driverMileageLabel(summary){
 }
 async function driversCardHtml(){
   const myRole = currentUser.role;
-  const canEditAtAll = myRole==="owner" || myRole==="ops_manager" || myRole==="hr";
+  // Data Team + Admin added per the Owner's explicit request - the backend
+  // (DRIVER_EDITOR_ROLES in server.js) already accepted edits from both,
+  // this UI gate just hadn't been widened to match, so neither role could
+  // actually reach the editor to upload driver documents.
+  const canEditAtAll = myRole==="owner" || myRole==="ops_manager" || myRole==="hr" || myRole==="data_team" || myRole==="admin";
   const mileageSummary = await fetchDriverMileageSummary();
   // Most recently joined first - drivers without a recorded joining date
   // (older data, backfilled blank) sort to the end rather than the top.
@@ -8141,7 +8145,7 @@ function setFleetFilter(key, value){ fleetFilters[key] = value; renderMain(); }
 function resetFleetFilters(){ fleetFilters = {status:'all', client:'', area:'', brand:'', seating:'', supervisor:'', fuel:'', mileage:''}; renderMain(); }
 let fleetExpandedVehicleId = null;
 function toggleFleetRow(vehicleId){ fleetExpandedVehicleId = fleetExpandedVehicleId===vehicleId ? null : vehicleId; renderMain(); }
-async function fleetRowDetailHtml(vehicleId, canAssign){
+async function fleetRowDetailHtml(vehicleId, canAssign, canManageDocs){
   const v = vehicles.find(x=>x.id===vehicleId);
   if(!v) return "";
   const liveCard = await liveTrackingCardHtml(vehicleId);
@@ -8185,7 +8189,7 @@ async function fleetRowDetailHtml(vehicleId, canAssign){
     <div class="controls" style="margin-top:10px;flex-wrap:wrap;">
       <button class="btn small secondary" onclick="goto('vehicle_status',{vehicleId:'${v.id}'})">📋 Today's Status</button>
       <button class="btn small secondary" onclick="goto('fuel_graph',{vehicleId:'${v.id}'})">⛽ Fuel Pattern</button>
-      ${canAssign ? `<button class="btn small secondary" onclick="toggleVehicleDetails('${v.id}')">${editingVehicleId===v.id?'Close Documents':'📄 Manage Documents'}</button>` : ''}
+      ${canManageDocs ? `<button class="btn small secondary" onclick="toggleVehicleDetails('${v.id}')">${editingVehicleId===v.id?'Close Documents':'📄 Manage Documents'}</button>` : ''}
       ${currentUser.role==="owner" ? `<button class="btn small danger" onclick="markVehicleSoldOut('${v.id}','${(v.reg||'').replace(/'/g,"\\'")}')">Mark Sold Out</button>` : ''}
     </div>
     ${editingVehicleId===v.id ? await vehicleDetailsEditorHtml(v.id) : ''}
@@ -8677,6 +8681,13 @@ async function approveBillingRun(runId){
 
 async function fleetListScreen(){
   const canAssign = ["ops_manager","data_team","owner"].includes(currentUser.role);
+  // Separate from canAssign on purpose: Admin can upload/edit vehicle
+  // documents (per the Owner's explicit request) without also getting
+  // client/route/area/supervisor/driver assignment editing, which stays
+  // out of Admin's remit. Backend already accepts this from Admin (see
+  // requireRole(...ADMIN_ROLES, "admin") on /vehicles/:id/details and
+  // /vehicles/:id/docs) - this was just the missing UI gate.
+  const canManageDocs = canAssign || currentUser.role==="admin";
   const canRegister = ["ops_manager","data_team","owner","admin","site_supervisor","area_supervisor"].includes(currentUser.role);
   let fleetLive = {vehicles:[]};
   try{ fleetLive = await api('/fleet/live-tracking'); }catch(e){ fleetLive = {vehicles:[], error:e.message}; }
@@ -8752,7 +8763,7 @@ async function fleetListScreen(){
       <td>${v.driverId? driverName(v.driverId) : '<span class="muted">Unassigned</span>'}</td>
       <td><span class="track-pill ${r.status}">${TRACKING_STATUS_LABEL[r.status]}</span>${speed?`<div class="muted" style="font-size:11px;">${speed}</div>`:''}</td>
     </tr>
-    ${fleetExpandedVehicleId===v.id ? `<tr><td colspan="9">${await fleetRowDetailHtml(v.id, canAssign)}</td></tr>` : ''}`;
+    ${fleetExpandedVehicleId===v.id ? `<tr><td colspan="9">${await fleetRowDetailHtml(v.id, canAssign, canManageDocs)}</td></tr>` : ''}`;
   };
   const rowsHtml = (await Promise.all(filtered.map(rowHtml))).join("");
 
