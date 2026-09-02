@@ -4351,7 +4351,11 @@ app.patch(
 // HR is the primary driver onboarder (per the People/Staff permission
 // model above), alongside Ops Manager, Owner and Data Team who could
 // already add drivers from the Operations screen's quick-add form.
-const DRIVER_EDITOR_ROLES = ["owner", "ops_manager", "hr", "data_team"];
+// Admin added alongside HR/Ops Manager/Owner/Data Team per the Owner's
+// explicit request - Admin needs to be able to edit driver details and
+// upload driver documents (license, Aadhar, PAN, bank, health/training/
+// police-verification copies), same as Data Team already could.
+const DRIVER_EDITOR_ROLES = ["owner", "ops_manager", "hr", "data_team", "admin"];
 const DRIVING_LEVELS = ["Trainee", "Standard", "Senior", "Expert"];
 const DRIVER_APPROVAL_ROLES = ["hr", "owner", "data_team"];
 // A driver an Area Supervisor has just onboarded isn't real/assignable yet -
