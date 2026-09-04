@@ -2211,7 +2211,14 @@ app.post(
       return res.status(401).json({ error: "Incorrect email/mobile number or password." });
     }
     const token = signSessionToken({ type: "staff", id: user.id });
-    await audit(user, "login", `${user.name} (${user.role}) logged in`);
+    // Deliberately NOT awaited: the audit-log entry is a nice-to-have write,
+    // not something that should ever be able to block someone from logging
+    // in. If the database can't accept writes right now (e.g. an Atlas
+    // storage-quota block), login must still succeed - only the log entry
+    // is lost, silently, until writes are unblocked.
+    audit(user, "login", `${user.name} (${user.role}) logged in`).catch((err) => {
+      console.error("Login audit-log write failed (non-fatal - login still succeeds):", err.message);
+    });
     res.json({ token, user: publicUser(user) });
   })
 );
@@ -2223,7 +2230,11 @@ app.post(
     const header = req.headers.authorization || "";
     const token = header.slice(7);
     revokedSessionTokens.add(token);
-    await audit(req.user, "logout", `${req.user.name} logged out`);
+    // Same reasoning as login above - don't let a blocked/failed write stop
+    // someone from logging out.
+    audit(req.user, "logout", `${req.user.name} logged out`).catch((err) => {
+      console.error("Logout audit-log write failed (non-fatal - logout still succeeds):", err.message);
+    });
     res.json({ ok: true });
   })
 );
